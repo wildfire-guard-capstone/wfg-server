@@ -8,9 +8,12 @@ Every file of a case repeats the same `fire_info` (ignition, final perimeter, ar
 while `source_data_info.weather_conditions` changes per hour.
 The final perimeter (`fire_spread_track`) is the only ground truth: there is no time series.
 
+Ground-truth perimeters are graded (A/B/C) by `validate.check_perimeter`; weather
+records outside physical ranges are dropped or blanked with a warning.
+
 Usage:
-  python -m evaluation.datasets.aihub list    --root $AIHUB_ROOT
-  python -m evaluation.datasets.aihub extract HD20250407 --root $AIHUB_ROOT --out cases/
+  python -m evaluation.datasets.aihub list    --root $AIHUB_ROOT [--grade A,B] [--out grades.csv]
+  python -m evaluation.datasets.aihub extract SC20230303 --root $AIHUB_ROOT --out cases/
 """
 
 import argparse
@@ -27,14 +30,21 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from shapely.geometry import mapping
+from shapely.ops import transform
+
+from evaluation.datasets.validate import PerimeterCheck, check_perimeter
 from spread.case import FireCase, Ignition, LonLat, WeatherObs
+from spread.geo import projector
 
 MEMBER_RE = re.compile(r"(?P<case>[A-Z]{2}\d{8})_S_P(?P<point>\d+)_T(?P<hour>\d+)\.json$")
 COORD_RE = re.compile(r"\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]")
 TIME_FMT = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
-EARTH_RADIUS_M = 6_371_008.8
-MIN_PLAUSIBLE_HUMIDITY_PCT = 5.0
-AREA_MISMATCH_TOLERANCE = 0.5
+# Weather sanity ranges. Out-of-range humidity is blanked (e.g. 2 % in HD20250407),
+# out-of-range wind drops the hour, since wind drives the spread direction.
+HUMIDITY_RANGE_PCT = (5.0, 100.0)
+WIND_SPEED_RANGE_MS = (0.0, 40.0)
+MAX_WEATHER_GAP_H = 1.5
 
 
 @dataclass
@@ -46,11 +56,8 @@ class AihubCase:
     response_phase: str | None
     name: str | None
     source_zip: str
+    check: PerimeterCheck
     warnings: list[str] = field(default_factory=list)
-
-    @property
-    def perimeter_area_ha(self) -> float:
-        return polygon_area_ha(self.final_perimeter)
 
 
 def parse_time(value: str) -> datetime:
@@ -68,19 +75,6 @@ def parse_track(track: str) -> list[LonLat]:
     if len(ring) >= 3 and ring[0] != ring[-1]:
         ring.append(ring[0])
     return ring
-
-
-def polygon_area_ha(ring: list[LonLat]) -> float:
-    """Approximate area via a local equirectangular projection (fine for sanity checks)."""
-    if len(ring) < 4:
-        return 0.0
-    lat0 = math.radians(sum(lat for _, lat in ring) / len(ring))
-    xy = [
-        (math.radians(lon) * EARTH_RADIUS_M * math.cos(lat0), math.radians(lat) * EARTH_RADIUS_M)
-        for lon, lat in ring
-    ]
-    twice_area = sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(xy, xy[1:], strict=False))
-    return abs(twice_area) / 2 / 10_000
 
 
 def circular_mean_deg(angles: list[float]) -> float:
@@ -134,33 +128,17 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
 
     weather = []
     for obs_time in sorted(by_time):
-        rows = by_time[obs_time]
-        humidity = statistics.median(r["humidity_percent"] for r in rows)
-        if humidity < MIN_PLAUSIBLE_HUMIDITY_PCT:
-            warnings.append(f"implausible humidity {humidity}% at {obs_time}")
-        weather.append(
-            WeatherObs(
-                time=parse_time(obs_time),
-                wind_speed_ms=statistics.median(r["wind_speed"] for r in rows),
-                wind_dir_deg=circular_mean_deg([r["wind_direction"] for r in rows]),
-                temperature_c=statistics.median(r["temperature"] for r in rows),
-                humidity_pct=humidity,
-            )
-        )
+        obs = clean_weather(obs_time, by_time[obs_time], warnings)
+        if obs is not None:
+            weather.append(obs)
 
     start = parse_time(fire["start_timestamp"])
+    end = parse_time(fire["end_timestamp"]) if fire.get("end_timestamp") else None
+    warnings.extend(weather_coverage(weather, start, end))
     loc = fire["fire_location"]
     perimeter = parse_track(fire.get("fire_spread_track", ""))
     area_ha = float(fire.get("affected_area") or 0.0)
-
-    if len(perimeter) < 4:
-        warnings.append("final perimeter has fewer than 3 vertices")
-    elif area_ha:
-        rel = abs(polygon_area_ha(perimeter) - area_ha) / area_ha
-        if rel > AREA_MISMATCH_TOLERANCE:
-            warnings.append(
-                f"perimeter area {polygon_area_ha(perimeter):.1f} ha vs recorded {area_ha} ha"
-            )
+    check = check_perimeter(perimeter, (loc["lon"], loc["lat"]), area_ha or None, start, end)
 
     return AihubCase(
         fire_case=FireCase(
@@ -171,11 +149,50 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
         ),
         final_perimeter=perimeter,
         affected_area_ha=area_ha,
-        end_time=parse_time(fire["end_timestamp"]) if fire.get("end_timestamp") else None,
+        end_time=end,
         response_phase=fire.get("response_phase"),
         name=fire.get("incident_name"),
         source_zip=source_zip,
+        check=check,
         warnings=warnings,
+    )
+
+
+def weather_coverage(weather: list[WeatherObs], start: datetime, end: datetime | None) -> list[str]:
+    """Report gaps the spread model will have to fill (ELMFIRE needs one record per hour)."""
+    if not weather:
+        return ["no usable weather records"]
+    issues = []
+    lead_h = (weather[0].time - start).total_seconds() / 3600
+    if lead_h > MAX_WEATHER_GAP_H:
+        issues.append(f"first weather record {lead_h:.1f} h after ignition")
+    for prev, cur in zip(weather, weather[1:], strict=False):
+        gap_h = (cur.time - prev.time).total_seconds() / 3600
+        if gap_h > MAX_WEATHER_GAP_H:
+            issues.append(f"weather gap {gap_h:.0f} h after {prev.time:%m-%d %H:%M}")
+    if end is not None:
+        tail_h = (end - weather[-1].time).total_seconds() / 3600
+        if tail_h > MAX_WEATHER_GAP_H:
+            issues.append(f"last weather record {tail_h:.1f} h before end")
+    return issues
+
+
+def clean_weather(obs_time: str, rows: list[dict], warnings: list[str]) -> WeatherObs | None:
+    """Median over observation points for one hour, with range checks."""
+    speed = statistics.median(r["wind_speed"] for r in rows)
+    if not WIND_SPEED_RANGE_MS[0] <= speed <= WIND_SPEED_RANGE_MS[1]:
+        warnings.append(f"dropped {obs_time}: wind speed {speed} m/s out of range")
+        return None
+    humidity: float | None = statistics.median(r["humidity_percent"] for r in rows)
+    if not HUMIDITY_RANGE_PCT[0] <= humidity <= HUMIDITY_RANGE_PCT[1]:
+        warnings.append(f"blanked humidity {humidity}% at {obs_time}")
+        humidity = None
+    return WeatherObs(
+        time=parse_time(obs_time),
+        wind_speed_ms=speed,
+        wind_dir_deg=circular_mean_deg([r["wind_direction"] for r in rows]),
+        temperature_c=statistics.median(r["temperature"] for r in rows),
+        humidity_pct=humidity,
     )
 
 
@@ -197,11 +214,23 @@ def write_case(case: AihubCase, out_dir: Path) -> Path:
         json.dumps(
             feature(
                 {"type": "Polygon", "coordinates": [case.final_perimeter]},
-                kind="final",
+                kind="final_raw",
                 area_ha=case.affected_area_ha,
             )
         )
     )
+    if case.check.repaired_utm is not None:
+        repaired = transform(projector(case.check.epsg, inverse=True), case.check.repaired_utm)
+        (target / "perimeter_repaired.geojson").write_text(
+            json.dumps(
+                feature(
+                    mapping(repaired),
+                    kind="final_repaired",
+                    area_ha=round(case.check.repaired_area_ha, 2),
+                    grade=case.check.grade.value,
+                )
+            )
+        )
     with (target / "weather.csv").open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["time", "wind_speed_ms", "wind_dir_deg", "temperature_c", "humidity_pct"])
@@ -221,11 +250,9 @@ def write_case(case: AihubCase, out_dir: Path) -> Path:
         "source_zip": case.source_zip,
         "start": case.fire_case.t0.isoformat(),
         "end": case.end_time.isoformat() if case.end_time else None,
-        "affected_area_ha": case.affected_area_ha,
-        "perimeter_area_ha": round(case.perimeter_area_ha, 2),
-        "perimeter_vertices": max(len(case.final_perimeter) - 1, 0),
         "weather_hours": len(case.fire_case.weather),
         "response_phase": case.response_phase,
+        "perimeter_check": case.check.as_row(),
         "warnings": case.warnings,
     }
     (target / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
@@ -237,26 +264,40 @@ def list_cases(root: Path) -> list[dict]:
     for zpath, case_id, names in iter_case_members(root):
         with zipfile.ZipFile(zpath) as zf:
             fire = json.loads(zf.read(names[0]))["raw_data_info"]["fire_info"]
-        rows.append(
-            {
-                "case_id": case_id,
-                "zip": zpath.stem,
-                "area_ha": fire.get("affected_area"),
-                "vertices": len(parse_track(fire.get("fire_spread_track", ""))) - 1,
-                "files": len(names),
-                "phase": fire.get("response_phase"),
-                "lat": fire["fire_location"]["lat"],
-                "lon": fire["fire_location"]["lon"],
-            }
+        loc = fire["fire_location"]
+        check = check_perimeter(
+            parse_track(fire.get("fire_spread_track", "")),
+            (loc["lon"], loc["lat"]),
+            float(fire.get("affected_area") or 0.0) or None,
+            parse_time(fire["start_timestamp"]),
+            parse_time(fire["end_timestamp"]) if fire.get("end_timestamp") else None,
         )
+        row = {
+            "case_id": case_id,
+            "split": zpath.parent.parent.name,
+            "zip": zpath.stem,
+            "phase": fire.get("response_phase"),
+            "lat": loc["lat"],
+            "lon": loc["lon"],
+            "files": len(names),
+        }
+        row.update(check.as_row())
+        for key in ("raw_area_ha", "repaired_area_ha", "area_ratio", "ignition_distance_m"):
+            if isinstance(row[key], float):
+                row[key] = round(row[key], 2)
+        if row["duration_h"] is not None:
+            row["duration_h"] = round(row["duration_h"], 1)
+        rows.append(row)
     return rows
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m evaluation.datasets.aihub")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_list = sub.add_parser("list", help="summarise every case")
+    p_list = sub.add_parser("list", help="summarise and grade every case")
     p_list.add_argument("--root", type=Path, required=True)
+    p_list.add_argument("--grade", help="comma-separated grades to keep, e.g. A,B")
+    p_list.add_argument("--out", type=Path, help="write CSV here instead of stdout")
     p_ext = sub.add_parser("extract", help="write one case to disk")
     p_ext.add_argument("case_id")
     p_ext.add_argument("--root", type=Path, required=True)
@@ -264,16 +305,26 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "list":
-        rows = sorted(list_cases(args.root), key=lambda r: r["area_ha"] or 0)
-        writer = csv.DictWriter(sys.stdout, fieldnames=list(rows[0]))
+        rows = sorted(list_cases(args.root), key=lambda r: r["recorded_area_ha"] or 0)
+        if args.grade:
+            keep = set(args.grade.split(","))
+            rows = [r for r in rows if r["grade"] in keep]
+        out = args.out.open("w", newline="") if args.out else sys.stdout
+        writer = csv.DictWriter(out, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+        if args.out:
+            out.close()
+            counts = {g: sum(r["grade"] == g for r in rows) for g in ("A", "B", "C")}
+            print(f"wrote {len(rows)} cases to {args.out} {counts}")
     else:
         case = load_case(args.root, args.case_id)
         target = write_case(case, args.out)
-        print(f"wrote {target}")
+        print(f"wrote {target}  grade={case.check.grade.value}")
+        for reason in case.check.reasons:
+            print(f"  perimeter: {reason}")
         for w in case.warnings:
-            print(f"WARNING: {w}")
+            print(f"  WARNING: {w}")
 
 
 if __name__ == "__main__":

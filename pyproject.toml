@@ -20,6 +20,8 @@ dependencies = [
 # ELMFIRE conda-forge env (GDAL must stay < 3.11 there), so do not add GDAL here.
 spread = [
     "numpy>=1.26",
+    "pyproj>=3.6",
+    "shapely>=2.0",
 ]
 
 [dependency-groups]

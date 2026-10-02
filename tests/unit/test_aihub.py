@@ -61,10 +61,6 @@ def test_parse_track_swaps_to_lonlat_and_closes_ring():
     assert len(ring) == 5
 
 
-def test_polygon_area_is_close_to_expected():
-    assert aihub.polygon_area_ha(aihub.parse_track(SQUARE)) == pytest.approx(4.0, rel=0.05)
-
-
 def test_circular_mean_handles_north_wrap():
     mean = aihub.circular_mean_deg([350.0, 10.0])
     assert min(mean, 360.0 - mean) == pytest.approx(0.0, abs=1e-6)
@@ -77,7 +73,11 @@ def test_load_case_builds_hourly_weather(aihub_root: Path):
     assert len(fc.weather) == 2
     assert fc.weather[0].wind_speed_ms == pytest.approx(3.5)  # median of 3.0 and 4.0
     assert case.response_phase == "1단계"
-    assert any("humidity" in w for w in case.warnings)
+    assert fc.weather[0].humidity_pct is None  # 2 % is blanked
+    assert fc.weather[1].humidity_pct == 40.0
+    assert any("blanked humidity" in w for w in case.warnings)
+    assert case.check.grade == "A"
+    assert case.check.repaired_area_ha == pytest.approx(4.0, rel=0.05)
 
 
 def test_missing_case_raises(aihub_root: Path):
@@ -89,6 +89,35 @@ def test_write_case_outputs(aihub_root: Path, tmp_path: Path):
     case = aihub.load_case(aihub_root, "TT20250407")
     target = aihub.write_case(case, tmp_path / "cases")
     names = {p.name for p in target.iterdir()}
-    assert names == {"ignition.geojson", "perimeter.geojson", "weather.csv", "meta.json"}
+    assert names == {
+        "ignition.geojson",
+        "perimeter.geojson",
+        "perimeter_repaired.geojson",
+        "weather.csv",
+        "meta.json",
+    }
     meta = json.loads((target / "meta.json").read_text())
-    assert meta["perimeter_vertices"] == 4
+    assert meta["perimeter_check"]["vertices"] == 4
+    assert meta["perimeter_check"]["grade"] == "A"
+
+
+def test_list_cases_grades(aihub_root: Path):
+    rows = aihub.list_cases(aihub_root)
+    assert [r["case_id"] for r in rows] == ["TT20250407"]
+    assert rows[0]["grade"] == "A"
+    assert rows[0]["duration_h"] == pytest.approx(5.9, abs=0.1)
+
+
+def test_weather_coverage_reports_gaps():
+    from datetime import datetime
+
+    from spread.case import WeatherObs
+
+    def obs(h: int) -> WeatherObs:
+        return WeatherObs(time=datetime(2025, 4, 7, h), wind_speed_ms=2, wind_dir_deg=90)
+
+    start, end = datetime(2025, 4, 7, 12, 5), datetime(2025, 4, 7, 20, 0)
+    assert aihub.weather_coverage([obs(h) for h in range(13, 20)], start, end) == []
+    issues = aihub.weather_coverage([obs(13), obs(16), obs(17)], start, end)
+    assert any("gap 3 h" in i for i in issues)
+    assert any("before end" in i for i in issues)

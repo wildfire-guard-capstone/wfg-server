@@ -1,0 +1,12 @@
+# Spread prediction targets checked by the evaluation harness (CI L3).
+# Source of truth: 요구사항 분석서 2026-10-01, §7.3 (잠정 내부 목표).
+# Proposed changes (10/2 피드백: "0.5는 낮다") are listed under `proposed` and are
+# NOT active until the spec revision adopts them (종합 문서 PD-02).
+spread:
+  active:
+    iou: 0.50
+  proposed:
+    iou: 0.60
+    recall: 0.90
+    f2: 0.80
+    precision: 0.60

@@ -48,6 +48,7 @@ class DeckConfig:
     min_hours: float = 8.0  # always cover the P1–P8 horizon
     duration_margin: float = 1.5  # run past the observed duration so the area cut can be reached
     max_hours: float = 48.0
+    extend_to_max: bool = False  # evaluation retry when the area cut was not reached
 
 
 @dataclass
@@ -135,6 +136,8 @@ def make_grid(case: CaseFiles, cfg: DeckConfig) -> Grid:
 
 
 def simulation_hours(case: CaseFiles, cfg: DeckConfig) -> float:
+    if cfg.extend_to_max:
+        return cfg.max_hours
     if case.duration_h is None:  # operational run: no observed end, just the P1–P8 horizon
         return cfg.min_hours
     return min(max(case.duration_h * cfg.duration_margin, cfg.min_hours), cfg.max_hours)
@@ -185,8 +188,15 @@ def _write(path: Path, grid: Grid, bands: np.ndarray, dtype: str) -> None:
         dst.write(bands.astype(dtype))
 
 
+MAX_DEM_GAP = 0.01  # fraction of cells without DEM coverage before we refuse to run
+
+
 def build_terrain(grid: Grid, dem_dir: Path, work: Path) -> tuple[np.ndarray, ...]:
-    """DEM, slope (deg) and aspect (deg) on the grid, from Copernicus GLO-30 tiles."""
+    """DEM, slope (deg) and aspect (deg) on the grid, from Copernicus GLO-30 tiles.
+
+    Cells outside the downloaded tiles would silently become elevation 0, so the warp
+    marks them as nodata and a missing tile stops the run with the tile name to fetch.
+    """
     import rasterio
 
     tiles = sorted(str(p) for p in dem_dir.glob("*.tif"))
@@ -199,9 +209,15 @@ def build_terrain(grid: Grid, dem_dir: Path, work: Path) -> tuple[np.ndarray, ..
             "gdalwarp", "-overwrite", "-t_srs", f"EPSG:{grid.epsg}", "-r", "bilinear",
             "-tr", str(grid.cell), str(grid.cell),
             "-te", str(grid.xmin), str(grid.ymin), str(grid.xmax), str(grid.ymax),
-            "-ot", "Float32", str(vrt), str(dem),
+            "-ot", "Float32", "-dstnodata", str(NODATA), str(vrt), str(dem),
         ]
     )  # fmt: skip
+    with rasterio.open(dem) as src:
+        raw = src.read(1)
+    gap = float(np.mean(~np.isfinite(raw) | (raw <= NODATA)))
+    if gap > MAX_DEM_GAP:
+        lon_lat = _corner_tiles(grid)
+        raise FileNotFoundError(f"{gap:.0%} of the grid has no DEM — tiles needed: {lon_lat}")
     _run(["gdaldem", "slope", "-compute_edges", str(dem), str(slp)])
     _run(["gdaldem", "aspect", "-compute_edges", "-zero_for_flat", str(dem), str(asp)])
     arrays = []
@@ -211,6 +227,19 @@ def build_terrain(grid: Grid, dem_dir: Path, work: Path) -> tuple[np.ndarray, ..
             a = np.where(np.isfinite(a) & (a > NODATA), a, 0)
             arrays.append(np.rint(a))
     return tuple(arrays)
+
+
+def _corner_tiles(grid: Grid) -> list[str]:
+    """Copernicus tile names covering the grid corners (for the missing-tile message)."""
+    from spread.geo import projector
+
+    back = projector(grid.epsg, inverse=True)
+    names = set()
+    for x in (grid.xmin, grid.xmax):
+        for y in (grid.ymin, grid.ymax):
+            lon, lat = back(x, y)
+            names.add(f"N{math.floor(lat):02d}_00_E{math.floor(lon):03d}_00")
+    return sorted(names)
 
 
 def build_deck(case: CaseFiles, run_dir: Path, dem_dir: Path, cfg: DeckConfig) -> dict:

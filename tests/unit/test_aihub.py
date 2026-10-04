@@ -33,6 +33,7 @@ def source_doc(case_id: str, point: int, hour: int, wind_dir: float, humidity: f
                 "wind_direction": wind_dir,
                 "temperature": 20.0,
                 "humidity_percent": humidity,
+                "observatory_location": "순천",
             }
         },
     }
@@ -99,6 +100,7 @@ def test_write_case_outputs(aihub_root: Path, tmp_path: Path):
     meta = json.loads((target / "meta.json").read_text())
     assert meta["perimeter_check"]["vertices"] == 4
     assert meta["perimeter_check"]["grade"] == "A"
+    assert meta["weather_stations"] == ["순천"]
 
 
 def test_list_cases_grades(aihub_root: Path):

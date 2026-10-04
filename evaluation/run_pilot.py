@@ -1,20 +1,20 @@
-"""First end-to-end evaluation: AI Hub case -> ELMFIRE -> P1–P8 -> metrics.
+"""Scenario evaluation: AI Hub cases -> ELMFIRE -> P1–P8 -> metrics (pilot, dev, ...).
 
 Runs inside the ELMFIRE worker image (needs the elmfire binary and GDAL):
 
   docker run --rm --platform linux/amd64 -v "$PWD:/app" -w /app wfg/elmfire-base:local bash -c \
     'export PATH=/opt/conda/envs/elmfire/bin:/elmfire/elmfire/build/linux/bin:$PATH PYTHONPATH=/app
-     python -m evaluation.run_pilot --fbfm40 165'
+     python -m evaluation.run_pilot --scenario evaluation/scenarios/dev.yaml --fbfm40 165'
 
 DEM tiles (Copernicus GLO-30) go in data/dem/. Outputs (all git-ignored):
-  runs/<case>_v0_fm<code>/            inputs, ELMFIRE outputs, deck.json, p1_p8.geojson
-  results/pilot_v0_fm<code>/cases.csv  one row per case and cut, ELMFIRE and B2 scores
-  results/pilot_v0_fm<code>/summary.json  medians
-  results/pilot_v0_fm<code>/<case>.png  observed vs predicted (TP / FP / FN)
+  runs/<case>_v0_fm<code>/          inputs, ELMFIRE outputs, deck.json, p1_p8.geojson
+  results/<scenario>_v0_fm<code>/   cases.csv · summary.json (medians + bootstrap 95 % CI) · PNGs
+  results/index.csv                 one line per run, appended (the improvement log)
 """
 
 import argparse
 import csv
+import dataclasses
 import glob
 import json
 import math
@@ -22,6 +22,7 @@ import os
 import statistics
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,8 @@ from spread.elmfire_inputs import CaseFiles, DeckConfig, build_deck
 from spread.geo import projector, to_utm
 
 ELMFIRE_BIN = os.environ.get("ELMFIRE_BIN", "elmfire_1.1")
+BOOTSTRAP_N = 2000
+BOOTSTRAP_SEED = 0
 
 
 def read_cases(scenario: Path) -> list[str]:
@@ -151,6 +154,7 @@ def plot(path: Path, truth, pred, b2, ign_rc, title: str) -> None:
 
 def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
     case = CaseFiles.load(args.cases_dir / case_id)
+    meta = json.loads((args.cases_dir / case_id / "meta.json").read_text())
     run_dir = args.runs_dir / f"{case_id}_{args.tag}"
     deck = build_deck(case, run_dir, args.dem_dir, cfg)
     toa_path, elapsed = run_elmfire(run_dir)
@@ -162,6 +166,15 @@ def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
 
     perim = to_utm(case.perimeter_wgs84, deck["epsg"])
     truth = rasterize([(perim, 1)], out_shape=shp, transform=tr, fill=0).astype(bool)
+
+    # Plan step 1-3: if the run stopped before reaching the observed area, rerun to max_hours
+    extended = False
+    if slices.area_matched(toa, int(truth.sum()))[1] is None and not cfg.extend_to_max:
+        deck = build_deck(case, run_dir, args.dem_dir, dataclasses.replace(cfg, extend_to_max=True))
+        toa_path, more = run_elmfire(run_dir)
+        elapsed += more
+        toa = read_toa(toa_path, shp)
+        extended = True
     ign = tuple(deck["ignition_utm"])
     ign_rc = ((ymax - ign[1]) / deck["cell_m"], (ign[0] - xmin) / deck["cell_m"])
 
@@ -196,6 +209,9 @@ def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
             "reached": "" if cut != "area_matched" else bool(t_star),
             "duration_h": round(case.duration_h or 0, 2),
             "runtime_s": round(elapsed, 1),
+            "tstop_h": round(deck["tstop_s"] / 3600, 1),
+            "extended": extended,
+            "weather_stations": ";".join(meta.get("weather_stations") or []),
             "p1_p8_ha": ";".join(f"{a:.1f}" for a in p_areas),
             "p_nested": nested,
         }
@@ -221,13 +237,17 @@ def main() -> None:
     ap.add_argument("--cases-dir", type=Path, default=Path("cases"))
     ap.add_argument("--dem-dir", type=Path, default=Path("data/dem"))
     ap.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    ap.add_argument("--out", type=Path, default=None, help="default results/pilot_v0_fm<code>")
+    ap.add_argument("--out", type=Path, default=None, help="default results/<scenario>_v0_fm<code>")
+    ap.add_argument("--index", type=Path, default=Path("results/index.csv"))
     ap.add_argument("--fbfm40", type=int, default=DeckConfig().fbfm40, help="uniform fuel code")
     args = ap.parse_args()
 
     ids = args.cases or read_cases(args.scenario)
     cfg = DeckConfig(fbfm40=args.fbfm40)
-    args.out = args.out or Path(f"results/pilot_v0_fm{args.fbfm40}")
+    scenario = "custom" if args.cases else args.scenario.stem
+    if scenario == "holdout" and not os.environ.get("WFG_OPEN_HOLDOUT"):
+        raise SystemExit("holdout is locked until calibration is done (set WFG_OPEN_HOLDOUT=1)")
+    args.out = args.out or Path(f"results/{scenario}_v0_fm{args.fbfm40}")
     args.tag = f"v0_fm{args.fbfm40}"
     all_rows, failed = [], {}
     for cid in ids:
@@ -254,13 +274,28 @@ def main() -> None:
             w.writeheader()
             w.writerows(all_rows)
 
-    def med(cut: str, key: str) -> float | None:
+    def values(cut: str, key: str) -> list[float]:
         vals = [r[key] for r in all_rows if r["cut"] == cut and isinstance(r.get(key), float)]
-        vals = [v for v in vals if not math.isnan(v)]
+        return [v for v in vals if not math.isnan(v)]
+
+    def med(cut: str, key: str) -> float | None:
+        vals = values(cut, key)
         return round(statistics.median(vals), 4) if vals else None
 
+    def ci(cut: str, key: str) -> list[float] | None:
+        """Bootstrap 95 % CI of the median over cases (resampling cases)."""
+        vals = np.array(values(cut, key))
+        if vals.size < 3:
+            return None
+        rng = np.random.default_rng(BOOTSTRAP_SEED)
+        meds = np.median(rng.choice(vals, size=(BOOTSTRAP_N, vals.size)), axis=1)
+        return [
+            round(float(np.percentile(meds, 2.5)), 4),
+            round(float(np.percentile(meds, 97.5)), 4),
+        ]
+
     summary = {
-        "scenario": str(args.scenario),
+        "scenario": scenario,
         "fuel": f"v0 uniform FBFM40 {args.fbfm40}",
         "cases": len({r["case_id"] for r in all_rows}),
         "failed": failed,
@@ -280,12 +315,66 @@ def main() -> None:
                 "skill_iou_vs_b2",
             )
         },  # fmt: skip
+        "area_matched_ci95": {k: ci("area_matched", k) for k in ("iou", "f2", "b2_iou")},
         "observed_duration": {
             k: med("observed_duration", k) for k in ("iou", "f2", "recall", "area_ratio")
         },
+        "not_reached_after_extension": sorted(
+            r["case_id"] for r in all_rows if r["cut"] == "area_matched" and not r["reached"]
+        ),
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+    append_index(args.index, args, scenario, summary, all_rows)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+
+
+def git_commit() -> str:
+    """Current commit read from .git directly (the worker image has no git binary)."""
+    head = Path(".git/HEAD")
+    if not head.exists():
+        return ""
+    ref = head.read_text().strip()
+    if ref.startswith("ref: "):
+        ref_path = Path(".git") / ref[5:]
+        if ref_path.exists():
+            return ref_path.read_text().strip()[:7]
+        for line in Path(".git/packed-refs").read_text().splitlines():
+            if line.endswith(ref[5:]):
+                return line[:7]
+        return ""
+    return ref[:7]
+
+
+def append_index(path: Path, args, scenario: str, summary: dict, rows: list[dict]) -> None:
+    """Plan step 1-6: one line per evaluation run — the improvement log."""
+    am = summary["area_matched"]
+    ci_iou = summary["area_matched_ci95"]["iou"] or ["", ""]
+    line = {
+        "run_at": datetime.now().isoformat(timespec="seconds"),
+        "commit": git_commit(),
+        "scenario": scenario,
+        "inputs": f"v0 fm{args.fbfm40}",
+        "cases": summary["cases"],
+        "failed": len(summary["failed"]),
+        "not_reached": len(summary["not_reached_after_extension"]),
+        "iou_median": am["iou"],
+        "iou_ci_low": ci_iou[0],
+        "iou_ci_high": ci_iou[1],
+        "f2_median": am["f2"],
+        "direction_error_median": am["direction_error_deg"],
+        "b2_iou_median": am["b2_iou"],
+        "runtime_s_total": round(
+            sum(r["runtime_s"] for r in rows if r["cut"] == "area_matched"), 1
+        ),
+        "out": str(args.out),
+    }
+    new = not path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(line))
+        if new:
+            w.writeheader()
+        w.writerow(line)
 
 
 if __name__ == "__main__":

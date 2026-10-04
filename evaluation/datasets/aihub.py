@@ -58,6 +58,9 @@ class AihubCase:
     source_zip: str
     check: PerimeterCheck
     warnings: list[str] = field(default_factory=list)
+    # Station names only (e.g. "순천"); coordinates come from the KMA station table later,
+    # to measure how far the wind record is from the fire (plan step 3-3).
+    weather_stations: list[str] = field(default_factory=list)
 
 
 def parse_time(value: str) -> datetime:
@@ -125,6 +128,9 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
     for doc in docs:
         w = doc["source_data_info"]["weather_conditions"]
         by_time[w["observation_time"]].append(w)
+    stations = sorted(
+        {w.get("observatory_location") for ws in by_time.values() for w in ws} - {None, ""}
+    )
 
     weather = []
     for obs_time in sorted(by_time):
@@ -155,6 +161,7 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
         source_zip=source_zip,
         check=check,
         warnings=warnings,
+        weather_stations=stations,
     )
 
 
@@ -253,6 +260,7 @@ def write_case(case: AihubCase, out_dir: Path) -> Path:
         "weather_hours": len(case.fire_case.weather),
         "response_phase": case.response_phase,
         "perimeter_check": case.check.as_row(),
+        "weather_stations": case.weather_stations,
         "warnings": case.warnings,
     }
     (target / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))

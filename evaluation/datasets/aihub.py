@@ -61,6 +61,9 @@ class AihubCase:
     # Station names only (e.g. "순천"); coordinates come from the KMA station table later,
     # to measure how far the wind record is from the fire (plan step 3-3).
     weather_stations: list[str] = field(default_factory=list)
+    # One row per observation point: lon, lat, fuel_type, fuel_moisture (median over hours,
+    # 0 = missing), canopy_coverage. Used for case-level fuel and moisture (plan I-1, I-3).
+    points: list[dict] = field(default_factory=list)
 
 
 def parse_time(value: str) -> datetime:
@@ -131,6 +134,7 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
     stations = sorted(
         {w.get("observatory_location") for ws in by_time.values() for w in ws} - {None, ""}
     )
+    points = collect_points(docs)
 
     weather = []
     for obs_time in sorted(by_time):
@@ -162,7 +166,40 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
         check=check,
         warnings=warnings,
         weather_stations=stations,
+        points=points,
     )
+
+
+POINT_RE = re.compile(r"_P(?P<point>\d+)_T")
+
+
+def collect_points(docs: list[dict]) -> list[dict]:
+    """Observation points with their fuel attributes (same point repeats every hour)."""
+    by_point: dict[str, dict] = {}
+    moisture: dict[str, list[float]] = defaultdict(list)
+    for doc in docs:
+        src = doc.get("source_data_info") or {}
+        m = POINT_RE.search(src.get("file_name") or "")
+        fuel = src.get("fuel_conditions") or {}
+        loc = (src.get("user_info") or {}).get("query_location") or {}
+        if not m or "lon" not in loc:
+            continue
+        pid = m["point"]
+        by_point.setdefault(
+            pid,
+            {
+                "point": pid,
+                "lon": loc["lon"],
+                "lat": loc["lat"],
+                "fuel_type": fuel.get("fuel_type") or "",
+                "canopy_coverage": fuel.get("canopy_coverage"),
+            },
+        )
+        if fuel.get("fuel_moisture") is not None:
+            moisture[pid].append(float(fuel["fuel_moisture"]))
+    for pid, row in by_point.items():
+        row["fuel_moisture"] = statistics.median(moisture[pid]) if moisture[pid] else None
+    return [by_point[k] for k in sorted(by_point)]
 
 
 def weather_coverage(weather: list[WeatherObs], start: datetime, end: datetime | None) -> list[str]:
@@ -251,6 +288,14 @@ def write_case(case: AihubCase, out_dir: Path) -> Path:
                     w.humidity_pct,
                 ]
             )
+    if case.points:
+        with (target / "points.csv").open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["point", "lon", "lat", "fuel_type", "fuel_moisture", "canopy_coverage"],
+            )
+            writer.writeheader()
+            writer.writerows(case.points)
     meta = {
         "case_id": case.fire_case.case_id,
         "name": case.name,

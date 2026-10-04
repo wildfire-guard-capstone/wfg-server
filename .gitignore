@@ -13,10 +13,10 @@ build/
 .env
 
 # Local data and outputs — never commit (AI Hub data, rasters, run outputs)
-data/
-runs/
-results/
-cases/
+/data/
+/runs/
+/results/
+/cases/
 *.tif
 *.tiff
 *.bil

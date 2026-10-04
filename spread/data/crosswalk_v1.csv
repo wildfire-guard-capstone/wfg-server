@@ -1,0 +1,7 @@
+fuel_type,fbfm40,sb40_name,note
+침엽수림,165,TU5 very high load dry climate timber-shrub,추정 — 소나무림 하층 관목·낙엽 (v0 단일 연료와 같음)
+활엽수림,186,TL6 moderate load broadleaf litter,추정 — 봄철 활엽수 낙엽층
+혼효림,162,TU2 moderate load humid climate timber-shrub,추정
+초지,102,GR2 low load dry climate grass,추정
+관목,142,SH2 moderate load dry climate shrub,추정
+무립목지/비산림,91,NB1 urban/developed,연소 불가

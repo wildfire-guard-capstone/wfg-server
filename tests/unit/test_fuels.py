@@ -70,8 +70,28 @@ def test_deck_config_sources_and_label():
     assert case_fuel(case, cfg) == XWALK["초지"]
     assert case_moisture(case, cfg)["m1"] == 12
     assert cfg.label() == "fuel-case_majority_moist-aihub_points_wind-0.6"
+    assert DeckConfig(phiw_adj=2.0).label() == "fuel-fm165_moist-fixed_wind-1_phiw-2_phis-1"
 
 
 def test_unknown_source_raises():
     with pytest.raises(ValueError):
         case_fuel(_case([]), DeckConfig(fuel_source="nope"))
+
+
+def test_canopy_medians_and_zero_fallback():
+    p = [
+        {"canopy_coverage": "75", "canopy_height": "18"},
+        {"canopy_coverage": "35", "canopy_height": ""},
+        {"canopy_coverage": "0", "canopy_height": "5"},
+    ]
+    assert fuels.canopy(p) == (55.0, 11.5)
+    assert fuels.canopy([]) == (0.0, 0.0)
+
+
+def test_canopy_source_option():
+    from spread.elmfire_inputs import case_canopy
+
+    case = _case([{"canopy_coverage": "60", "canopy_height": "12"}])
+    assert case_canopy(case, DeckConfig()) == (0.0, 0.0)
+    assert case_canopy(case, DeckConfig(canopy_source="aihub_points")) == (60.0, 12.0)
+    assert DeckConfig(canopy_source="aihub_points").label().endswith("_canopy-aihub_points")

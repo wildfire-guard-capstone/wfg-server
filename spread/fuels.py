@@ -58,3 +58,18 @@ def load_points(path: Path) -> list[dict]:
         return []
     with path.open(encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def canopy(points: list[dict]) -> tuple[float, float]:
+    """(cover %, height m): medians over points with a value, (0, 0) when none.
+
+    ELMFIRE uses canopy cover and height for the wind adjustment factor (how much the
+    trees shelter the surface fire from the wind). Zero canopy = fully exposed fuel.
+    """
+
+    def med(key: str) -> float:
+        vals = [float(p[key]) for p in points if p.get(key) not in (None, "")]
+        vals = [v for v in vals if v > 0]
+        return statistics.median(vals) if vals else 0.0
+
+    return med("canopy_coverage"), med("canopy_height")

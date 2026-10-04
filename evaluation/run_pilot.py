@@ -272,6 +272,9 @@ def main() -> None:
         "--moisture-source", default=d.moisture_source, choices=["fixed", "aihub_points"]
     )
     ap.add_argument("--wind-mult", type=float, default=d.wind_mult)
+    ap.add_argument("--canopy-source", default=d.canopy_source, choices=["zero", "aihub_points"])
+    ap.add_argument("--phiw-adj", type=float, default=d.phiw_adj, help="ELMFIRE PHIW_ADJ")
+    ap.add_argument("--phis-adj", type=float, default=d.phis_adj, help="ELMFIRE PHIS_ADJ")
     ap.add_argument("--ensemble", type=int, default=1, help="members (1 = deterministic)")
     ap.add_argument("--wd-sigma", type=float, default=30.0, help="ensemble wind direction sd (deg)")
     ap.add_argument("--ws-frac", type=float, default=0.2, help="ensemble wind speed +- fraction")
@@ -284,6 +287,9 @@ def main() -> None:
         fuel_source=args.fuel_source,
         moisture_source=args.moisture_source,
         wind_mult=args.wind_mult,
+        canopy_source=args.canopy_source,
+        phiw_adj=args.phiw_adj,
+        phis_adj=args.phis_adj,
     )
     scenario = "custom" if args.cases else args.scenario.stem
     if scenario == "holdout" and not os.environ.get("WFG_OPEN_HOLDOUT"):

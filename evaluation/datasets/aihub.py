@@ -62,7 +62,7 @@ class AihubCase:
     # to measure how far the wind record is from the fire (plan step 3-3).
     weather_stations: list[str] = field(default_factory=list)
     # One row per observation point: lon, lat, fuel_type, fuel_moisture (median over hours,
-    # 0 = missing), canopy_coverage. Used for case-level fuel and moisture (plan I-1, I-3).
+    # 0 = missing), canopy_coverage (%), canopy_height (m). Case-level fuel, moisture, canopy.
     points: list[dict] = field(default_factory=list)
 
 
@@ -170,6 +170,9 @@ def build_case(case_id: str, docs: list[dict], source_zip: str) -> AihubCase:
     )
 
 
+POINT_FIELDS = (
+    "point", "lon", "lat", "fuel_type", "fuel_moisture", "canopy_coverage", "canopy_height"
+)  # fmt: skip
 POINT_RE = re.compile(r"_P(?P<point>\d+)_T")
 
 
@@ -193,6 +196,7 @@ def collect_points(docs: list[dict]) -> list[dict]:
                 "lat": loc["lat"],
                 "fuel_type": fuel.get("fuel_type") or "",
                 "canopy_coverage": fuel.get("canopy_coverage"),
+                "canopy_height": fuel.get("canopy_height"),
             },
         )
         if fuel.get("fuel_moisture") is not None:
@@ -290,10 +294,7 @@ def write_case(case: AihubCase, out_dir: Path) -> Path:
             )
     if case.points:
         with (target / "points.csv").open("w", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["point", "lon", "lat", "fuel_type", "fuel_moisture", "canopy_coverage"],
-            )
+            writer = csv.DictWriter(f, fieldnames=list(POINT_FIELDS))
             writer.writeheader()
             writer.writerows(case.points)
     meta = {

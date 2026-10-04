@@ -33,6 +33,7 @@ def source_doc(case_id: str, point: int, hour: int, wind_dir: float, humidity: f
                 "fuel_type": "침엽수림" if point == 1 else "활엽수림",
                 "fuel_moisture": 10.0 + hour,
                 "canopy_coverage": 75.0,
+                "canopy_height": 18.0,
             },
             "weather_conditions": {
                 "observation_time": f"2025-04-07 {12 + hour}:00",

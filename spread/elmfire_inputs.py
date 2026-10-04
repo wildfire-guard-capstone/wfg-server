@@ -46,6 +46,9 @@ class DeckConfig:
     fuel_source: str = "uniform"  # uniform | case_majority
     moisture_source: str = "fixed"  # fixed | aihub_points
     wind_mult: float = 1.0
+    canopy_source: str = "zero"  # zero | aihub_points (case median cover and height)
+    phiw_adj: float = 1.0  # ELMFIRE wind-factor multiplier (Rothermel phi_w): spread shape
+    phis_adj: float = 1.0  # ELMFIRE slope-factor multiplier (Rothermel phi_s): spread shape
     moisture_pct: dict[str, float] = field(
         default_factory=lambda: {"m1": 6, "m10": 8, "m100": 10, "lh": 30, "lw": 60}
     )
@@ -58,7 +61,12 @@ class DeckConfig:
     def label(self) -> str:
         """Short description of the inputs, used in run folders and results/index.csv."""
         fuel = f"fm{self.fbfm40}" if self.fuel_source == "uniform" else self.fuel_source
-        return f"fuel-{fuel}_moist-{self.moisture_source}_wind-{self.wind_mult:g}"
+        label = f"fuel-{fuel}_moist-{self.moisture_source}_wind-{self.wind_mult:g}"
+        if self.canopy_source != "zero":  # keep earlier labels unchanged
+            label += f"_canopy-{self.canopy_source}"
+        if (self.phiw_adj, self.phis_adj) != (1.0, 1.0):
+            label += f"_phiw-{self.phiw_adj:g}_phis-{self.phis_adj:g}"
+        return label
 
 
 @dataclass
@@ -278,6 +286,15 @@ def case_moisture(case: CaseFiles, cfg: DeckConfig) -> dict[str, float]:
     raise ValueError(f"unknown moisture_source {cfg.moisture_source!r}")
 
 
+def case_canopy(case: CaseFiles, cfg: DeckConfig) -> tuple[float, float]:
+    """(cover %, height m) applied to the whole grid."""
+    if cfg.canopy_source == "zero":
+        return 0.0, 0.0
+    if cfg.canopy_source == "aihub_points":
+        return fuels.canopy(case.points)
+    raise ValueError(f"unknown canopy_source {cfg.canopy_source!r}")
+
+
 def build_deck(
     case: CaseFiles,
     run_dir: Path,
@@ -302,7 +319,12 @@ def build_deck(
     zeros = np.zeros(shp)
     fbfm = case_fuel(case, cfg)
     moisture = case_moisture(case, cfg)
-    landscape = np.stack([dem, slp, asp, np.full(shp, fbfm), zeros, zeros, zeros, zeros])
+    cc_pct, ch_m = case_canopy(case, cfg)
+    # landscape units: CC percent, CH 10 x m (ELMFIRE defaults CC_IN_PERCENT, CH_TIMES_10).
+    # CBH/CBD stay 0, so no crown fire: canopy only shelters the surface fire from wind.
+    cc = np.full(shp, round(cc_pct))
+    ch = np.full(shp, round(ch_m * 10))
+    landscape = np.stack([dem, slp, asp, np.full(shp, fbfm), cc, ch, zeros, zeros])
     _write(inputs / "landscape.tif", grid, landscape, "int16")
     _write(inputs / "adj.tif", grid, np.full(shp, cfg.adj), "float32")
     ign = to_utm(Point(case.ignition_lonlat), grid.epsg)
@@ -331,7 +353,13 @@ def build_deck(
 
     tstop = round(hours * 3600)
     (inputs / "elmfire.data").write_text(
-        NAMELIST.format(n_wx=n_wx, ignition=ignition, tstop=float(tstop))
+        NAMELIST.format(
+            n_wx=n_wx,
+            ignition=ignition,
+            tstop=float(tstop),
+            phiw=float(cfg.phiw_adj),
+            phis=float(cfg.phis_adj),
+        )
     )
     meta = {
         "case_id": case.case_id,
@@ -346,6 +374,8 @@ def build_deck(
         "wd_deg": series["wd"],
         "ws_mph_obs": [w[0] for w in wx],  # before wind_mult — baselines use this
         "fbfm40": fbfm,
+        "canopy_cover_pct": cc_pct,
+        "canopy_height_m": ch_m,
         "moisture_pct": moisture,
         "inputs": cfg.label(),
         "start": "perimeter" if case.start_perimeter is not None else "ignition",
@@ -400,6 +430,8 @@ NUM_METEOROLOGY_TIMES = {n_wx}
 {ignition}
 WX_BILINEAR_INTERPOLATION = .FALSE.
 WSMFEFF_LOW_MULT = 0.011364
+PHIW_ADJ = {phiw}
+PHIS_ADJ = {phis}
 /
 
 &MISCELLANEOUS

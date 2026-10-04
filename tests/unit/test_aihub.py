@@ -27,6 +27,14 @@ def source_doc(case_id: str, point: int, hour: int, wind_dir: float, humidity: f
             }
         },
         "source_data_info": {
+            "file_name": f"{case_id}_S_P{point:04d}_T{hour:03d}",
+            "user_info": {"query_location": {"lat": 35.0 + point * 0.001, "lon": 128.0}},
+            "fuel_conditions": {
+                "fuel_type": "침엽수림" if point == 1 else "활엽수림",
+                "fuel_moisture": 10.0 + hour,
+                "canopy_coverage": 75.0,
+                "canopy_height": 18.0,
+            },
             "weather_conditions": {
                 "observation_time": f"2025-04-07 {12 + hour}:00",
                 "wind_speed": 2.0 + point,
@@ -34,7 +42,7 @@ def source_doc(case_id: str, point: int, hour: int, wind_dir: float, humidity: f
                 "temperature": 20.0,
                 "humidity_percent": humidity,
                 "observatory_location": "순천",
-            }
+            },
         },
     }
 
@@ -96,11 +104,15 @@ def test_write_case_outputs(aihub_root: Path, tmp_path: Path):
         "perimeter_repaired.geojson",
         "weather.csv",
         "meta.json",
+        "points.csv",
     }
     meta = json.loads((target / "meta.json").read_text())
     assert meta["perimeter_check"]["vertices"] == 4
     assert meta["perimeter_check"]["grade"] == "A"
     assert meta["weather_stations"] == ["순천"]
+    rows = (target / "points.csv").read_text().splitlines()
+    assert len(rows) == 3  # header + 2 points
+    assert "침엽수림" in rows[1] and "11.5" in rows[1]  # moisture median over hours 1, 2
 
 
 def test_list_cases_grades(aihub_root: Path):

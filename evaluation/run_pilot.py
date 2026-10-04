@@ -4,11 +4,12 @@ Runs inside the ELMFIRE worker image (needs the elmfire binary and GDAL):
 
   docker run --rm --platform linux/amd64 -v "$PWD:/app" -w /app wfg/elmfire-base:local bash -c \
     'export PATH=/opt/conda/envs/elmfire/bin:/elmfire/elmfire/build/linux/bin:$PATH PYTHONPATH=/app
-     python -m evaluation.run_pilot --scenario evaluation/scenarios/dev.yaml --fbfm40 165'
+     python -m evaluation.run_pilot --scenario evaluation/scenarios/dev.yaml \
+         --fuel-source case_majority'
 
 DEM tiles (Copernicus GLO-30) go in data/dem/. Outputs (all git-ignored):
-  runs/<case>_v0_fm<code>/          inputs, ELMFIRE outputs, deck.json, p1_p8.geojson
-  results/<scenario>_v0_fm<code>/   cases.csv · summary.json (medians + bootstrap 95 % CI) · PNGs
+  runs/<case>_<inputs>/             inputs, ELMFIRE outputs, deck.json, p1_p8.geojson
+  results/<scenario>__<inputs>/      cases.csv · summary.json (medians + bootstrap 95 % CI) · PNGs
   results/index.csv                 one line per run, appended (the improvement log)
 """
 
@@ -19,6 +20,7 @@ import glob
 import json
 import math
 import os
+import shutil
 import statistics
 import subprocess
 import time
@@ -35,7 +37,7 @@ from shapely.ops import unary_union
 
 from evaluation import metrics
 from evaluation.baselines import wind_ellipse
-from spread import slices
+from spread import ensemble, slices
 from spread.elmfire_inputs import CaseFiles, DeckConfig, build_deck
 from spread.geo import projector, to_utm
 
@@ -170,7 +172,8 @@ def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
     # Plan step 1-3: if the run stopped before reaching the observed area, rerun to max_hours
     extended = False
     if slices.area_matched(toa, int(truth.sum()))[1] is None and not cfg.extend_to_max:
-        deck = build_deck(case, run_dir, args.dem_dir, dataclasses.replace(cfg, extend_to_max=True))
+        cfg = dataclasses.replace(cfg, extend_to_max=True)
+        deck = build_deck(case, run_dir, args.dem_dir, cfg)
         toa_path, more = run_elmfire(run_dir)
         elapsed += more
         toa = read_toa(toa_path, shp)
@@ -188,10 +191,31 @@ def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
     dur_s = (case.duration_h or 0) * 3600
     dur = slices.burned(toa, dur_s)
 
-    n = len(deck["ws_mph"])
+    # Plan I-5: wind ensemble. Member 0 is the run above; the area-matched prediction becomes
+    # the most probable cells, the duration cut stays deterministic.
+    if args.ensemble > 1:
+        base_wx = list(zip(deck["ws_mph_obs"], deck["wd_deg"], strict=True))
+        members = ensemble.perturb(base_wx, args.ensemble, args.wd_sigma, args.ws_frac, args.seed)
+        masks, toas = [am], [toa]
+        for i, wx in enumerate(members[1:], start=1):
+            mdir = args.runs_dir / f"{case_id}_{args.tag}_m{i}"
+            build_deck(case, mdir, args.dem_dir, cfg, wx_override=wx)
+            mpath, more = run_elmfire(mdir)
+            elapsed += more
+            mtoa = read_toa(mpath, shp)
+            masks.append(slices.area_matched(mtoa, target)[0])
+            toas.append(mtoa)
+            shutil.rmtree(mdir)
+        prob = ensemble.burn_probability(masks)
+        with np.errstate(all="ignore"):
+            mean_toa = np.nanmean(np.stack(toas), axis=0)
+        am = ensemble.top_cells(prob, target, tiebreak=mean_toa)
+        np.save(run_dir / "burn_probability.npy", prob.astype("float32"))
+
+    n = len(deck["ws_mph_obs"])
     hours = max(1, min(n, math.ceil(case.duration_h or 1)))
     b2 = wind_ellipse(
-        shp, tr, ign, target * cell_m2, deck["ws_mph"][:hours], deck["wd_deg"][:hours]
+        shp, tr, ign, target * cell_m2, deck["ws_mph_obs"][:hours], deck["wd_deg"][:hours]
     )
 
     truth_dir = centroid_bearing(truth, tr, ign)
@@ -213,6 +237,8 @@ def evaluate_case(case_id: str, args, cfg: DeckConfig) -> list[dict]:
             "extended": extended,
             "weather_stations": ";".join(meta.get("weather_stations") or []),
             "p1_p8_ha": ";".join(f"{a:.1f}" for a in p_areas),
+            "fbfm40": deck["fbfm40"],
+            "m1": deck["moisture_pct"]["m1"],
             "p_nested": nested,
         }
         if cut == "area_matched":
@@ -237,18 +263,42 @@ def main() -> None:
     ap.add_argument("--cases-dir", type=Path, default=Path("cases"))
     ap.add_argument("--dem-dir", type=Path, default=Path("data/dem"))
     ap.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    ap.add_argument("--out", type=Path, default=None, help="default results/<scenario>_v0_fm<code>")
+    ap.add_argument("--out", type=Path, default=None, help="default results/<scenario>__<inputs>")
     ap.add_argument("--index", type=Path, default=Path("results/index.csv"))
-    ap.add_argument("--fbfm40", type=int, default=DeckConfig().fbfm40, help="uniform fuel code")
+    d = DeckConfig()
+    ap.add_argument("--fbfm40", type=int, default=d.fbfm40, help="uniform / fallback fuel code")
+    ap.add_argument("--fuel-source", default=d.fuel_source, choices=["uniform", "case_majority"])
+    ap.add_argument(
+        "--moisture-source", default=d.moisture_source, choices=["fixed", "aihub_points"]
+    )
+    ap.add_argument("--wind-mult", type=float, default=d.wind_mult)
+    ap.add_argument("--canopy-source", default=d.canopy_source, choices=["zero", "aihub_points"])
+    ap.add_argument("--phiw-adj", type=float, default=d.phiw_adj, help="ELMFIRE PHIW_ADJ")
+    ap.add_argument("--phis-adj", type=float, default=d.phis_adj, help="ELMFIRE PHIS_ADJ")
+    ap.add_argument("--ensemble", type=int, default=1, help="members (1 = deterministic)")
+    ap.add_argument("--wd-sigma", type=float, default=30.0, help="ensemble wind direction sd (deg)")
+    ap.add_argument("--ws-frac", type=float, default=0.2, help="ensemble wind speed +- fraction")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     ids = args.cases or read_cases(args.scenario)
-    cfg = DeckConfig(fbfm40=args.fbfm40)
+    cfg = DeckConfig(
+        fbfm40=args.fbfm40,
+        fuel_source=args.fuel_source,
+        moisture_source=args.moisture_source,
+        wind_mult=args.wind_mult,
+        canopy_source=args.canopy_source,
+        phiw_adj=args.phiw_adj,
+        phis_adj=args.phis_adj,
+    )
     scenario = "custom" if args.cases else args.scenario.stem
     if scenario == "holdout" and not os.environ.get("WFG_OPEN_HOLDOUT"):
         raise SystemExit("holdout is locked until calibration is done (set WFG_OPEN_HOLDOUT=1)")
-    args.out = args.out or Path(f"results/{scenario}_v0_fm{args.fbfm40}")
-    args.tag = f"v0_fm{args.fbfm40}"
+    args.label = cfg.label() + (
+        f"_ens-{args.ensemble}x{args.wd_sigma:g}deg" if args.ensemble > 1 else ""
+    )
+    args.out = args.out or Path(f"results/{scenario}__{args.label}")
+    args.tag = args.label
     all_rows, failed = [], {}
     for cid in ids:
         print(f"[{cid}] running ...", flush=True)
@@ -296,7 +346,7 @@ def main() -> None:
 
     summary = {
         "scenario": scenario,
-        "fuel": f"v0 uniform FBFM40 {args.fbfm40}",
+        "inputs": args.label,
         "cases": len({r["case_id"] for r in all_rows}),
         "failed": failed,
         "area_matched": {
@@ -353,7 +403,7 @@ def append_index(path: Path, args, scenario: str, summary: dict, rows: list[dict
         "run_at": datetime.now().isoformat(timespec="seconds"),
         "commit": git_commit(),
         "scenario": scenario,
-        "inputs": f"v0 fm{args.fbfm40}",
+        "inputs": args.label,
         "cases": summary["cases"],
         "failed": len(summary["failed"]),
         "not_reached": len(summary["not_reached_after_extension"]),

@@ -8,6 +8,7 @@ from spread.elmfire_inputs import (
     CaseFiles,
     DeckConfig,
     hourly_weather,
+    ignition_block,
     make_grid,
     simulation_hours,
 )
@@ -78,9 +79,12 @@ def test_hourly_weather_requires_records():
 
 
 def test_namelist_fills_run_values():
-    text = NAMELIST.format(n_wx=9, x_ign=354982.2, y_ign=3884367.9, tstop=28800.0)
+    text = NAMELIST.format(
+        n_wx=9, ignition=ignition_block(354982.2, 3884367.9), tstop=28800.0, phiw=1.5, phis=1.0
+    )
     assert "NUM_METEOROLOGY_TIMES = 9" in text
     assert "X_IGN(1)      = 354982.2" in text
     assert "SIMULATION_TSTOP = 28800.0" in text
     assert "SIMULATION_DT    = 10.0" in text  # 1 s triggers ELMFIRE's false "stalled" stop
+    assert "PHIW_ADJ = 1.5" in text and "PHIS_ADJ = 1.0" in text
     assert "{" not in text

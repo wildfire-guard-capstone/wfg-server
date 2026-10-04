@@ -10,11 +10,11 @@ Runs inside the ELMFIRE worker image (rasterio + GDAL CLI from its conda env).
 rasterio is imported inside the raster-writing functions only, so the grid, weather
 and namelist logic stays importable (and unit-tested) without the worker image.
 
-Version v0 assumptions (pilot scenario, replaced later):
-  - uniform fuel FBFM40 (default 188 TL8, 165 TU5 for comparison)
-  - canopy zero (crown fire off, PD-07)
-  - fixed fuel moisture, wind spatially uniform
-  - station wind (AI Hub) used directly as ELMFIRE 20-ft wind  ⚠ height not corrected
+Inputs are chosen by DeckConfig (each option is one experiment of plan track I):
+  fuel_source      uniform (v0: one FBFM40 everywhere) | case_majority (AI Hub points, I-1)
+  moisture_source  fixed (v0) | aihub_points (median point fuel moisture, I-3)
+  wind_mult        scales station wind speed; changes the spread ellipse shape (I-4)
+Still assumed: canopy zero (crown fire off, PD-07), wind spatially uniform.
 """
 
 import csv
@@ -29,7 +29,9 @@ from pathlib import Path
 import numpy as np
 from shapely.geometry import Point, shape
 
+from spread import fuels
 from spread.geo import to_utm, utm_epsg
+from spread.perimeter_start import ignition_block, phi_from_polygon
 from spread.units import ms_to_mph
 
 NODATA = -9999
@@ -40,7 +42,13 @@ class DeckConfig:
     cell_m: float = 30.0
     domain_factor: float = 4.0  # domain side = factor x larger side of the perimeter bbox
     min_domain_m: float = 3000.0
-    fbfm40: int = 188  # TL8 long-needle litter (v0 plan); compare with 165 TU5 via --fbfm40
+    fbfm40: int = 165  # uniform fuel (v0 = TU5); fallback for case_majority
+    fuel_source: str = "uniform"  # uniform | case_majority
+    moisture_source: str = "fixed"  # fixed | aihub_points
+    wind_mult: float = 1.0
+    canopy_source: str = "zero"  # zero | aihub_points (case median cover and height)
+    phiw_adj: float = 1.0  # ELMFIRE wind-factor multiplier (Rothermel phi_w): spread shape
+    phis_adj: float = 1.0  # ELMFIRE slope-factor multiplier (Rothermel phi_s): spread shape
     moisture_pct: dict[str, float] = field(
         default_factory=lambda: {"m1": 6, "m10": 8, "m100": 10, "lh": 30, "lw": 60}
     )
@@ -49,6 +57,16 @@ class DeckConfig:
     duration_margin: float = 1.5  # run past the observed duration so the area cut can be reached
     max_hours: float = 48.0
     extend_to_max: bool = False  # evaluation retry when the area cut was not reached
+
+    def label(self) -> str:
+        """Short description of the inputs, used in run folders and results/index.csv."""
+        fuel = f"fm{self.fbfm40}" if self.fuel_source == "uniform" else self.fuel_source
+        label = f"fuel-{fuel}_moist-{self.moisture_source}_wind-{self.wind_mult:g}"
+        if self.canopy_source != "zero":  # keep earlier labels unchanged
+            label += f"_canopy-{self.canopy_source}"
+        if (self.phiw_adj, self.phis_adj) != (1.0, 1.0):
+            label += f"_phiw-{self.phiw_adj:g}_phis-{self.phis_adj:g}"
+        return label
 
 
 @dataclass
@@ -85,6 +103,8 @@ class CaseFiles:
     end_time: datetime | None
     perimeter_wgs84: object  # shapely Polygon
     weather: list[dict]
+    points: list[dict] = field(default_factory=list)  # AI Hub observation points (fuel)
+    start_perimeter: object | None = None  # shapely Polygon (WGS84): start from it (II-1)
 
     @classmethod
     def load(cls, case_dir: Path) -> "CaseFiles":
@@ -113,6 +133,8 @@ class CaseFiles:
             end_time=datetime.fromisoformat(end) if end else None,
             perimeter_wgs84=perim,
             weather=weather,
+            points=fuels.load_points(case_dir / "points.csv"),
+            start_perimeter=_load_polygon(case_dir / "start_perimeter.geojson"),
         )
 
     @property
@@ -120,6 +142,12 @@ class CaseFiles:
         if self.end_time is None:
             return None
         return (self.end_time - self.ignition_time).total_seconds() / 3600
+
+
+def _load_polygon(path: Path):
+    if not path.exists():
+        return None
+    return shape(json.loads(path.read_text())["geometry"])
 
 
 def make_grid(case: CaseFiles, cfg: DeckConfig) -> Grid:
@@ -242,8 +270,42 @@ def _corner_tiles(grid: Grid) -> list[str]:
     return sorted(names)
 
 
-def build_deck(case: CaseFiles, run_dir: Path, dem_dir: Path, cfg: DeckConfig) -> dict:
-    """Write all inputs for one case into run_dir/inputs and return run metadata."""
+def case_fuel(case: CaseFiles, cfg: DeckConfig) -> int:
+    if cfg.fuel_source == "uniform":
+        return cfg.fbfm40
+    if cfg.fuel_source == "case_majority":
+        return fuels.majority_fuel(case.points, fuels.load_crosswalk(), default=cfg.fbfm40)
+    raise ValueError(f"unknown fuel_source {cfg.fuel_source!r}")
+
+
+def case_moisture(case: CaseFiles, cfg: DeckConfig) -> dict[str, float]:
+    if cfg.moisture_source == "fixed":
+        return dict(cfg.moisture_pct)
+    if cfg.moisture_source == "aihub_points":
+        return fuels.dead_fuel_moisture(case.points, default=cfg.moisture_pct)
+    raise ValueError(f"unknown moisture_source {cfg.moisture_source!r}")
+
+
+def case_canopy(case: CaseFiles, cfg: DeckConfig) -> tuple[float, float]:
+    """(cover %, height m) applied to the whole grid."""
+    if cfg.canopy_source == "zero":
+        return 0.0, 0.0
+    if cfg.canopy_source == "aihub_points":
+        return fuels.canopy(case.points)
+    raise ValueError(f"unknown canopy_source {cfg.canopy_source!r}")
+
+
+def build_deck(
+    case: CaseFiles,
+    run_dir: Path,
+    dem_dir: Path,
+    cfg: DeckConfig,
+    wx_override: list[tuple[float, float]] | None = None,
+) -> dict:
+    """Write all inputs for one case into run_dir/inputs and return run metadata.
+
+    wx_override replaces the hourly (ws_mph, wd_deg) series — used by ensemble members.
+    """
     if run_dir.exists():
         shutil.rmtree(run_dir)  # leftovers from an earlier run made ELMFIRE stall (10/4)
     inputs = run_dir / "inputs"
@@ -255,27 +317,49 @@ def build_deck(case: CaseFiles, run_dir: Path, dem_dir: Path, cfg: DeckConfig) -
     shp = (grid.height, grid.width)
     dem, slp, asp = build_terrain(grid, dem_dir, scratch)
     zeros = np.zeros(shp)
-    landscape = np.stack([dem, slp, asp, np.full(shp, cfg.fbfm40), zeros, zeros, zeros, zeros])
+    fbfm = case_fuel(case, cfg)
+    moisture = case_moisture(case, cfg)
+    cc_pct, ch_m = case_canopy(case, cfg)
+    # landscape units: CC percent, CH 10 x m (ELMFIRE defaults CC_IN_PERCENT, CH_TIMES_10).
+    # CBH/CBD stay 0, so no crown fire: canopy only shelters the surface fire from wind.
+    cc = np.full(shp, round(cc_pct))
+    ch = np.full(shp, round(ch_m * 10))
+    landscape = np.stack([dem, slp, asp, np.full(shp, fbfm), cc, ch, zeros, zeros])
     _write(inputs / "landscape.tif", grid, landscape, "int16")
     _write(inputs / "adj.tif", grid, np.full(shp, cfg.adj), "float32")
-    _write(inputs / "phi.tif", grid, np.ones(shp), "float32")
+    ign = to_utm(Point(case.ignition_lonlat), grid.epsg)
+    if case.start_perimeter is not None:
+        start = to_utm(case.start_perimeter, grid.epsg)
+        phi = phi_from_polygon(start, grid.xmin, grid.ymax, grid.cell, shp)
+        ignition = ignition_block(None, None)
+    else:
+        phi = np.ones(shp)
+        ignition = ignition_block(ign.x, ign.y)
+    _write(inputs / "phi.tif", grid, phi, "float32")
 
     hours = simulation_hours(case, cfg)
     n_wx = math.ceil(hours) + 1
-    wx = hourly_weather(case, n_wx)
+    wx = wx_override if wx_override is not None else hourly_weather(case, n_wx)
+    if len(wx) != n_wx:
+        raise ValueError(f"weather series has {len(wx)} hours, deck needs {n_wx}")
     series = {
-        "ws": [w[0] for w in wx],
+        "ws": [w[0] * cfg.wind_mult for w in wx],
         "wd": [w[1] for w in wx],
-        **{k: [v] * n_wx for k, v in cfg.moisture_pct.items()},
+        **{k: [v] * n_wx for k, v in moisture.items()},
     }
     for name, values in series.items():
         bands = np.stack([np.full(shp, v) for v in values])
         _write(inputs / f"{name}.tif", grid, bands, "float32")
 
-    ign = to_utm(Point(case.ignition_lonlat), grid.epsg)
     tstop = round(hours * 3600)
     (inputs / "elmfire.data").write_text(
-        NAMELIST.format(n_wx=n_wx, x_ign=ign.x, y_ign=ign.y, tstop=float(tstop))
+        NAMELIST.format(
+            n_wx=n_wx,
+            ignition=ignition,
+            tstop=float(tstop),
+            phiw=float(cfg.phiw_adj),
+            phis=float(cfg.phis_adj),
+        )
     )
     meta = {
         "case_id": case.case_id,
@@ -288,8 +372,13 @@ def build_deck(case: CaseFiles, run_dir: Path, dem_dir: Path, cfg: DeckConfig) -
         "weather_hours": n_wx,
         "ws_mph": series["ws"],
         "wd_deg": series["wd"],
-        "fbfm40": cfg.fbfm40,
-        "moisture_pct": cfg.moisture_pct,
+        "ws_mph_obs": [w[0] for w in wx],  # before wind_mult — baselines use this
+        "fbfm40": fbfm,
+        "canopy_cover_pct": cc_pct,
+        "canopy_height_m": ch_m,
+        "moisture_pct": moisture,
+        "inputs": cfg.label(),
+        "start": "perimeter" if case.start_perimeter is not None else "ignition",
     }
     (run_dir / "deck.json").write_text(json.dumps(meta, indent=2))
     return meta
@@ -338,12 +427,11 @@ NUM_METEOROLOGY_TIMES = {n_wx}
 /
 
 &SIMULATOR
-NUM_IGNITIONS = 1
-X_IGN(1)      = {x_ign}
-Y_IGN(1)      = {y_ign}
-T_IGN(1)      = 0.0
+{ignition}
 WX_BILINEAR_INTERPOLATION = .FALSE.
 WSMFEFF_LOW_MULT = 0.011364
+PHIW_ADJ = {phiw}
+PHIS_ADJ = {phis}
 /
 
 &MISCELLANEOUS

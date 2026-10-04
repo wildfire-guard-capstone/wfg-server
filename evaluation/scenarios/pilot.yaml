@@ -31,6 +31,7 @@ spread:
   fuel:
     version: v0
     uniform_fbfm40: 188        # TL8 long-needle litter, single value everywhere
+    compare_fbfm40: [165]      # TU5 timber-understory, run with --fbfm40 165 for the fuel comparison
   canopy: zero                 # crown fire off (PD-07)
   moisture_pct: {m1: 6, m10: 8, m100: 10, lh: 30, lw: 60}
   adj: 1.0

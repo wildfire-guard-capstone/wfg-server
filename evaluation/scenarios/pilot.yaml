@@ -1,0 +1,46 @@
+# Pilot scenario: first end-to-end ELMFIRE runs on a fixed set of AI Hub cases.
+# Purpose: get the first metric numbers and a stable before/after comparison
+# while fuels, masks and calibration are changed in later weeks.
+#
+# These cases are used for development. Mark them when the calibration/hold-out
+# split is locked (PD-08) — a case tuned here cannot be a hold-out case.
+
+name: pilot
+dataset: aihub
+
+# Selected 2026-10-02 from `aihub list` (results/aihub_grades.csv):
+#   grade A (valid perimeter, repaired/recorded area 0.8–1.25, ignition within 50 m),
+#   20–500 ha, duration <= 48 h, mixed sizes and durations.
+selection:
+  grade: [A]
+  area_ha: [20, 500]
+  max_duration_h: 48
+
+cases:
+  - id: SC20230303   # 47 ha, 5.3 h — ends inside the 8 h horizon, closest to a P1–P8 check
+  - id: BY20230402   # 24.4 ha, 3.5 h
+  - id: YC20230228   # 37 ha, 18 h — weather ends 10.8 h before the fire ends (gap filled forward)
+  - id: OC20250323   # 39.6 ha, 24.1 h
+  - id: UJ20220528   # 228.8 ha, 23.6 h — larger case; weather ends 5.7 h early
+
+# Model assumptions for this scenario (version v0 — replaced in later scenarios)
+spread:
+  grid_m: 30
+  domain: perimeter_bbox_x4
+  dem: copernicus_glo30
+  fuel:
+    version: v0
+    uniform_fbfm40: 188        # TL8 long-needle litter, single value everywhere
+    compare_fbfm40: [165]      # TU5 timber-understory, run with --fbfm40 165 for the fuel comparison
+  canopy: zero                 # crown fire off (PD-07)
+  moisture_pct: {m1: 6, m10: 8, m100: 10, lh: 30, lw: 60}
+  adj: 1.0
+  start: ignition_point
+
+evaluation:
+  cuts:
+    - area_matched             # cut TOA where burned area equals the observed area (shape/direction)
+    - observed_duration        # cut at end - start (speed; overprediction expected, no suppression)
+  metrics: [iou, f1, f2, precision, recall, kappa, adi, area_ratio, direction_error_deg]
+  baselines: [b2_wind_ellipse]
+  aggregate: median

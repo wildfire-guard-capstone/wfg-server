@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     data_root: Path = Path("./data")
     elmfire_bin: str = "elmfire_1.1"
     kma_api_key: str | None = None
+    data_go_kr_api_key: str | None = None
 
 
 @lru_cache

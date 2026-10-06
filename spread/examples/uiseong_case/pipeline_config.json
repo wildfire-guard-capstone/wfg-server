@@ -1,0 +1,57 @@
+{
+  "case_name": "uiseong_case",
+  "crs": "EPSG:5179",
+  "extent": [1093470.0, 1814700.0, 1103490.0, 1824720.0],
+  "resolution_m": 30.0,
+  "shape": [334, 334],
+  "ignition": {
+    "x": 1098466.47438212,
+    "y": 1819723.3207733,
+    "time_s": 0.0
+  },
+  "simulation_time_s": 21600.0,
+  "sources": {
+    "dem": "source_data/copernicus_dem_N36E128.tif",
+    "worldcover": "source_data/ESA_WorldCover_10m_2021_N36E126.tif",
+    "forest": "source_data/forest_map/extracted/47730.shp",
+    "asos": "source_data/asos_278_20250312_20250322.csv"
+  },
+  "weather": {
+    "start": "2025-03-22 11:00",
+    "band_count": 8,
+    "time_step_s": 3600,
+    "wind_speed_profile": "legacy_knots",
+    "wind_speed_factors": {
+      "legacy_knots": 1.9438444924406048,
+      "mph_recommended": 2.2369362920544
+    },
+    "m1_percent": [4.62, 4.14, 3.79, 3.49, 3.35, 3.51, 3.53, 3.71],
+    "m10_percent": [5.74, 5.13, 4.71, 4.33, 4.15, 4.35, 4.38, 4.60],
+    "m100_percent": [12.77, 12.77, 12.77, 12.77, 12.77, 12.77, 12.77, 12.77]
+  },
+  "worldcover_to_fbfm40": {
+    "10": 188,
+    "20": 142,
+    "30": 102,
+    "40": 93,
+    "50": 91,
+    "60": 99,
+    "70": 98,
+    "80": 98,
+    "90": 98,
+    "95": 188,
+    "100": 188
+  },
+  "contour_hours": [1, 2, 3, 4, 5],
+  "scenarios": [
+    {"name": "weather", "config": "elmfire_weather.data", "output": "outputs_weather"},
+    {"name": "landcover", "config": "elmfire_landcover.data", "output": "outputs_landcover"},
+    {"name": "forest_surface", "config": "elmfire_forest_surface.data", "output": "outputs_forest"},
+    {"name": "canopy_low", "config": "elmfire_canopy_low.data", "output": "outputs_canopy_low"},
+    {"name": "canopy_mid", "config": "elmfire.data", "output": "outputs_canopy"},
+    {"name": "canopy_high", "config": "elmfire_canopy_high.data", "output": "outputs_canopy_high"},
+    {"name": "crown_korea", "config": "elmfire_crown_korea.data", "output": "outputs_crown_korea"},
+    {"name": "crown_wind_x2", "config": "elmfire_crown_wind_x2.data", "output": "outputs_crown_wind_x2"},
+    {"name": "spot_test", "config": "elmfire_spot_test.data", "output": "outputs_spot_test"}
+  ]
+}

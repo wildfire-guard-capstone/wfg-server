@@ -40,6 +40,9 @@ uv run python -m evaluation.datasets.aihub extract HD20250407 --root "$AIHUB_ROO
 
 ## ELMFIRE 워커 이미지
 
+국내 지형·기상·임상도를 이용한 의성군 재현 사례와 단계별 실행 방법은
+[`spread/examples/uiseong_case`](spread/examples/uiseong_case/README.md)에 정리되어 있다.
+
 ELMFIRE는 Linux 전용이다. 이 저장소에 ELMFIRE 소스를 복사하지 않고, upstream의 **고정 커밋**을 빌드한다
 (`docker/worker/Dockerfile`의 `ELMFIRE_REF`). CI가 이미지를 빌드해 GHCR에 올린다.
 

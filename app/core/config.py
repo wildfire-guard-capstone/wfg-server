@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://wfg:wfg@localhost:5432/wfg"
     aihub_root: Path | None = None
     data_root: Path = Path("./data")
+    # capston-data 「data/지도자원/적재」 — 바탕 데이터 적재 파일(app.db.seed.base)
+    base_data_dir: Path | None = None
     elmfire_bin: str = "elmfire_1.1"
     kma_api_key: str | None = None
 

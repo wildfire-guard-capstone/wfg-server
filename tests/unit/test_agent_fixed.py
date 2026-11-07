@@ -63,3 +63,50 @@ def test_upper_reader_delegates_evacuation():
 def test_missing_anchor_falls_back_to_llm():
     assert fixed.paragraph({"id": "E1"}, {"id": "E1-a1", "anchors": []}, COMMON) is None
     assert fixed.head_of("동구") == "동구청장" and fixed.head_of("의성군") == "의성군수"
+
+
+def test_s3_templates():
+    item = {
+        "id": "S3",
+        "facts": {
+            "deployed": {
+                "helicopter": {
+                    "total": 23,
+                    "by": [{"label": "산림청", "n": 5}, {"label": "군", "n": 0}],
+                },
+                "crew": {"total": 151, "by": [{"label": "진화대", "n": 81}]},
+                "vehicle": {"total": None},
+            },
+            "scope": {
+                "now": {
+                    "stage": "1단계",
+                    "ground": {
+                        "home": {"name": "의성군", "share": "100%"},
+                        "extra": {
+                            "kind": "neighbors",
+                            "names": ["안동시", "청송군"],
+                            "share": "50% 이내",
+                        },
+                    },
+                    "air": {"kind": "radius", "km": 100},
+                },
+                "p5": {
+                    "stage": "2단계",
+                    "ground": {
+                        "home": {"name": "의성군", "share": "100%"},
+                        "extra": {"kind": "sido", "names": ["경상북도"], "share": "100%"},
+                    },
+                    "air": {"kind": "national", "km": None},
+                },
+            },
+        },
+    }
+    a1 = fixed.paragraph(item, {"id": "S3-a1", "anchors": ["p.77", "p.78"]}, COMMON)["text"]
+    assert a1.startswith("현재 투입된 자원은 헬기 23대(산림청 5), 인력 151명(진화대 81)입니다.")
+    a2 = fixed.paragraph(item, {"id": "S3-a2", "anchors": ["고시 별표"], "see": "S6"}, COMMON)[
+        "text"
+    ]
+    assert "지상이 의성군 100%와 인접 시군(안동시·청송군) 50% 이내, 공중이 발화지 반경 100 km" in a2
+    assert a2.endswith("세부 내용은 S6 참조.")
+    a3 = fixed.paragraph(item, {"id": "S3-a3", "anchors": ["고시 별표"]}, COMMON)["text"]
+    assert "공중은 전국으로 넓어지므로" in a3

@@ -55,6 +55,13 @@ META = re.compile(
 )
 
 
+MAX_SENTENCES = {"S4": 2}  # 나머지 항목은 3문장(목표 문단 최대 3문장)
+REQUIRE = {
+    "E4-a3": (
+        "요청하십시오",
+        "큰 도로 문단은 경찰서 · 도로 관리기관에 통제를 「요청하십시오」로 끝내십시오",
+    ),
+}
 NEG = re.compile(
     r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않|마)[가-힣]*"
 )
@@ -66,6 +73,8 @@ def blob_of(allowed: tuple[set[str], set[str], str]) -> str:
 
 def fix_category(block: dict[str, Any], text: str, category: str) -> str:
     """구분을 문장의 할 일에 맞춘다: 협의 → 협의, 요청 → 요청, 잠재 위험구역 주제 → 대기."""
+    if "요청하십시오" in text and block.get("see") in ("S6", "E6"):
+        return "요청"
     if "협의하십시오" in text:
         return "협의"
     if "요청하십시오" in text:
@@ -271,6 +280,16 @@ def check_item(
             errors.append(f"{aid}: 「{neg.group(0)}」처럼 할 일을 부정하지 말고 할 일을 쓰십시오")
         if "십시오" not in body:
             errors.append(f"{aid}: 할 일을 「~하십시오」로 쓰십시오(보고 · 서술로 끝내지 마십시오)")
+        n_sent = len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", body))
+        limit = MAX_SENTENCES.get(item["id"], 3)
+        if n_sent > limit:
+            errors.append(
+                f"{aid}: 문단은 {limit}문장 이하로 쓰십시오({n_sent}문장). "
+                "근거 발췌의 다른 조치를 늘어놓지 말고 topic만 쓰십시오"
+            )
+        need = REQUIRE.get(aid)
+        if need and need[0] not in body:
+            errors.append(f"{aid}: {need[1]}")
         if upper and re.search(r"대피명령을\s*(?:내리|발령)|위험구역(?:으로|을)\s*설정", body):
             if not re.search(r"(?:군수|시장|구청장)에게", body):
                 errors.append(

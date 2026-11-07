@@ -207,6 +207,85 @@ def _s1_a3(item: dict, block: dict, common: dict) -> dict | None:
     return {"action": block["id"], "category": cat, "text": head + mid + tail}
 
 
+# ── S3 투입 · 동원 범위 ─────────────────────────────────────────────────────
+
+
+def _counts(d: dict | None, unit: str) -> str | None:
+    """{"total": 23, "by": [{"label": "산림청", "n": 5}, …]} → 「23대(산림청 5, 지자체 16, 소방 2)」."""
+    if not d or d.get("total") is None:
+        return None
+    by = ", ".join(f"{b['label']} {b['n']:,}" for b in d.get("by") or [] if b.get("n"))
+    return f"{d['total']:,}{unit}" + (f"({by})" if by else "")
+
+
+def _scope_text(sc: dict) -> tuple[str, str]:
+    """고시 별표 범위 → (지상, 공중) 글."""
+    g = sc["ground"]
+    ground = f"{g['home']['name']} {g['home']['share']}"
+    ex = g.get("extra") or {}
+    if ex.get("kind") == "neighbors" and ex.get("names"):
+        ground += f"와 인접 시군({'·'.join(ex['names'])}) {ex['share']}"
+    elif ex.get("kind") == "sido" and ex.get("names"):
+        ground += f"와 {'·'.join(ex['names'])} {ex['share']}"
+    air = "전국" if sc["air"]["kind"] == "national" else f"발화지 반경 {sc['air']['km']} km"
+    return ground, air
+
+
+def _s3_a1(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["p.77", "p.78"])
+    if not c:
+        return None
+    dep = item["facts"].get("deployed") or {}
+    parts = [
+        f"{name} {v}"
+        for name, v in (
+            ("헬기", _counts(dep.get("helicopter"), "대")),
+            ("인력", _counts(dep.get("crew"), "명")),
+            ("장비", _counts(dep.get("vehicle"), "대")),
+        )
+        if v
+    ]
+    head = (
+        f"현재 투입된 자원은 {', '.join(parts)}입니다."
+        if parts
+        else "투입 수 보고가 아직 없습니다."
+    )
+    return {
+        "action": block["id"],
+        "category": "즉시",
+        "text": f"{head} 가용 헬기를 집중 투입하고 확산에 따라 단계적으로 늘리십시오 {c}.",
+    }
+
+
+def _s3_a2(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["고시 별표"])
+    sc = (item["facts"].get("scope") or {}).get("now")
+    if not c or not sc:
+        return None
+    ground, air = _scope_text(sc)
+    text = (
+        f"현재 {FULL[sc['stage']]} 동원 범위는 지상이 {ground}, 공중이 {air}입니다. "
+        f"범위 안 가용 진화자원을 동원하고, 모자라면 범위 안 기관에 응원을 요청하십시오 {c}."
+    )
+    if block.get("see"):
+        text += f" 세부 내용은 {block['see']} 참조."
+    return {"action": block["id"], "category": "요청", "text": text}
+
+
+def _s3_a3(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["고시 별표"])
+    sc = (item["facts"].get("scope") or {}).get("p5")
+    if not c or not sc:
+        return None
+    ground, air = _scope_text(sc)
+    return {
+        "action": block["id"],
+        "category": "대기",
+        "text": f"5시간 뒤 {FULL[sc['stage']]} 기준에 이르면 지상은 {ground}, 공중은 {_ro(air)} "
+        f"넓어지므로 응원 요청을 준비하십시오 {c}.",
+    }
+
+
 # ── 목록 · 표 앞 문단 ───────────────────────────────────────────────────────
 
 
@@ -248,6 +327,9 @@ TEMPLATES = {
     "S1-a2": _s1_a2,
     "S1-a3": _s1_a3,
     "S2-a1": _simple(["p.77"], "진화 우선순위에 따라 아래 순서로 방어하고 보호", "즉시", False),
+    "S3-a1": _s3_a1,
+    "S3-a2": _s3_a2,
+    "S3-a3": _s3_a3,
     "S6-a1": _simple(
         ["p.22", "p.73"], "산불현장 대책회의를 열어 아래 기관별로 임무를 부여", "즉시", False
     ),
@@ -271,6 +353,12 @@ TEMPLATES = {
         "요청",
         False,
         see="E6",
+    ),
+    "E5-a2": _simple(
+        ["p.76"],
+        "마을방송과 자동음성통보도 함께 쓰고, Go 문자에는 대피 장소가 들어가야 하므로 E4의 대피소를 먼저 정",
+        "즉시",
+        True,
     ),
 }
 

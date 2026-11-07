@@ -24,6 +24,7 @@ from rules.core.stage import (
     stage_change,
     stage_trend,
 )
+from rules.core.villages import Reached, Village, reached_villages
 from rules.core.weather import WindSummary, summarize_wind
 
 
@@ -41,6 +42,7 @@ class Inputs:
     heritage: Points  # 국가유산 점
     sido: Sequence[Region]  # 시 · 도 경계
     sigungu: Sequence[Region]  # 시 · 군 · 구 경계
+    villages: Sequence[Village]  # 리(마을) 경계 · 인구. 지금은 의성만 있음
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class Context:
     span_p5: Span
     commander_now: Commander  # 지금 지휘권자(현재 화선 기준)
     commander_next: Commander  # 곧 지휘권자(P5 기준)
+    villages: list[Reached]  # P8 안 마을과 처음 닿는 P
 
 
 def _span(area: BaseGeometry, inputs: Inputs) -> Span:
@@ -86,6 +89,8 @@ def build_context(inputs: Inputs) -> Context:
     5. 추세(P5 vs 현재) · 단계 변화(이번 vs 직전 제안서)
     6. 걸친 지역(R-02): 현재 화선 · P5
     7. 지휘권자(L-01): 지금 = 현재 화선 면적 · 걸친 지역, 곧 = P5 면적 · 걸친 지역
+    8. P8 안 마을과 처음 닿는 P(R-02 · R-04). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류
+       (자료는 나중에 채운다 — 빠진 채로 판정하지 않음, 11/7)
     """
     p0, p5 = inputs.ranges[0], inputs.ranges[5]
     areas = range_areas(inputs.ranges)  # 1
@@ -118,4 +123,14 @@ def build_context(inputs: Inputs) -> Context:
         span_p5=span_p5,
         commander_now=commander_now,
         commander_next=commander_next,
+        villages=_villages(inputs),  # 8
     )
+
+
+def _villages(inputs: Inputs) -> list[Reached]:
+    """P8 안 마을. P8이 걸친 시 · 군 · 구 중 리 자료가 없는 곳이 있으면 오류."""
+    have = {v.sigungu for v in inputs.villages}
+    missing = [sg for sg in spanned(inputs.ranges[8], inputs.sigungu) if sg not in have]
+    if missing:
+        raise ValueError(f"리 자료가 없는 시 · 군 · 구: {missing}")
+    return reached_villages(inputs.villages, inputs.ranges)

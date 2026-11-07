@@ -5,7 +5,7 @@
 고르기 · 옮겨 담기 · 이름 바꾸기 · 틀 채우기만 한다.
 
 고정 모양: 키는 늘 있다. 없으면 `[]` · `0` · `false` · `null`. 묶음마다 `basis`(판정 근거
-청크 ID) · `unknown`(모르는 칸과 이유)을 둔다. 지금은 S1이 쓰는 묶음만 있다.
+청크 ID) · `unknown`(모르는 칸과 이유)을 둔다. 지금은 S1 · E1이 쓰는 묶음만 있다.
 """
 
 from typing import Any
@@ -13,9 +13,10 @@ from typing import Any
 from rules.context import Context
 from rules.core.area import first_over
 from rules.core.commander import LARGE_FIRE_HA, NATIONAL_HA, Commander, Level, Reason, ReasonKind
-from rules.core.convert import num_text, p_until, round1, weekday
+from rules.core.convert import Zone, num_text, p_from, p_until, round1, weekday, zone_of
 from rules.core.facility import FacilityCount
 from rules.core.stage import LABEL, StageJudgment, next_area_threshold
+from rules.core.villages import Reached
 
 MAX_P = 8
 
@@ -144,6 +145,50 @@ def commander_bundle(ctx: Context) -> dict[str, Any]:
     }
 
 
+def _village(ctx: Context, reached: Reached) -> dict[str, Any]:
+    v, p = reached.village, reached.p
+    return {
+        "id": v.id,
+        "name": v.name,
+        "emd": v.emd,
+        "sigungu": v.sigungu,
+        "first_p": p,
+        "from": p_from(ctx.base_at, p),
+        "until": p_until(ctx.base_at, p),
+        "population": v.population,
+        "pop65_est": v.pop65_est,
+    }
+
+
+def _total(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {"count": len(rows), "population": sum(r["population"] for r in rows)}
+
+
+def villages_bundle(ctx: Context) -> dict[str, Any]:
+    """`villages`: P8 안 마을을 구간별로(J1). 닿는 순, 같으면 이름 순.
+
+    1. 마을마다 처음 닿는 P · 구간 시작 · 끝 시각 · 인구를 붙인다
+    2. 구간으로 나눈다: burning(P0) · p5(P1 ~ P5) · p8(P6 ~ P8)
+    3. 구간별 · 5시간 안(burning + p5) 마을 수 · 인구 합계
+    """
+    groups: dict[Zone, list[dict[str, Any]]] = {z: [] for z in Zone}
+    for r in ctx.villages:
+        groups[zone_of(r.p)].append(_village(ctx, r))  # 1 · 2
+    burning, p5, p8 = groups[Zone.BURNING], groups[Zone.P5], groups[Zone.P8]
+    return {
+        "burning": burning,
+        "p5": p5,
+        "p8": p8,
+        "totals": {  # 3
+            "burning": _total(burning),
+            "p5": _total(p5),
+            "within_p5": _total(burning + p5),
+            "p8": _total(p8),
+        },
+        "unknown": [],
+    }
+
+
 def build_bundles(ctx: Context) -> dict[str, Any]:
     """공통 결과를 엔진 JSON(주제별 묶음)으로 바꾼다. `proposals.context`에 그대로 저장한다."""
     return {
@@ -151,4 +196,5 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "area": area_bundle(ctx),
         "stage": stage_bundle(ctx),
         "commander": commander_bundle(ctx),
+        "villages": villages_bundle(ctx),
     }

@@ -55,6 +55,14 @@ def p_until(base_at: datetime, p: int) -> str:
     return NOW if p == 0 else p_clock(base_at, p)
 
 
+def p_from(base_at: datetime, p: int) -> str | None:
+    """Pn 구간의 시작 시각: P0은 None(이미 닿음), 그 밖은 0시 + (n − 1)시간.
+
+    Pn에 처음 닿으면 이 시각 뒤 언제든 닿을 수 있다(구간 끝 시각만 쓰면 시한이 늦어짐).
+    """
+    return None if p == 0 else p_clock(base_at, p - 1)
+
+
 WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 
 

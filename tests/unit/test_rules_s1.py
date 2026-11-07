@@ -1,43 +1,18 @@
 """S1: 입력 → 공통 결과 → 엔진 묶음 → S1 입력 → 섹션을 12:50 예시로 끝까지 돌린다."""
 
-from datetime import datetime
-from math import sqrt
-
-from shapely.geometry import box
+from rules_example import BASE, inputs
 
 from rules.bundles import build_bundles
-from rules.context import Inputs, build_context
+from rules.context import build_context
 from rules.core.convert import p_until, weekday
-from rules.core.regions import Region
 from rules.core.stage import Stage
 from rules.items.s1 import s1_input
 from rules.sections.s1 import s1_sections
 
-BASE = datetime(2025, 3, 22, 12, 50)
-# 12:50 예시 면적(ha): P0(현재 화선) · P1 ~ P8
-AREAS = [48.5, 89, 205, 262, 316, 363, 410, 455, 499]
-
-
-def _square(ha: float):
-    """원점을 중심으로 한 정사각형(EPSG:5179 m). 면적 = ha."""
-    half = sqrt(ha * 10_000) / 2
-    return box(-half, -half, half, half)
-
 
 def _inputs(prev_stage=None, wind_now=3.4, reader="의성군수"):
-    world = box(-1e5, -1e5, 1e5, 1e5)
-    return Inputs(
-        base_at=BASE,
-        generated_at=BASE,
-        reader=reader,
-        prev_stage=prev_stage,
-        ranges=[_square(ha) for ha in AREAS],
-        wind_ms={0: wind_now, **{h: 2.0 for h in range(1, 9)}},
-        houses=([0.0, 10.0], [0.0, 10.0]),  # P5 안 주택 2동
-        heritage=([], []),
-        sido=[Region("경상북도", world)],
-        sigungu=[Region("의성군", world)],
-    )
+    wind = {0: wind_now, **{h: 2.0 for h in range(1, 9)}}
+    return inputs(prev_stage=prev_stage, wind_ms=wind, reader=reader)
 
 
 def _run(**kw):

@@ -3,7 +3,9 @@
 from collections.abc import Sequence
 from typing import Any
 
+from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import linemerge
 
 from rules.context import Context
 from rules.core.convert import p_from, p_time, p_until, round1, zone_of
@@ -55,3 +57,12 @@ def village_at(ctx: Context, point: BaseGeometry) -> tuple[str, str] | None:
         if v.geom.intersects(point):
             return v.name, v.emd
     return None
+
+
+def line_ends(part: BaseGeometry, line: BaseGeometry) -> tuple[Point, Point]:
+    """걸린 부분의 가장 바깥 두 끝점(선을 따라 잰 위치로 고름). 두 덩어리여도 바깥 끝으로."""
+    merged = linemerge(part) if part.geom_type == "MultiLineString" else part
+    pieces = getattr(merged, "geoms", [merged])
+    points = [Point(c) for g in pieces for c in (g.coords[0], g.coords[-1])]
+    points.sort(key=line.project)
+    return points[0], points[-1]

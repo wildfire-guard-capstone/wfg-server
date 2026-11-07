@@ -14,6 +14,8 @@ from rules.bundles.area import area_bundle
 from rules.bundles.commander import commander_bundle
 from rules.bundles.houses import houses_bundle
 from rules.bundles.protected import protected_bundle
+from rules.bundles.roads import roads_bundle
+from rules.bundles.shelters import shelters_bundle
 from rules.bundles.stage import stage_bundle
 from rules.bundles.timing import time_bundle
 from rules.bundles.villages import villages_bundle
@@ -32,4 +34,6 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "vulnerable": vulnerable_bundle(ctx),
         "protected": protected_bundle(ctx),
         "houses": houses_bundle(ctx),
+        "shelters": shelters_bundle(ctx),
+        "roads": roads_bundle(ctx),
     }

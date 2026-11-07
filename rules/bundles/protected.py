@@ -9,9 +9,8 @@ from typing import Any
 
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import linemerge
 
-from rules.bundles.common import km, nearest, timing, village_at, village_names
+from rules.bundles.common import km, line_ends, nearest, timing, village_at, village_names
 from rules.context import Context
 from rules.core.convert import round1
 from rules.core.places import Place, PowerLine
@@ -24,15 +23,6 @@ UNKNOWN_FIXED = [
     {"field": "군사시설", "reason": "위치 정보 없음"},
     {"field": "중요 산림자원", "reason": "위치 정보 없음"},
 ]
-
-
-def _ends(part: BaseGeometry, line: BaseGeometry) -> tuple[Point, Point]:
-    """걸린 부분의 가장 바깥 두 끝점(선을 따라 잰 위치로 고름). 두 덩어리여도 바깥 끝으로."""
-    merged = linemerge(part) if part.geom_type == "MultiLineString" else part
-    pieces = getattr(merged, "geoms", [merged])
-    points = [Point(c) for g in pieces for c in (g.coords[0], g.coords[-1])]
-    points.sort(key=line.project)
-    return points[0], points[-1]
 
 
 def _end_village(ctx: Context, point: Point) -> str:
@@ -61,7 +51,7 @@ def _power(ctx: Context, line: PowerLine, p: int) -> dict[str, Any]:
     p5, p8 = ctx.inputs.ranges[5], ctx.inputs.ranges[8]
     part5, part8 = line.geom.intersection(p5), line.geom.intersection(p8)  # 1
     named = part5 if part5.length > 0 else part8  # 2
-    a, b = (_end_village(ctx, pt) for pt in _ends(named, line.geom))
+    a, b = (_end_village(ctx, pt) for pt in line_ends(named, line.geom))
     span = a if a == b else f"{a}~{b}"
     adds = sorted(_touched(ctx, part8) - _touched(ctx, part5))  # 3
     return {

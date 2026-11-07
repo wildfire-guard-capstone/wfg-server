@@ -188,14 +188,25 @@ def schema(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def retry_message(errors: list[str], paras: list[dict[str, Any]]) -> dict[str, str]:
+def retry_message(
+    errors: list[str], paras: list[dict[str, Any]], names: set[str] = frozenset()
+) -> dict[str, str]:
     bad = {e.split(":")[0] for e in errors}
     shown = "\n".join(
         f"- {p.get('action')}: {p.get('text')}" for p in paras if p.get("action") in bad
     )
+    # 목록 앞 문단 이름 문제: 같은 action의 목표 문단 꼴(값 가림)을 보여 준다
+    forms = []
+    for e in errors:
+        aid = e.split(":")[0]
+        if "아래 목록이" in e:
+            ex = [p for ps in STYLE.values() for p in ps if p["action"] == aid]
+            if ex:
+                forms.append(f"- {aid}: {mask_example(ex[0]['text'], names)}")
     return {
         "role": "user",
         "content": "검사에서 아래 문제가 나왔습니다. 문제를 고쳐 같은 JSON 형식으로 모든 action을 다시 쓰십시오.\n"
         + "\n".join(f"- {e}" for e in errors)
-        + (f"\n\n[문제가 있던 문단]\n{shown}" if shown else ""),
+        + (f"\n\n[문제가 있던 문단]\n{shown}" if shown else "")
+        + ("\n\n[이렇게 이름 없이 쓰십시오]\n" + "\n".join(dict.fromkeys(forms)) if forms else ""),
     }

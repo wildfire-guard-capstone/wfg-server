@@ -142,7 +142,7 @@ class Agent:
                 return assemble(item, by, "ok") | {"paras": by}, log
             msgs = msgs + [
                 {"role": "assistant", "content": raw.split("</think>")[-1].strip()},
-                prompt.retry_message(errors, paras),
+                prompt.retry_message(errors, paras, self.known_names),
             ]
         return assemble(item, None, "failed"), log
 

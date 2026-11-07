@@ -232,7 +232,7 @@ def check_item(
             ):
                 errors.append(f"{aid}: 입력에 없는 이름 「{name}」")
         if aid in led:
-            named = sorted(n for n in list_names if n in body)
+            named = sorted(n for n in list_names if re.search(rf"(?<![가-힣]){re.escape(n)}", body))
             if named:
                 errors.append(
                     f"{aid}: 아래 목록이 이름을 보여 주므로 문단에 {named[:4]}를 쓰지 말고 "
@@ -240,8 +240,10 @@ def check_item(
                 )
         if META.search(body):
             errors.append(f"{aid}: 지시문 · 주의 문구를 문단에 옮겨 적지 마십시오")
-        if ETC.search(body):
-            errors.append(f"{aid}: 「등」을 쓰지 말고 대상을 모두 쓰거나 빼십시오")
+        m = ETC.search(body)
+        if m:
+            near = body[max(0, m.start() - 12) : m.end() + 3].strip()
+            errors.append(f"{aid}: 「{near}」의 「등」을 지우십시오(대상을 모두 쓰거나 빼십시오)")
         for pat, msg in FORBID.get(item["id"], []):
             if pat.search(body):
                 errors.append(f"{aid}: {msg}")

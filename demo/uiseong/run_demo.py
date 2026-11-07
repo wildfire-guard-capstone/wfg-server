@@ -82,6 +82,14 @@ def known_names(md: MapData) -> set[str]:
     return {n for n in names if len(n) >= 2}
 
 
+def list_names(md: MapData) -> set[str]:
+    """목록에 나오는 마을 · 시설 이름(목록 바로 앞 문단에서는 쓰지 않음)."""
+    names = {v.name for v in md.villages}
+    for group in (md.vulnerable, md.shelters, md.heritage):
+        names |= {p.name for p in group}
+    return {n for n in names if len(n) >= 2}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--data", type=Path, required=True)
@@ -106,7 +114,12 @@ def main() -> None:
     if not a.skip_llm:
         thinking = {x.strip() for x in a.thinking.split(",") if x.strip()}
         agent = Agent(
-            LLM(a.llm), Evidence(a.evidence), known_names(md), workers=a.workers, thinking=thinking
+            LLM(a.llm),
+            Evidence(a.evidence),
+            known_names(md),
+            workers=a.workers,
+            thinking=thinking,
+            list_names=list_names(md),
         )
     t_all = time.time()
     print(

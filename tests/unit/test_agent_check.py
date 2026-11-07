@@ -114,3 +114,9 @@ def test_tidy_and_placement_and_see():
 def test_parse_bare_list():
     raw = '</think> [{"action": "S1-a1", "category": "즉시", "text": "x"}]'
     assert check.parse(raw)[0]["action"] == "S1-a1"
+
+
+def test_list_led_paragraph_must_not_name():
+    errs = check.check_item(ITEM, _p("신월리를 협의하십시오 [p.73]."), ALLOWED, set(), {"신월리"})
+    assert any("아래 목록" in e for e in errs)
+    assert check.tidy("동원합니다 [고시 별표]..") == "동원합니다 [고시 별표]."

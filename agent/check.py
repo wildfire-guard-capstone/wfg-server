@@ -61,9 +61,24 @@ def tidy(text: str) -> str:
     「…입니다. [p.77, p.78]」 → 「…입니다 [p.77·78].」, 「…하십시오 [p.79]」 → 「…하십시오 [p.79].」
     """
     text = re.sub(r"\s*([.。])\s*(\[[^\[\]]+\])", r" \2\1", text.strip())
+    text = re.sub(r"(\])\s*\.{2,}", r"\1.", text)  # 「… [고시 별표]..」
     if text.endswith("]"):
         text += "."
     return tidy_citations(text)
+
+
+def list_led(item: dict[str, Any]) -> set[str]:
+    """바로 뒤에 조립기 목록 · 표가 붙는 action.
+
+    명단은 목록이 보여 주므로 문단은 「아래」로 가리킨다.
+    """
+    out = set()
+    for s in item["sections"]:
+        blocks = s["blocks"]
+        for b, nxt in zip(blocks, blocks[1:], strict=False):
+            if b["type"] == "action" and nxt["type"] in ("list", "table"):
+                out.add(b["id"])
+    return out
 
 
 def parse(text: str) -> list[dict[str, Any]]:
@@ -152,9 +167,15 @@ def check_item(
     paras: list[dict[str, Any]],
     allowed: tuple[set[str], set[str], str],
     known_names: set[str],
+    list_names: set[str] = frozenset(),
 ) -> list[str]:
+    """한 항목의 문단 검사.
+
+    list_names = 목록에 나오는 마을 · 시설 이름. 목록 바로 앞 문단에 쓰면 실패(목표 문단 꼴, 11/7).
+    """
     errors: list[str] = []
     acts = {a["id"]: a for a in actions(item)}
+    led = list_led(item)
     got = [p.get("action") for p in paras]
     if sorted(got) != sorted(acts):
         errors.append(f"action이 맞지 않습니다: 받은 {got}, 써야 할 {list(acts)}")
@@ -210,6 +231,13 @@ def check_item(
                 and re.search(rf"(?<![가-힣]){re.escape(name)}", body)
             ):
                 errors.append(f"{aid}: 입력에 없는 이름 「{name}」")
+        if aid in led:
+            named = sorted(n for n in list_names if n in body)
+            if named:
+                errors.append(
+                    f"{aid}: 아래 목록이 이름을 보여 주므로 문단에 {named[:4]}를 쓰지 말고 "
+                    "「아래 …」로 가리키십시오"
+                )
         if META.search(body):
             errors.append(f"{aid}: 지시문 · 주의 문구를 문단에 옮겨 적지 마십시오")
         if ETC.search(body):

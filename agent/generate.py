@@ -83,9 +83,13 @@ class Agent:
         known_names: set[str],
         workers: int = 4,
         thinking: set[str] | None = None,
+        list_names: set[str] = frozenset(),
     ):
+        """known_names = 지도 자료의 모든 이름(입력에 없으면 실패), list_names = 마을 · 시설 이름
+        (목록 바로 앞 문단에 쓰면 실패)."""
         self.llm, self.evidence, self.workers = llm, evidence, workers
         self.known_names = set(known_names) | prompt.STYLE_NAMES
+        self.list_names = set(list_names)
         self.thinking = THINKING_ITEMS if thinking is None else set(thinking)
 
     def _one(self, common: dict, item: dict, prev: dict | None) -> tuple[dict, dict]:
@@ -129,7 +133,7 @@ class Agent:
                 paras = check.parse(raw)
                 for p in paras:  # 표기 정리(근거 위치 · 끝 마침표)는 검사 전에
                     p["text"] = check.tidy(p.get("text") or "")
-                errors = check.check_item(item, paras, allowed, self.known_names)
+                errors = check.check_item(item, paras, allowed, self.known_names, self.list_names)
             except Exception as e:  # JSON 깨짐
                 paras, errors = [], [f"출력 형식 오류: {e}"]
             log["attempts"].append({"errors": errors, "raw": raw[-3000:]})

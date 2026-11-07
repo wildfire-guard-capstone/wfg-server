@@ -23,6 +23,7 @@ from rules.bundles.stage import stage_bundle
 from rules.bundles.timing import time_bundle
 from rules.bundles.villages import villages_bundle
 from rules.bundles.vulnerable import vulnerable_bundle
+from rules.bundles.weather import weather_bundle
 from rules.context import Context
 
 
@@ -42,4 +43,5 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "alerts": alerts_bundle(ctx),
         "mobilization": mobilization_bundle(ctx),
         "resources": resources_bundle(ctx),
+        "weather": weather_bundle(ctx),
     }

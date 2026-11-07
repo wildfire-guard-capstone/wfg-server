@@ -109,3 +109,8 @@ def test_tidy_and_placement_and_see():
         ITEM, _p("협의하십시오. [p.73]", "지휘합니다 [p.72]. 세부 내용은 S4 참조."), ALLOWED, set()
     )
     assert any("마침표 앞" in e for e in errs) and any("S4 참조" in e for e in errs)
+
+
+def test_parse_bare_list():
+    raw = '</think> [{"action": "S1-a1", "category": "즉시", "text": "x"}]'
+    assert check.parse(raw)[0]["action"] == "S1-a1"

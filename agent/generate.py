@@ -4,8 +4,11 @@
   1. action 블록이 없으면(E6) LLM을 부르지 않는다
   2. 직전 제안서와 항목 입력이 같으면 직전 문단을 다시 쓴다(11/7 「변경 표시」)
   3. 근거: rule_basis ∪ anchor_basis를 ID로 가져오고, 항목 이름 + 주제로 보충 검색 2개
-  4. EXAONE 호출(S2 · S4 · S5만 추론 모드, 11/7) → 검사 → 실패하면 문제를 알려 1회 다시
+  4. EXAONE 호출 → 검사 → 실패하면 문제를 알려 1회 다시
   5. 그래도 실패하면 그 항목만 「문장 생성 실패」, 판정 값과 조립기 블록은 남긴다
+
+추론 모드: 11/7 결정은 S2 · S4 · S5만 켜고 비교. 11/8 의성 데모에서 켜 보니 세 항목 모두 영어 추론이
+4,096토큰을 넘겨(호출당 약 7.5분) JSON이 잘렸다 → 기본은 끄고 `thinking` 인자로 켤 수 있게 둔다.
 """
 
 import json
@@ -15,7 +18,7 @@ from typing import Any
 from agent import check, prompt
 from agent.clients import LLM, Evidence
 
-THINKING_ITEMS = {"S2", "S4", "S5"}
+THINKING_ITEMS: set[str] = set()  # 11/7 비교 대상: {"S2", "S4", "S5"}
 FAILED_TEXT = "문장 생성 실패"
 
 
@@ -73,9 +76,17 @@ def assemble(item: dict[str, Any], paras: dict[str, dict] | None, state: str) ->
 
 
 class Agent:
-    def __init__(self, llm: LLM, evidence: Evidence, known_names: set[str], workers: int = 4):
+    def __init__(
+        self,
+        llm: LLM,
+        evidence: Evidence,
+        known_names: set[str],
+        workers: int = 4,
+        thinking: set[str] | None = None,
+    ):
         self.llm, self.evidence, self.workers = llm, evidence, workers
         self.known_names = set(known_names) | prompt.STYLE_NAMES
+        self.thinking = THINKING_ITEMS if thinking is None else set(thinking)
 
     def _one(self, common: dict, item: dict, prev: dict | None) -> tuple[dict, dict]:
         log: dict[str, Any] = {"id": item["id"], "attempts": []}
@@ -98,7 +109,7 @@ class Agent:
             common, item.get("finding"), item.get("facts"), *[c["text"] for c in chunks + extra]
         )
         msgs = prompt.messages(common, item, chunks, extra)
-        thinking = item["id"] in THINKING_ITEMS
+        thinking = item["id"] in self.thinking
         for attempt in (1, 2):
             try:
                 raw = self.llm.chat(

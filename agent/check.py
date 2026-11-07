@@ -71,10 +71,14 @@ def parse(text: str) -> list[dict[str, Any]]:
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    s, e = text.find("{"), text.rfind("}")
-    if s < 0 or e < 0:
-        raise ValueError("JSON이 없습니다")
-    out = json.loads(text[s : e + 1])
+    if text.lstrip().startswith("["):  # {"paragraphs": …} 없이 목록만 낸 경우
+        s, e = text.find("["), text.rfind("]")
+        out = {"paragraphs": json.loads(text[s : e + 1])}
+    else:
+        s, e = text.find("{"), text.rfind("}")
+        if s < 0 or e < 0:
+            raise ValueError("JSON이 없습니다")
+        out = json.loads(text[s : e + 1])
     paras = out.get("paragraphs")
     if not isinstance(paras, list):
         raise ValueError("paragraphs가 목록이 아닙니다")

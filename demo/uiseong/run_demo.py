@@ -95,6 +95,7 @@ def main() -> None:
     ap.add_argument("--llm", default="http://127.0.0.1:8031")
     ap.add_argument("--evidence", default="http://127.0.0.1:8032")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--thinking", default="", help="추론 모드로 쓸 항목(예: S2,S4,S5). 기본 끔")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     work = a.out / "_elmfire"
@@ -102,7 +103,10 @@ def main() -> None:
     deck = pr.Deck(a.deck, a.elmfire, env={})
     agent = None
     if not a.skip_llm:
-        agent = Agent(LLM(a.llm), Evidence(a.evidence), known_names(md), workers=a.workers)
+        thinking = {x.strip() for x in a.thinking.split(",") if x.strip()}
+        agent = Agent(
+            LLM(a.llm), Evidence(a.evidence), known_names(md), workers=a.workers, thinking=thinking
+        )
     t_all = time.time()
     print(
         f"지도 자료: 마을 {len(md.villages)} · 주택 {len(md.houses[0])} · "

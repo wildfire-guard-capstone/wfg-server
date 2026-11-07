@@ -38,7 +38,10 @@ ITEM = {
 ALLOWED = check.allowed_from(ITEM["finding"], ITEM["facts"], "제21조 100 ha")
 
 
-def _p(a1: str, a2: str = "현재 지휘권자는 의성군수입니다 [p.72, 시행령 제21조①].") -> list[dict]:
+A2 = "지휘 체계를 유지하십시오 [p.72, 시행령 제21조①]."
+
+
+def _p(a1: str, a2: str = A2) -> list[dict]:
     return [
         {"action": "S1-a1", "category": "즉시", "text": a1},
         {"action": "S1-a2", "category": "대기", "text": a2},
@@ -120,3 +123,31 @@ def test_list_led_paragraph_must_not_name():
     errs = check.check_item(ITEM, _p("신월리를 협의하십시오 [p.73]."), ALLOWED, set(), {"신월리"})
     assert any("아래 목록" in e for e in errs)
     assert check.tidy("동원합니다 [고시 별표]..") == "동원합니다 [고시 별표]."
+
+
+def test_meaning_checks():
+    reader_upper = check.check_item(
+        ITEM,
+        _p("주민에게 대피명령을 내리십시오 [p.73].", "산림청장과 협의하지 않습니다 [p.72]."),
+        ALLOWED,
+        set(),
+        reader="경상북도지사",
+    )
+    assert any("시장 · 군수 권한" in e for e in reader_upper)
+    assert any("부정" in e for e in reader_upper)
+    assert any("S1-a2" in e and "십시오" in e for e in reader_upper)
+    ok = check.check_item(
+        ITEM,
+        _p("의성군수에게 대피명령을 내리도록 지시하십시오 [p.73]."),
+        ALLOWED,
+        set(),
+        reader="경상북도지사",
+    )
+    assert ok == []
+
+
+def test_fix_category():
+    blk = {"topic": "잠재 위험구역 사전대피"}
+    assert check.fix_category({}, "발령을 산림청장과 협의하십시오.", "즉시") == "협의"
+    assert check.fix_category({}, "한전에 요청하십시오.", "즉시") == "요청"
+    assert check.fix_category(blk, "안내하십시오.", "즉시") == "대기"

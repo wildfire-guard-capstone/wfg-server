@@ -47,6 +47,7 @@ main{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px;p
 .cat{font-weight:700;margin-right:4px}
 .c-즉시{color:var(--now)}.c-대기{color:var(--wait)}.c-협의{color:var(--talk)}.c-요청{color:var(--ask)}
 .cite{color:var(--sub);font-size:12px}
+.src{font-size:10.5px;color:#6b7280;border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-left:2px}
 .lbl{font-weight:700}
 ul.rows,ol.rows{margin:4px 0 6px;padding-left:18px}
 ul.rows li,ol.rows li{margin:2px 0}
@@ -128,7 +129,7 @@ document.getElementById("legend").innerHTML =
   `<span><span class="sw" style="background:#7c3aed;border-radius:50%"></span>취약시설</span>`;
 
 function block(b) {
-  if (b.type === "paragraph") return `<p class="para"><span class="cat c-${esc(b.category)}">[${esc(b.category)}]</span>${b.label?`<span class="lbl">${esc(b.label)}: </span>`:""}${md(b.text)}</p>`;
+  if (b.type === "paragraph") return `<p class="para"><span class="cat c-${esc(b.category)}">[${esc(b.category)}]</span>${b.label?`<span class="lbl">${esc(b.label)}: </span>`:""}${md(b.text)}${b.source==="fixed"?` <span class="src" title="판정 값으로 채운 고정문">고정문</span>`:""}</p>`;
   if (b.type === "action") return `<p class="para small">(${esc(b.id)} ${esc(b.topic)} — LLM 문단 자리)</p>`;
   if (b.type === "failed") return `<p class="para failed">${esc(b.text)} (${esc(b.action)} ${esc(b.topic||"")})</p>`;
   if (b.type === "list") { const tag = b.style === "numbered" ? "ol" : "ul"; return `<${tag} class="rows">${b.rows.map(r => `<li>${md(r.text)}</li>`).join("")}</${tag}>`; }

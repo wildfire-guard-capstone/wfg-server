@@ -55,6 +55,26 @@ META = re.compile(
 )
 
 
+NEG = re.compile(
+    r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않|마)[가-힣]*"
+)
+
+
+def blob_of(allowed: tuple[set[str], set[str], str]) -> str:
+    return allowed[2]
+
+
+def fix_category(block: dict[str, Any], text: str, category: str) -> str:
+    """구분을 문장의 할 일에 맞춘다: 협의 → 협의, 요청 → 요청, 잠재 위험구역 주제 → 대기."""
+    if "협의하십시오" in text:
+        return "협의"
+    if "요청하십시오" in text:
+        return "요청"
+    if "잠재" in (block.get("topic") or ""):
+        return "대기"
+    return category
+
+
 def tidy(text: str) -> str:
     """표기만 고른다(내용은 그대로): 마침표 뒤에 붙은 근거를 마침표 앞으로, 끝 마침표 채우기.
 
@@ -168,14 +188,19 @@ def check_item(
     allowed: tuple[set[str], set[str], str],
     known_names: set[str],
     list_names: set[str] = frozenset(),
+    only: set[str] | None = None,
+    reader: str = "",
 ) -> list[str]:
     """한 항목의 문단 검사.
 
     list_names = 목록에 나오는 마을 · 시설 이름. 목록 바로 앞 문단에 쓰면 실패(목표 문단 꼴, 11/7).
+    only = LLM이 쓴 action(나머지는 고정문), reader = 읽는 사람(권한 검사).
     """
     errors: list[str] = []
-    acts = {a["id"]: a for a in actions(item)}
+    acts = {a["id"]: a for a in actions(item) if only is None or a["id"] in only}
     led = list_led(item)
+    mins = set(re.findall(r"최소 (\d[\d,]*)동", blob_of(allowed)))
+    upper = bool(re.search(r"도지사|특별시장|광역시장|특별자치|산림청장", reader))
     got = [p.get("action") for p in paras]
     if sorted(got) != sorted(acts):
         errors.append(f"action이 맞지 않습니다: 받은 {got}, 써야 할 {list(acts)}")
@@ -240,6 +265,22 @@ def check_item(
                 )
         if META.search(body):
             errors.append(f"{aid}: 지시문 · 주의 문구를 문단에 옮겨 적지 마십시오")
+        # 의미 검사(11/8): 판정 칸으로 맞는지 알 수 있는 것만
+        neg = NEG.search(body)
+        if neg:
+            errors.append(f"{aid}: 「{neg.group(0)}」처럼 할 일을 부정하지 말고 할 일을 쓰십시오")
+        if "십시오" not in body:
+            errors.append(f"{aid}: 할 일을 「~하십시오」로 쓰십시오(보고 · 서술로 끝내지 마십시오)")
+        if upper and re.search(r"대피명령을\s*(?:내리|발령)|위험구역(?:으로|을)\s*설정", body):
+            if not re.search(r"(?:군수|시장|구청장)에게", body):
+                errors.append(
+                    f"{aid}: 대피명령 · 위험구역 설정은 시장 · 군수 권한입니다. "
+                    "「○○군수에게 …하도록 지시하십시오」로 쓰십시오"
+                )
+        for m in re.finditer(r"(\d[\d,]*)동", body):
+            if m.group(1) in mins and body[max(0, m.start() - 3) : m.start()] != "최소 ":
+                errors.append(f"{aid}: 주택 · 시설 동수는 「최소 {m.group(1)}동」으로 쓰십시오")
+                break
         m = ETC.search(body)
         if m:
             near = body[max(0, m.start() - 12) : m.end() + 3].strip()

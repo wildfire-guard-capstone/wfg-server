@@ -103,13 +103,19 @@ HINTS = {
 }
 
 
-def strip_item(item: dict[str, Any]) -> dict[str, Any]:
-    """LLM에 넘길 항목: 판정 칸 + 문단 자리. 조립기 블록은 자리 표시만."""
+def strip_item(item: dict[str, Any], fixed: dict[str, dict] | None = None) -> dict[str, Any]:
+    """LLM에 넘길 항목: 판정 칸 + 문단 자리. 조립기 블록은 자리 표시만.
+
+    fixed = 조립기가 이미 쓴 action 문단: 다시 쓰지 않게 글을 보여 주고 type을 fixed로 둔다.
+    """
+    fixed = fixed or {}
     sections = []
     for s in item["sections"]:
         blocks = []
         for b in s["blocks"]:
-            if b["type"] == "action":
+            if b["type"] == "action" and b["id"] in fixed:
+                blocks.append({"type": "fixed", "writer": "조립기", "text": fixed[b["id"]]["text"]})
+            elif b["type"] == "action":
                 blocks.append({k: v for k, v in b.items() if k != "type"} | {"type": "action"})
             else:
                 blocks.append({"type": b["type"], "writer": "조립기(내용은 따로 붙음)"})
@@ -147,13 +153,18 @@ def messages(
     chunks: list[dict],
     extra: list[dict],
     names: set[str] = frozenset(),
+    fixed: dict[str, dict] | None = None,
 ) -> list[dict[str, str]]:
-    body = {"common": common, "item": strip_item(item)}
-    parts = ["아래 입력으로 action 문단을 쓰십시오."]
+    fixed = fixed or {}
+    body = {"common": common, "item": strip_item(item, fixed)}
+    parts = [
+        "아래 입력에서 type이 action인 자리만 문단을 쓰십시오(type이 fixed인 문단은 조립기가 이미 썼습니다)."
+    ]
     if item["id"] in HINTS:
         parts.append(f"[이 항목에서 주의할 것]\n{HINTS[item['id']]}")
-    if STYLE.get(item["id"]):
-        ex = "\n".join(f"- {mask_example(p['text'], names)}" for p in STYLE[item["id"]])
+    examples = [p for p in STYLE.get(item["id"], []) if p["action"] not in fixed]
+    if examples:
+        ex = "\n".join(f"- {mask_example(p['text'], names)}" for p in examples)
         parts.append(
             "[문체 예시] 다른 상황의 목표 문단입니다(값은 N · HH:MM · ○○로 가림). 문장 꼴과 구체성만 참고하십시오. "
             "예시에 있는 대상이라도 이번 facts에 없으면 쓰지 말고, 값·이름·action 구성은 반드시 이번 입력을 따르십시오.\n"
@@ -164,8 +175,8 @@ def messages(
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def schema(item: dict[str, Any]) -> dict[str, Any]:
-    ids = [a["id"] for a in actions(item)]
+def schema(item: dict[str, Any], only: set[str] | None = None) -> dict[str, Any]:
+    ids = [a["id"] for a in actions(item) if only is None or a["id"] in only]
     return {
         "type": "object",
         "properties": {

@@ -24,7 +24,8 @@ from rules.core.stage import (
     stage_change,
     stage_trend,
 )
-from rules.core.villages import Reached, Village, reached_villages
+from rules.core.sun import is_night, next_events
+from rules.core.villages import Reached, Village, VillageField, reached_villages
 from rules.core.weather import WindSummary, summarize_wind
 
 
@@ -43,6 +44,8 @@ class Inputs:
     sido: Sequence[Region]  # 시 · 도 경계
     sigungu: Sequence[Region]  # 시 · 군 · 구 경계
     villages: Sequence[Village]  # 리(마을) 경계 · 인구. 지금은 의성만 있음
+    site: tuple[float, float]  # 기준점(발화점) 위도 · 경도(WGS84) — 일출 · 일몰 계산
+    field: Mapping[int, VillageField]  # 마을 id → 현장 입력. 없는 마을은 기본값
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,11 @@ class Context:
     commander_now: Commander  # 지금 지휘권자(현재 화선 기준)
     commander_next: Commander  # 곧 지휘권자(P5 기준)
     villages: list[Reached]  # P8 안 마을과 처음 닿는 P
+    site: tuple[float, float]
+    field: Mapping[int, VillageField]
+    sunset: datetime  # 0시 뒤 처음 오는 일몰
+    sunrise: datetime  # 0시 뒤 처음 오는 일출
+    now_is_night: bool  # 0시가 밤인가(J2)
 
 
 def _span(area: BaseGeometry, inputs: Inputs) -> Span:
@@ -91,6 +99,7 @@ def build_context(inputs: Inputs) -> Context:
     7. 지휘권자(L-01): 지금 = 현재 화선 면적 · 걸친 지역, 곧 = P5 면적 · 걸친 지역
     8. P8 안 마을과 처음 닿는 P(R-02 · R-04). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류
        (자료는 나중에 채운다 — 빠진 채로 판정하지 않음, 11/7)
+    9. 0시 뒤 처음 오는 일몰 · 일출, 0시가 밤인가(C-05 · J2)
     """
     p0, p5 = inputs.ranges[0], inputs.ranges[5]
     areas = range_areas(inputs.ranges)  # 1
@@ -104,6 +113,7 @@ def build_context(inputs: Inputs) -> Context:
     change = stage_change(inputs.prev_stage, stage_now.stage)
     # 6
     span_now, span_p5 = _span(p0, inputs), _span(p5, inputs)
+    sunset, sunrise = next_events(inputs.base_at, *inputs.site)
     # 7
     commander_now = decide_commander(areas[0], span_now.sido, span_now.sigungu)
     commander_next = decide_commander(areas[5], span_p5.sido, span_p5.sigungu)
@@ -124,6 +134,11 @@ def build_context(inputs: Inputs) -> Context:
         commander_now=commander_now,
         commander_next=commander_next,
         villages=_villages(inputs),  # 8
+        site=inputs.site,
+        field=inputs.field,
+        sunset=sunset,  # 9
+        sunrise=sunrise,
+        now_is_night=is_night(inputs.base_at, *inputs.site),
     )
 
 

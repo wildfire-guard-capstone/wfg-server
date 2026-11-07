@@ -24,6 +24,17 @@ class Village:
 
 
 @dataclass(frozen=True)
+class VillageField:
+    """현장 입력(상황 정정): 마을별 대피 상태. 입력이 없으면 기본값(거짓 · None)."""
+
+    evac_order: bool = False  # 대피명령
+    evacuated: bool = False  # 대피 완료
+    pre_evac_done: bool = False  # 사전대피(고령자 등) 완료
+    alert_at: str | None = None  # 마지막 대피 문자 발송 시각(「12:40」)
+    reported_at: str | None = None  # 이 값들을 마지막으로 보고한 시각
+
+
+@dataclass(frozen=True)
 class Reached:
     village: Village
     p: int  # 처음 닿는 P(0 ~ 8)

@@ -54,6 +54,6 @@ def e1_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "finding": risk + potential,  # 3
         "facts": facts,
         "targets": [f"village:{r['id']}" for z in ZONES for r in v[z]],
-        "withheld": v["unknown"],
+        "withheld": [],  # 구역만 다루므로 인원 모름은 E2가 알림
         "rule_basis": ["SM-p075"],
     }

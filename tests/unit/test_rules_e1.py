@@ -1,7 +1,7 @@
 """E1: 마을이 처음 닿는 P → 구간별 묶음 → E1 입력 → 섹션(핵심 경우만)."""
 
 import pytest
-from rules_example import WORLD, inputs, village
+from rules_example import VILLAGES, WORLD, inputs
 from shapely.geometry import box
 
 from rules.bundles import build_bundles
@@ -9,16 +9,6 @@ from rules.context import build_context
 from rules.core.regions import Region
 from rules.items.e1 import e1_input
 from rules.sections.e1 import e1_sections
-
-# 범위 반 변(m): P0 348 · P1 472 · P2 716 · P5 953 · P8 1117
-VILLAGES = [
-    village(1, "괴산리", "안평면", 300, 400),  # P0에 걸침 → 이미 닿음
-    village(2, "신월리", "안평면", -400, -300),  # P0
-    village(3, "신안리", "안평면", 400, 460),  # P1
-    village(4, "철파리", "의성읍", 700, 800),  # P2
-    village(5, "정자리", "옥산면", 1100, 1200),  # P8 → 잠재 위험구역
-    village(6, "먼리", "옥산면", 1200, 1300),  # P8 밖 → 빠짐
-]
 
 
 def _run(**kw):
@@ -36,7 +26,7 @@ def test_villages_grouped_by_zone_with_time_window():
     sinan = v["p5"][0]
     assert (sinan["first_p"], sinan["from"], sinan["until"]) == (1, "12:50", "13:50")
     assert v["burning"][0]["until"] == "지금"
-    assert v["totals"]["within_p5"] == {"count": 4, "population": 400}
+    assert v["totals"]["within_p5"] == {"count": 4, "population": 797}
     # E1: 판정 없이 고르기
     assert e1["status"] == "risk_zone"
     assert e1["finding"] == (

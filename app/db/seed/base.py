@@ -166,6 +166,27 @@ def load_facilities(conn: Connection, data: Path, village_ids: dict[str, int]) -
     return n
 
 
+def load_map_features(conn: Connection, data: Path) -> dict[str, int]:
+    """도로 · 임도 · 송전 · 철탑 · 변전소 · 저수지 · 주택 · 집계구 — 종류별 값은 attrs."""
+    rows = [
+        {
+            "kind": f["properties"]["kind"],
+            "name": f["properties"].get("name"),
+            "geom": json.dumps(f["geometry"]),
+            "attrs": json.dumps(f["properties"].get("attrs") or {}, ensure_ascii=False),
+        }
+        for f in read_geojson(data / "map_features.geojson")
+    ]
+    conn.execute(
+        text(
+            "INSERT INTO map_features (kind, name, geom, attrs)"
+            f" VALUES (:kind, :name, {GEOM}, CAST(:attrs AS jsonb))"
+        ),
+        rows,
+    )
+    return dict(Counter(r["kind"] for r in rows))
+
+
 def area_lookup(conn: Connection) -> tuple[dict, dict]:
     """(시도 이름, 시군구 이름) → id, 이름 하나 → id(시도 또는 이름이 하나뿐인 시군구)."""
     rows = conn.execute(
@@ -250,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         area_ids = load_admin_areas(conn, args.data_dir)
         village_ids = load_villages(conn, args.data_dir, area_ids)
         n_fac = load_facilities(conn, args.data_dir, village_ids)
+        kinds = load_map_features(conn, args.data_dir)
         n_bases, n_res, unresolved = load_resources(conn, args.data_dir)
 
         levels = dict(
@@ -257,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"admin_areas: {levels}")
         print(f"villages: {len(village_ids)} · facilities: {n_fac}")
+        print(f"map_features: {sum(kinds.values())} {kinds}")
         print(f"resource_bases: {n_bases} · resources: {n_res}")
         if unresolved:
             print(f"관할 이름을 행정구역에서 못 찾음({len(unresolved)}): {unresolved}")

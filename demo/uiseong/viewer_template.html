@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>의성 산불 대응 제안 데모</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#1f2937;--sub:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;
+--now:#b91c1c;--wait:#b45309;--talk:#1d4ed8;--ask:#6d28d9;--ok:#047857;--fail:#b91c1c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 "Pretendard","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+header{background:#111827;color:#fff;padding:10px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:700}
+header .sub{color:#9ca3af;font-size:12px}
+.rounds{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.rounds button{background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit;font-size:13px;text-align:left}
+.rounds button b{display:block;font-size:14px;color:#fff}
+.rounds button.on{background:var(--accent);border-color:var(--accent)}
+main{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px;padding:12px;height:calc(100vh - 64px)}
+.col{display:flex;flex-direction:column;gap:12px;min-height:0}
+#map{flex:1;min-height:340px;border-radius:10px;border:1px solid var(--line)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.tabs{display:flex;gap:4px;margin-bottom:8px}
+.tabs button{border:1px solid var(--line);background:#f9fafb;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit;font-size:13px}
+.tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+#right{overflow:auto}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.kv{background:#f9fafb;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.kv span{display:block;font-size:11px;color:var(--sub)}
+.kv b{font-size:14px}
+.item{border-top:1px solid var(--line);padding:10px 0}
+.item:first-child{border-top:0}
+.ih{display:flex;gap:8px;align-items:baseline;cursor:pointer}
+.ih .id{font-weight:700;color:var(--accent);min-width:26px}
+.ih .nm{font-weight:700;flex:1}
+.badge{font-size:11px;border-radius:999px;padding:1px 8px;border:1px solid}
+.b-ok{color:var(--ok);border-color:#a7f3d0;background:#ecfdf5}
+.b-reused{color:#374151;border-color:#d1d5db;background:#f3f4f6}
+.b-failed{color:var(--fail);border-color:#fecaca;background:#fef2f2}
+.b-no_llm,.b-not_run{color:#6b7280;border-color:#e5e7eb;background:#fff}
+.finding{font-size:12.5px;color:#374151;background:#f3f4f6;border-radius:6px;padding:6px 8px;margin:6px 0}
+.finding:before{content:"판정 ";font-weight:700;color:var(--sub)}
+.sec h4{margin:8px 0 4px;font-size:13px}
+.para{margin:4px 0}
+.cat{font-weight:700;margin-right:4px}
+.c-즉시{color:var(--now)}.c-대기{color:var(--wait)}.c-협의{color:var(--talk)}.c-요청{color:var(--ask)}
+.cite{color:var(--sub);font-size:12px}
+.lbl{font-weight:700}
+ul.rows,ol.rows{margin:4px 0 6px;padding-left:18px}
+ul.rows li,ol.rows li{margin:2px 0}
+ol.rows{list-style:none;padding-left:4px}
+.note{font-size:12.5px;color:var(--sub)}
+.failed{color:var(--fail);font-weight:700}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin:4px 0}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+th{background:#f9fafb}
+.withheld{font-size:12px;color:var(--sub);margin-top:4px}
+.collapsed .body{display:none}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--sub);align-items:center}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:4px;vertical-align:-2px}
+.bar{height:10px;background:#f97316;border-radius:3px}
+.err{color:var(--fail);font-size:12px}
+.small{font-size:12px;color:var(--sub)}
+@media (max-width:900px){main{grid-template-columns:1fr;height:auto}#map{height:60vh}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>의성 산불 대응 제안 데모</h1><div class="sub">2025-03-22 안평면 괴산리 · ELMFIRE 예측 → 규칙 엔진 → EXAONE 4.0 32B · 실제 구동 결과</div></div>
+  <div class="rounds" id="rounds"></div>
+</header>
+<main>
+  <section class="col">
+    <div id="map"></div>
+    <div class="card">
+      <div class="legend" id="legend"></div>
+      <label class="small"><input type="checkbox" id="showLater" checked> 뒤 상황도 화선(검증용, 점선)</label>
+    </div>
+  </section>
+  <section class="col" id="right">
+    <div class="card">
+      <div class="tabs" id="tabs"></div>
+      <div id="pane"></div>
+    </div>
+  </section>
+</main>
+<script>
+const D = /*__DATA__*/null;
+const PCOL = ["#7f1d1d","#c2410c","#ea580c","#f97316","#fb923c","#fdba74","#fcd34d","#fde68a","#fef3c7"];
+const ZCOL = {burning:"#b91c1c", p5:"#ea580c", p8:"#ca8a04"};
+const ZNAME = {burning:"이미 닿음", p5:"위험구역(5시간)", p8:"잠재 위험구역(8시간)"};
+const STATE = {ok:"생성", reused:"직전 재사용", failed:"문장 생성 실패", no_llm:"LLM 없음(조립기)", not_run:"LLM 미실행"};
+let cur = 0, tab = "proposal", collapsedAll = false;
+const map = L.map("map", {preferCanvas:true});
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:17, attribution:"© OpenStreetMap contributors"}).addTo(map);
+let layer = L.layerGroup().addTo(map), laterLayer = L.layerGroup().addTo(map);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\[([^\[\]]+)\]/g, '<span class="cite">[$1]</span>');
+const vgeom = Object.fromEntries(D.village_geoms.map(v => [v.id, v.geom]));
+const mins = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+
+function drawMap(r) {
+  layer.clearLayers(); laterLayer.clearLayers();
+  const rs = r.spread.ranges;
+  for (let p = 8; p >= 1; p--) L.geoJSON(rs[p], {style:{color:PCOL[p], weight:0.6, fillColor:PCOL[p], fillOpacity:0.32}})
+      .bindTooltip(`P${p} · ~${r.round.slices_until[p]} · ${r.spread.areas_ha[p]} ha`, {sticky:true}).addTo(layer);
+  L.geoJSON(rs[0], {style:{color:"#111827", weight:1.5, fillColor:"#7f1d1d", fillOpacity:0.75}})
+    .bindTooltip(`P0 관측 화선(${r.round.report} ${r.round.at}) · ${r.spread.areas_ha[0]} ha`, {sticky:true}).addTo(layer);
+  for (const v of r.villages) if (vgeom[v.id]) L.geoJSON(vgeom[v.id], {style:{color:ZCOL[v.zone], weight:2, fill:false, dashArray: v.zone==="p8"?"4 3":null}})
+      .bindTooltip(`<b>${esc(v.name)}</b>(${esc(v.emd)}) · ${ZNAME[v.zone]}${v.zone==="burning"?"":` · ${v.from}~${v.until}`} · ${v.people}명`, {sticky:true}).addTo(layer);
+  for (const f of r.vulnerable) { const c = D.vul_pts[f.id]; if (!c) continue;
+    L.circleMarker([c[1], c[0]], {radius:6, color:"#fff", weight:2, fillColor:"#7c3aed", fillOpacity:1})
+      .bindTooltip(`${esc(f.name)} (${esc(f.kind)}) · ${esc(f.village)} · ${f.until}`).addTo(layer); }
+  L.circleMarker(D.ignition, {radius:5, color:"#111", fillColor:"#facc15", fillOpacity:1, weight:1.5}).bindTooltip("발화점 11:24").addTo(layer);
+  const t0 = mins(r.round.at);
+  for (const p of D.perimeters) { const dt = (mins(p.at) - t0) / 60; if (dt <= 0 || dt > 8) continue;
+    L.geoJSON(p.geom, {style:{color:"#111827", weight:1.6, dashArray:"6 4", fill:false}})
+      .bindTooltip(`상황도 ${p.no}보 ${p.at} (검증용, 예측에 쓰지 않음)`, {sticky:true}).addTo(laterLayer); }
+  if (!document.getElementById("showLater").checked) map.removeLayer(laterLayer);
+  map.fitBounds(L.geoJSON(rs[8]).getBounds().pad(0.15));
+}
+document.getElementById("showLater").onchange = e => e.target.checked ? laterLayer.addTo(map) : map.removeLayer(laterLayer);
+document.getElementById("legend").innerHTML =
+  [0,1,3,5,8].map(p => `<span><span class="sw" style="background:${PCOL[p]}"></span>${p?`P${p}`:"P0 관측 화선"}</span>`).join("") +
+  Object.entries(ZCOL).map(([z,c]) => `<span><span class="sw" style="border:2px solid ${c}"></span>${ZNAME[z]}</span>`).join("") +
+  `<span><span class="sw" style="background:#7c3aed;border-radius:50%"></span>취약시설</span>`;
+
+function block(b) {
+  if (b.type === "paragraph") return `<p class="para"><span class="cat c-${esc(b.category)}">[${esc(b.category)}]</span>${b.label?`<span class="lbl">${esc(b.label)}: </span>`:""}${md(b.text)}</p>`;
+  if (b.type === "action") return `<p class="para small">(${esc(b.id)} ${esc(b.topic)} — LLM 문단 자리)</p>`;
+  if (b.type === "failed") return `<p class="para failed">${esc(b.text)} (${esc(b.action)} ${esc(b.topic||"")})</p>`;
+  if (b.type === "list") { const tag = b.style === "numbered" ? "ol" : "ul"; return `<${tag} class="rows">${b.rows.map(r => `<li>${md(r.text)}</li>`).join("")}</${tag}>`; }
+  if (b.type === "table") { const keys = ["group","agency","ask","item","basis"];
+    return `<table><tr>${b.head.map(h => `<th>${esc(h)}</th>`).join("")}</tr>${b.rows.map(r => `<tr>${keys.map(k => `<td>${md(r[k])}</td>`).join("")}</tr>`).join("")}</table>`; }
+  if (b.type === "note") return `<p class="note">${md(b.text)}</p>`;
+  if (b.type === "fixed") return `<p class="para"><span class="cat c-요청">[요청]</span>${md(b.text)}</p>`;
+  return "";
+}
+function proposal(r) {
+  const s = r.stage, c = r.commander, a = r.spread.areas_ha;
+  let h = `<div class="summary">
+    <div class="kv"><span>제안서</span><b>${esc(r.round.version)} · ${esc(r.round.at)}</b></div>
+    <div class="kv"><span>읽는 사람</span><b>${esc(r.round.reader)}</b></div>
+    <div class="kv"><span>현재 단계(판정)</span><b>${esc(r.common.current_stage)}</b></div>
+    <div class="kv"><span>5시간 뒤 단계</span><b>${esc(s.p5.stage)}</b></div>
+    <div class="kv"><span>지휘권자</span><b>${esc(c.now.title)} → ${esc(c.next.title)}</b></div>
+    <div class="kv"><span>면적 P0 / P5 / P8</span><b>${a[0]} / ${a[5]} / ${a[8]} ha</b></div></div>
+    <p class="small">기준 화선: ${esc(r.round.report)} ${esc(r.round.at)} (${esc(r.round.note)}) · <a href="#" id="tog">${collapsedAll?"모두 펼치기":"모두 접기"}</a></p>`;
+  for (const it of r.proposal) {
+    const wh = (it.withheld||[]).map(w => `${esc(w.field)}(${esc(w.reason)})`).join(" · ");
+    h += `<div class="item ${collapsedAll?"collapsed":""}"><div class="ih"><span class="id">${esc(it.id)}</span><span class="nm">${esc(it.name)}</span>
+      <span class="badge b-${it.state}">${STATE[it.state]||it.state}</span></div><div class="body">
+      <div class="finding">${esc(it.finding)}</div>
+      ${it.sections.map(sec => `<div class="sec">${sec.title?`<h4>${esc(sec.title)}</h4>`:""}${sec.blocks.map(block).join("")}</div>`).join("")}
+      ${wh?`<div class="withheld">빠진 정보: ${wh}</div>`:""}</div></div>`;
+  }
+  return h;
+}
+function spreadTab(r) {
+  const cal = r.calibration, a = r.spread.areas_ha, mx = Math.max(...a);
+  let h = `<h4>확산속도 보정(그 시각까지 알 수 있는 정보만)</h4><p>${esc(cal.from)}: 목표 ${cal.target_ha} ha, 결과 ${cal.got_ha} ha · <b>배율 ${cal.adj.toFixed(2)}</b>${cal.clipped?` (탐색 범위 끝: ${cal.clipped})`:""}</p>
+    <p class="small">시도: ${cal.tries.map(t => `${t[0]}→${t[1]} ha`).join(" · ")}</p>
+    <h4>예측 범위(${esc(r.round.at)} 기준, ELMFIRE ${r.spread.wall_s}초)</h4><table><tr><th>범위</th><th>~까지</th><th>면적(ha)</th><th></th></tr>`;
+  a.forEach((v,i) => h += `<tr><td>${i?`P${i}`:"P0 관측"}</td><td>${esc(r.round.slices_until[i])}</td><td>${v}</td><td style="width:45%"><div class="bar" style="width:${(v/mx*100).toFixed(1)}%;background:${PCOL[i]}"></div></td></tr>`);
+  h += `</table><h4>검증: 뒤 상황도 화선과 비교</h4>`;
+  if (!r.spread.validation.length) h += `<p class="small">8시간 안에 비교할 상황도가 없습니다.</p>`;
+  else h += `<table><tr><th>상황도</th><th>경과</th><th>예측(ha)</th><th>상황도(ha)</th><th>IoU</th></tr>${r.spread.validation.map(v => `<tr><td>${v.at}</td><td>${Math.floor(v.hours)?`${Math.floor(v.hours)}시간 `:""}${Math.round((v.hours%1)*60)?`${Math.round((v.hours%1)*60)}분`:""}</td><td>${v.pred_ha}</td><td>${v.obs_ha}</td><td>${v.iou}</td></tr>`).join("")}</table>
+    <p class="small">상황도 면적 = 기준 화선 ∪ 그 시각 화선. 진화 효과가 없는 예측이라 실제보다 넓을 수 있습니다.</p>`;
+  const w = r.weather;
+  h += `<h4>바람(0시 = 상황 보고, 1~8시간 = ELMFIRE 입력 기상)</h4><table><tr><th>시간</th>${Object.keys(w.wind_ms).map(k => `<th>${k}</th>`).join("")}</tr>
+    <tr><td>m/s</td>${Object.values(w.wind_ms).map(v => `<td>${v}</td>`).join("")}</tr><tr><td>풍향°</td>${Object.values(w.wind_deg).map(v => `<td>${v}</td>`).join("")}</tr></table>`;
+  return h;
+}
+function logTab(r) {
+  const t = r.timing, calls = r.calls;
+  const tok = calls.reduce((s,c) => s + (c.completion_tokens||0), 0);
+  let h = `<p>회차 전체 ${t.round_s}초 · 규칙 엔진 ${t.rules_s}초 · 에이전트 ${t.llm_s}초 · LLM 호출 ${calls.length}회 · 생성 토큰 ${tok}</p>
+    <table><tr><th>항목</th><th>상태</th><th>시도</th><th>근거 청크(앵커 + 보충)</th><th>검사 문제</th></tr>`;
+  for (const lg of r.logs) { const it = r.proposal.find(p => p.id === lg.id) || {};
+    h += `<tr><td>${esc(lg.id)}</td><td>${STATE[it.state]||""}${lg.reused_from?` (${esc(lg.reused_from)})`:""}</td><td>${lg.attempts.length}</td>
+      <td class="small">${esc((lg.evidence||[]).join(", "))}${lg.extra&&lg.extra.length?` + ${esc(lg.extra.map(e => e[0]).join(", "))}`:""}</td>
+      <td class="err">${lg.attempts.map((a,i) => a.errors.length?`${i+1}차: ${esc(a.errors.join(" / "))}`:"").filter(Boolean).join("<br>")}</td></tr>`; }
+  h += `</table><h4>LLM 호출</h4><table><tr><th>호출</th><th>추론</th><th>초</th><th>입력 토큰</th><th>생성 토큰</th><th>끝</th></tr>
+    ${calls.map(c => `<tr><td>${esc(c.tag)}</td><td>${c.thinking?"켬":""}</td><td>${c.seconds}</td><td>${c.prompt_tokens}</td><td>${c.completion_tokens}</td><td>${esc(c.finish)}</td></tr>`).join("")}</table>`;
+  return h;
+}
+function render() {
+  const r = D.rounds[cur];
+  document.getElementById("rounds").innerHTML = D.rounds.map((x,i) =>
+    `<button class="${i===cur?"on":""}" data-i="${i}"><b>${x.round.at} ${x.round.version}</b>${x.round.report} · ${x.round.reader}</button>`).join("");
+  document.querySelectorAll("#rounds button").forEach(b => b.onclick = () => { cur = +b.dataset.i; render(); });
+  const T = {proposal:"제안서", spread:"예측 · 검증", log:"실행 기록"};
+  document.getElementById("tabs").innerHTML = Object.entries(T).map(([k,v]) => `<button class="${k===tab?"on":""}" data-t="${k}">${v}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; render(); });
+  const pane = document.getElementById("pane");
+  pane.innerHTML = tab === "proposal" ? proposal(r) : tab === "spread" ? spreadTab(r) : logTab(r);
+  pane.querySelectorAll(".ih").forEach(x => x.onclick = () => x.parentElement.classList.toggle("collapsed"));
+  const tog = document.getElementById("tog"); if (tog) tog.onclick = e => { e.preventDefault(); collapsedAll = !collapsedAll; render(); };
+  drawMap(r);
+}
+render();
+</script>
+</body>
+</html>

@@ -17,7 +17,8 @@ def s5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     """S5 입력을 만든다. 보고된 투입 인력이 0이면 None.
 
     1. 투입 인력 · 소속별 · 보낸 기관과 그 수
-    2. 화선 전방 = 주 확산 방향 + 다음에 닿는 마을
+    2. 화선 전방 = 주 확산 방향 + 다음에 닿는 마을. 중심 이동 거리(`spread.km`)는 번지는 거리로
+       읽힐 수 있어 넘기지 않는다(11/7)
     3. 바람 = 최대 풍속 · 풍향 · 시각(처음 ~ 끝)
     """
     crew, sp, w = bundles["resources"]["crew"], bundles["spread"], bundles["weather"]
@@ -32,7 +33,6 @@ def s5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "org_count": crew["org_count"],
         "front": {  # 2
             "dir": sp["dir"],
-            "km": sp["km"],
             "villages": [r["name"] for r in sp["next_villages"]],
         },
         "wind": {"label": label, "dir": w["max"]["dir"], "ms": w["max"]["ms"]},  # 3

@@ -1,7 +1,8 @@
-"""`agencies` 묶음: 담당 관서 이름(사실) — 시군구별 관할 소방서 · 경찰서, 상황실, 응급의료기관.
+"""`agencies` 묶음: 담당 관서 이름(사실) — 관할 시군 · 시도, 관할 소방서 · 경찰서, 응급의료기관.
 
 「어느 기관에 무엇을 요청하나」는 매뉴얼 문장이라 엔진이 정하지 않는다 — 항목 쪽 요청 표 틀
-(items/requests.py)이 이 이름들과 다른 묶음의 대상을 짝짓는다(11/7 점검).
+(items/requests.py)이 이 이름들과 다른 묶음의 대상을 짝짓는다(11/7 점검). 상황실처럼 매뉴얼에서
+오는 기관 이름도 넣지 않는다 — 표 틀이 관할 시 · 도(`sido`)로 붙인다(11/7).
 """
 
 from typing import Any
@@ -9,8 +10,6 @@ from typing import Any
 from rules.bundles.common import km
 from rules.context import Context
 from rules.core.regions import spanned
-
-CENTRAL_ROOM = "중앙재난안전상황실"
 
 
 def _station(ctx: Context, places, kind: str, sigungu: str) -> str | None:
@@ -23,7 +22,7 @@ def agencies_bundle(ctx: Context) -> dict[str, Any]:
     """`agencies`: 담당 관서 이름.
 
     1. P8이 걸친 시군구마다 관할 소방서 · 경찰서(그 시군구 안 서 단위 관서). 없으면 null + 이유
-    2. 상황실 = 중앙 · 관할 시 · 도(이름만, 어느 쪽에 요청할지는 고르지 않음)
+    2. 관할 시 · 도 = 현재 화선이 가장 많이 걸친 시 · 도
     3. 응급의료기관 = 응급실이 있는 병원 중 산불 시군과 인접 시군에 있는 곳(D 대신 동원 범위가 이미
        쓰는 이웃), 발화지에서 가까운 순. 지정 등급은 자료가 없어 모름
     """
@@ -51,8 +50,8 @@ def agencies_bundle(ctx: Context) -> dict[str, Any]:
         unknown.append({"field": "응급의료기관 지정 등급", "reason": "자료 없음"})
     return {
         "home": home,
+        "sido": sido,  # 2
         "by_sigungu": rows,
-        "situation_rooms": {"central": CENTRAL_ROOM, "sido": f"{sido} 재난안전상황실"},  # 2
         "emergency_medical": medical,
         "unknown": unknown,
     }

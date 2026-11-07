@@ -9,6 +9,7 @@ from typing import Any
 
 HEAD = ["관련 기관", "세부 대상(기관명)", "요청 사항", "항목", "근거"]
 HELI_GROUP = {"산림청 헬기": "산림 헬기", "소방 헬기": "소방 헬기", "지자체 임차헬기": "임차 헬기"}
+CENTRAL_ROOM = "중앙재난안전상황실"  # 재난방송 송출 요청 곳(기관 이름은 표 틀에 둔다, 11/7)
 
 
 def _row(group: str, agency: str, ask: str, item: str, basis: str) -> dict[str, str]:
@@ -142,14 +143,16 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
         )
     areas = b["alerts"]["areas"]
     if areas:  # 5
-        rooms = b["agencies"]["situation_rooms"]
+        sido = b["agencies"]["sido"]
         stages = []
         for level, label in (("go", "Go"), ("set", "Set")):
             emds = [a["emd"] for a in areas if a["level"] == level]
             if emds:
                 stages.append(f"{label}: {'·'.join(emds)}")
         ask = f"재난문자(CBS)·자막방송(DITS) 송출. {', '.join(stages)}"
-        rows.append(_row("재난방송", f"{rooms['central']} 또는 {rooms['sido']}", ask, "E5", "p.78"))
+        rows.append(
+            _row("재난방송", f"{CENTRAL_ROOM} 또는 {sido} 재난안전상황실", ask, "E5", "p.78")
+        )
         emds = "·".join(dict.fromkeys(a["emd"] for a in areas))
         rows.append(
             _row(

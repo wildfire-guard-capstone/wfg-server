@@ -29,6 +29,9 @@ def test_whole_proposal_has_12_items_and_request_tables():
         "임차 헬기",
     ]
     assert groups(items["E6"]) == ["보건복지", "의료", "교통", "치안", "재난방송", "마을 조직"]
+    (table,) = [b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "table"]
+    broadcast = next(r for r in table["rows"] if r["group"] == "재난방송")
+    assert broadcast["agency"] == "중앙재난안전상황실 또는 경상북도 재난안전상황실"
     # E6은 LLM을 부르지 않는다(action 블록 없음)
     assert not [b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "action"]
     # 엔진 JSON · LLM 입력은 그대로 JSON으로 저장할 수 있다

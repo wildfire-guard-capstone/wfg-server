@@ -19,6 +19,7 @@ from rules.bundles.protected import protected_bundle
 from rules.bundles.resources import resources_bundle
 from rules.bundles.roads import roads_bundle
 from rules.bundles.shelters import shelters_bundle
+from rules.bundles.spread import spread_bundle
 from rules.bundles.stage import stage_bundle
 from rules.bundles.timing import time_bundle
 from rules.bundles.villages import villages_bundle
@@ -44,4 +45,5 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "mobilization": mobilization_bundle(ctx),
         "resources": resources_bundle(ctx),
         "weather": weather_bundle(ctx),
+        "spread": spread_bundle(ctx),
     }

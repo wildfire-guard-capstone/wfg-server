@@ -180,7 +180,8 @@ def commander_bundle(ctx: Context) -> dict[str, Any]:
 
 
 def _village(ctx: Context, reached: Reached) -> dict[str, Any]:
-    """마을 한 줄. 밤 = 닿는 시각(P 끝, 이미 닿았으면 0시)이 밤인가(J2).
+    """마을 한 줄. 밤 = 닿을 수 있는 구간의 시작이나 끝이 밤인가(J2, 11/7 — 끝만 보면 해 뜰 무렵
+    「앞은 밤 · 끝은 낮」 구간을 낮으로 놓침). 이미 닿은 마을은 0시로 본다.
 
     `passed` = 닿는 시각이 생성 시각보다 이름(정정 버전에서 「예상 시각 경과」, 11/7).
     """
@@ -196,7 +197,8 @@ def _village(ctx: Context, reached: Reached) -> dict[str, Any]:
         "from": p_from(ctx.base_at, p),
         "until": p_until(ctx.base_at, p),
         "passed": p > 0 and t < ctx.generated_at,
-        "night": is_night(t, *ctx.site),
+        "night": is_night(t, *ctx.site)
+        or (p > 0 and is_night(p_time(ctx.base_at, p - 1), *ctx.site)),
         "population": v.population,
         "pop65_est": v.pop65_est,
         "field": asdict(ctx.field.get(v.id, VillageField())),

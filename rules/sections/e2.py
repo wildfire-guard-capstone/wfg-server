@@ -11,9 +11,11 @@ ANCHOR_IDS = {"p.75": "SM-p075", "p.76": "SM-p076", "p.79": "SM-p079"}
 
 
 def _when(r: dict[str, Any]) -> str:
-    return (
-        "지금(이미 닿음)" if r["zone"] == "burning" else f"{r['from']} ~ {r['until']} 닿을 수 있음"
-    )
+    """시각 구간 이름. 그 마을이 밤에 닿으면 뒤에 「(밤)」(같은 구간 마을은 밤 여부도 같음)."""
+    if r["zone"] == "burning":
+        return "지금(이미 닿음)"
+    night = "(밤)" if r["night"] else ""
+    return f"{r['from']} ~ {r['until']} 닿을 수 있음{night}"
 
 
 def _rows(villages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -37,7 +39,7 @@ def _rows(villages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if r["alert_sent_at"] and not r["evacuated"]:
                 sent = f"{r['name']}는 {r['alert_sent_at']} 대피 문자가 나갔지만"
                 notes.append(f"{sent} 대피 완료 보고가 없습니다.")
-        text = f"{when}: {', '.join(names)}" + (" " + " ".join(notes) if notes else "")
+        text = f"{when}: {', '.join(names)}" + (". " + " ".join(notes) if notes else "")
         rows.append({"when": when, "text": text})
     return rows
 

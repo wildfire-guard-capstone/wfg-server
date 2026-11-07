@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from rules_example import VILLAGES, inputs
+from rules_example import VILLAGES, inputs, village
 
 from rules.bundles import build_bundles
 from rules.context import build_context
@@ -40,6 +40,9 @@ def test_example_1250_sun_night_and_alert():
     assert rows[0]["text"].startswith("지금(이미 닿음): **괴산리**(147명), **신월리**(128명)")
     assert "신월리는 12:40 대피 문자가 나갔지만 대피 완료 보고가 없습니다." in rows[0]["text"]
     assert rows[1]["text"] == "12:50 ~ 13:50 닿을 수 있음: **신안리**(181명)"
+    assert "(128명). 신월리는 12:40" in rows[0]["text"]
+    (jeongja_row,) = sec["sections"][0]["blocks"][3]["rows"]
+    assert jeongja_row["text"] == "19:50 ~ 20:50 닿을 수 있음(밤): **정자리**(114명)"
     assert [b["id"] for b in sec["sections"][0]["blocks"] if b["type"] == "action"] == [
         "E2-a1",
         "E2-a2",
@@ -61,3 +64,12 @@ def test_passed_time_is_marked_in_correction_version():
     sinan = e2["facts"]["immediate"][2]
     assert (sinan["name"], sinan["passed"]) == ("신안리", True)
     assert "예상 시각 경과" in sec["sections"][0]["blocks"][1]["rows"][1]["text"]
+
+
+def test_window_starting_at_night_counts_as_night_near_sunrise():
+    # 0시 01:00 · P6 = 06:00 ~ 07:00, 3/23 일출 06:26 → 끝은 낮이어도 앞이 밤이라 밤
+    base = datetime(2025, 3, 23, 1, 0)
+    dawn = village(7, "새벽리", "옥산면", 960, 1000)  # P5 953 < 960 < P6 1012 → P6
+    bundles = build_bundles(build_context(inputs(base_at=base, generated_at=base, villages=[dawn])))
+    (row,) = bundles["villages"]["p8"]
+    assert (row["from"], row["until"], row["night"]) == ("06:00", "07:00", True)

@@ -12,6 +12,8 @@ from typing import Any
 
 from rules.bundles.area import area_bundle
 from rules.bundles.commander import commander_bundle
+from rules.bundles.houses import houses_bundle
+from rules.bundles.protected import protected_bundle
 from rules.bundles.stage import stage_bundle
 from rules.bundles.timing import time_bundle
 from rules.bundles.villages import villages_bundle
@@ -28,4 +30,6 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "commander": commander_bundle(ctx),
         "villages": villages_bundle(ctx),
         "vulnerable": vulnerable_bundle(ctx),
+        "protected": protected_bundle(ctx),
+        "houses": houses_bundle(ctx),
     }

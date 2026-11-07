@@ -78,7 +78,7 @@ def inputs(**kw) -> Inputs:
         ignition=Point(0, 0),
         wind_ms={0: 3.4, **{h: 2.0 for h in range(1, 9)}},
         wind_deg={h: 270.0 for h in range(9)},  # 서풍
-        houses=([0.0, 10.0], [0.0, 10.0]),  # P5 안 주택 2동
+        houses=([-350.0, -340.0], [0.0, 0.0]),  # 신월리 안 · P5 안 주택 2동
         sido=[Region("경상북도", WORLD)],
         sigungu=[Region("의성군", WORLD)],
         villages=[village(99, "먼리", "옥산면", 5000, 5100)],  # 의성군 리 자료(P8 밖)

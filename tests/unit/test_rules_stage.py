@@ -1,6 +1,6 @@
 import pytest
 
-from rules.stage import Change, Stage, by_area, by_facility, by_wind, judge_stage, stage_change
+from rules.core.stage import Change, Stage, by_area, by_facility, by_wind, judge_stage, stage_change
 
 INIT, S1, S2 = Stage.INITIAL, Stage.STAGE1, Stage.STAGE2
 

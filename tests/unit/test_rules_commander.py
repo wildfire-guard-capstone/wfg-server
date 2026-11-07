@@ -1,6 +1,6 @@
 import pytest
 
-from rules.commander import (
+from rules.core.commander import (
     Handover,
     Level,
     Reason,

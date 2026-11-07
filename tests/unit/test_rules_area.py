@@ -1,4 +1,4 @@
-from rules.area import Crossing, first_over
+from rules.core.area import Crossing, first_over
 
 # 12:50 예시: P1 ~ P8 면적(ha)
 SLICES = [(1, 89), (2, 205), (3, 262), (4, 316), (5, 363), (6, 410), (7, 455), (8, 499)]

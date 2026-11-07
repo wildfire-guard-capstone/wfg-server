@@ -1,4 +1,4 @@
-"""변환 층: 엔진 안의 P 번호를 LLM에 넘길 시각 · 구간으로 바꾼다(11/3).
+"""변환 층: 엔진 안의 값을 LLM에 넘길 시각 · 구간 · 숫자로 바꾼다(11/3).
 
 엔진 판정은 P 번호(0 ~ 8)만 쓴다. 시각 · 날짜 · 자정 처리는 이 파일 한 곳에서만 한다.
 Pn의 시각은 그 구간의 끝 = 0시(`base_at`) + n시간이다(11/7 「구간 끝 시각을 ~까지로」).
@@ -45,6 +45,21 @@ def clock(t: datetime, base_at: datetime) -> str:
 def p_clock(base_at: datetime, p: int) -> str:
     """Pn 구간의 끝 시각을 글로 낸다: P2 → 「14:50」."""
     return clock(p_time(base_at, p), base_at)
+
+
+def round1(value: float) -> int | float:
+    """숫자를 LLM에 넘길 값으로 줄인다. 판정은 줄이기 전 값으로 한다(11/7).
+
+    1. 소수 한 자리로 반올림한다(48.53 → 48.5)
+    2. 소수점 아래가 0이면 정수로 둔다(363.0 → 363)
+    """
+    rounded = round(value, 1)  # 1
+    return int(rounded) if rounded == int(rounded) else rounded  # 2
+
+
+def num_text(value: float) -> str:
+    """숫자를 글로 쓴다: 소수 한 자리 · 천 단위 쉼표(1,200 · 48.5)."""
+    return f"{round1(value):,}"
 
 
 class Zone(StrEnum):

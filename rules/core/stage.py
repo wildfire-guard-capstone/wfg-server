@@ -14,6 +14,10 @@ class Stage(IntEnum):
     STAGE2 = 2  # 확산대응 2단계
 
 
+# LLM에 넘길 단계 이름(facts · finding에 씀)
+LABEL = {Stage.INITIAL: "초기 대응", Stage.STAGE1: "1단계", Stage.STAGE2: "2단계"}
+
+
 # 요소별 1단계 · 2단계 하한(p.73). 하한은 「이상」이라 경계값을 포함한다.
 AREA_HA = (10.0, 100.0)
 WIND_MS = (3.0, 11.0)

@@ -81,6 +81,8 @@ def fix_category(block: dict[str, Any], text: str, category: str) -> str:
         return "요청"
     if "잠재" in (block.get("topic") or ""):
         return "대기"
+    if category in ("협의", "요청"):  # 문장에 협의 · 요청이 없는데 그렇게 붙인 경우
+        return "즉시"
     return category
 
 

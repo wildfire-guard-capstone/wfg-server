@@ -151,3 +151,7 @@ def test_fix_category():
     assert check.fix_category({}, "발령을 산림청장과 협의하십시오.", "즉시") == "협의"
     assert check.fix_category({}, "한전에 요청하십시오.", "즉시") == "요청"
     assert check.fix_category(blk, "안내하십시오.", "즉시") == "대기"
+
+
+def test_fix_category_drops_unfounded_consult():
+    assert check.fix_category({}, "소방차를 배치하십시오.", "협의") == "즉시"

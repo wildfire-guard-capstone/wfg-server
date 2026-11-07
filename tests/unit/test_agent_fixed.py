@@ -151,3 +151,14 @@ def test_s4_and_e4_road():
         "안평의성로 신월리 구간, 철파리 구간 도로에 15:20부터 불이 닿을 수 있습니다."
     )
     assert "의성경찰서와 도로 관리기관에" in t and t.endswith("세부 내용은 E6 참조.")
+
+
+def test_e3_check_and_transfer():
+    e3 = {
+        "id": "E3",
+        "facts": {"daytime_only_count": 2, "weekday": "토요일", "now_is_night": False},
+    }
+    a2 = fixed.paragraph(e3, {"id": "E3-a2", "anchors": [], "kind": "check"}, COMMON)["text"]
+    assert a2 == "주야간보호 2곳은 토요일 운영 여부와 이용자 귀가 여부를 확인하십시오."
+    a4 = fixed.paragraph(e3, {"id": "E3-a4", "anchors": ["p.95"], "see": "E6"}, COMMON)["text"]
+    assert a4 == "거주 시설의 거주자 이송을 요청하십시오 [p.95]. 세부 내용은 E6 참조."

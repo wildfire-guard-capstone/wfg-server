@@ -333,6 +333,31 @@ def _s4_a3(item: dict, block: dict, common: dict) -> dict | None:
     }
 
 
+# ── E3 낮에만 운영하는 시설 · 거주자 이송 ───────────────────────────────────
+
+
+def _e3_a2(item: dict, block: dict, common: dict) -> dict | None:
+    """근거 없는 확인 문단(kind = check): 주야간보호 운영 여부 · 귀가 여부 확인(목표 문단 꼴)."""
+    f = item["facts"]
+    n = f.get("daytime_only_count")
+    if not n:
+        return None
+    day = f.get("weekday")
+    when = "지금은 밤이지만 " if f.get("now_is_night") else ""
+    text = f"{when}주야간보호 {n}곳은 {day + ' ' if day else ''}운영 여부와 이용자 귀가 여부를 확인하십시오."
+    return {"action": block["id"], "category": "즉시", "text": text}
+
+
+def _e3_a4(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["p.95"])
+    if not c:
+        return None
+    text = f"거주 시설의 거주자 이송을 요청하십시오 {c}."
+    if block.get("see"):
+        text += f" 세부 내용은 {block['see']} 참조."
+    return {"action": block["id"], "category": "요청", "text": text}
+
+
 # ── E4 큰 도로 ──────────────────────────────────────────────────────────
 
 
@@ -415,6 +440,8 @@ TEMPLATES = {
     "S4-a2": _s4_a2,
     "S4-a3": _s4_a3,
     "E4-a3": _e4_a3,
+    "E3-a2": _e3_a2,
+    "E3-a4": _e3_a4,
     "S6-a1": _simple(
         ["p.22", "p.73"], "산불현장 대책회의를 열어 아래 기관별로 임무를 부여", "즉시", False
     ),

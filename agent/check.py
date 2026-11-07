@@ -50,7 +50,9 @@ FORBID = {
     "E5": [(re.compile(r"[「“\"][^」”\"]{12,}[」”\"]|문안"), "재난문자 문안을 쓰면 안 됩니다")],
 }
 # 지시문 · 주의 문구를 문단에 옮겨 적은 것
-META = re.compile(r"언급하지 않|쓰지 않습니다|다루지 않습니다|조립기|facts|finding|action")
+META = re.compile(
+    r"언급하지 않|쓰지 않습니다|다루지 않습니다|조립기|facts|finding|action|\{[a-z_]+\}|○○|HH:MM"
+)
 
 
 def tidy(text: str) -> str:

@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +28,9 @@ SYSTEM = """당신은 산불 통합지휘권자에게 올릴 대응 제안서의
    맞음: 「… 협의하십시오 [p.73·91].」 「… 인계하십시오 [p.72·114, 시행령 제21조①].」
    틀림: 「… 협의하십시오. [p.73, p.91]」(마침표 뒤)
    근거는 그 action의 anchors에서만 고릅니다. 상황만 설명하는 문장과 anchors가 빈 action에는 근거를 달지 않습니다.
-7. action에 see가 있을 때만 문단 끝에 「세부 내용은 {see} 참조.」를 붙입니다. see가 없으면 「참조」를 쓰지 않습니다.
+7. action에 see가 있을 때만 문단 끝에 「세부 내용은 S6 참조.」처럼 see 값을 넣어 붙입니다. see가 없으면 「참조」를 쓰지 않습니다.
 8. facts에 없는 상황(강풍·야간·급변·피해 발생)을 지어내지 마십시오. 예: 풍속이 3.4 m/s이면 「강풍」이라고 쓰지 않습니다.
+   근거 발췌는 할 일과 근거를 고르는 데만 씁니다. 발췌 문장을 그대로 옮겨 붙이거나 topic과 다른 조치(출동·폴리스라인·장비 점검)를 늘어놓지 마십시오.
 9. action 뒤에 조립기 목록·표가 붙는 자리(type이 list·table)는 명단을 다시 늘어놓지 말고 「아래」로 가리킵니다.
 10. 각 action의 topic이 그 문단의 주제이고, use에 적힌 facts 키가 쓸 값입니다. 다른 action의 주제를 끌어오지 마십시오.
 11. category는 즉시(지금 할 일)·대기(조건이 되면 할 일, 미리 준비할 일)·협의(산림청장 등 발령권자와 협의)·요청(다른 기관에 요청) 중 하나입니다. 잠재 위험구역(8시간 안) 조치는 대기입니다.
@@ -42,6 +44,38 @@ STYLE = json.loads((Path(__file__).parent / "style_examples.json").read_text(enc
 ]
 # 문체 예시에만 나오는 고유 이름: 이번 입력에 없으면 검사에서 걸러 낸다
 STYLE_NAMES = {"운람사", "서산영덕고속도로", "서의성IC", "안동분기점", "한국도로공사"}
+_CITE = re.compile(r"(\[[^\[\]]+\])")
+# 예시 문장의 시설 · 도로 이름(지도 자료 이름 목록에 없는 것)
+EXAMPLE_PLACES = {
+    "신월리",
+    "원당리",
+    "신안리",
+    "괴산리",
+    "정자리",
+    "철파리",
+    "석탑리",
+    "안평면",
+    "옥산면",
+    "의성읍",
+    "후죽리",
+    "기쁨의집",
+    "의성자혜원",
+}
+
+
+def mask_example(text: str, names: set[str] = frozenset()) -> str:
+    """문체 예시의 값을 가린다: 숫자 → N, 시각 → HH:MM, 알려진 지명 · 시설명 → ○○(근거 표기는 그대로)."""
+    hide = sorted(set(names) | STYLE_NAMES | EXAMPLE_PLACES, key=len, reverse=True)
+    out = []
+    for i, part in enumerate(_CITE.split(text)):
+        if i % 2 == 0:  # 근거 표기 밖
+            part = re.sub(r"\d{1,2}:\d{2}", "HH:MM", part)
+            part = re.sub(r"(?<![A-Za-z\d])\d+(?:[.,]\d+)?", "N", part)
+            for name in hide:
+                part = part.replace(name, "○○")
+        out.append(part)
+    return "".join(out)
+
 
 # 항목별 주의(11/7 결정 · 매뉴얼 원칙). 판정이 아니라 쓰는 방법만 정한다
 HINTS = {
@@ -53,7 +87,10 @@ HINTS = {
     "나머지 문단은 그 대상(주택·송전시설·문화유산)을 어떻게 지킬지 씁니다.",
     "S3": "투입 현황과 동원 범위(고시 별표)를 쓰고, 지휘권자가 할 일(가용 자원 집중 투입, 단계에 따른 응원 요청 준비)로 끝냅니다. "
     "헬기·인력을 몇 대·몇 명 더 넣으라는 수치는 넣지 마십시오.",
-    "S4": "헬기 운항 가능 여부는 판단하지 않습니다(조립기가 ※ 문장을 붙임). 시간대(낮·일몰)와 바람 값만으로 전략을 씁니다.",
+    "S4": "헬기 운항 가능 여부는 판단하지 않습니다(조립기가 ※ 문장을 붙임). 문단마다 한두 문장만 씁니다. "
+    "시간대 문단 = 지금 낮인지 밤인지와 일몰 시각에 맞춘 진화 방식(주간 진화 유지, 일몰 전 야간 진화 체제 준비). "
+    "바람 문단 = facts.max의 가장 센 시각·풍향·풍속을 밝히고 그 시간대에 지상 인력·진화장비 중심으로 바꿀 준비. "
+    "헬기 재투입 문단 = 바람이 약해지면 바로 다시 넣을 수 있게 이륙 준비 현황과 격납고 지역 풍속 확인.",
     "S5": "투입 인력 안전 책임자에게 전달할 내용을 씁니다. 철수 기준은 규정 별표 3의 조건만 씁니다.",
     "E1": "마을 이름은 아래 목록이 보여 주므로 문단에 쓰지 말고 「리 단위로 아래와 같이 구역을 설정하십시오」 꼴로 씁니다. "
     "「○○ 전체」로 적힌 곳은 리 자료가 없어 읍면 단위로 넣은 곳입니다.",
@@ -105,17 +142,22 @@ def evidence_text(chunks: list[dict[str, Any]], extra: list[dict[str, Any]]) -> 
 
 
 def messages(
-    common: dict, item: dict, chunks: list[dict], extra: list[dict]
+    common: dict,
+    item: dict,
+    chunks: list[dict],
+    extra: list[dict],
+    names: set[str] = frozenset(),
 ) -> list[dict[str, str]]:
     body = {"common": common, "item": strip_item(item)}
     parts = ["아래 입력으로 action 문단을 쓰십시오."]
     if item["id"] in HINTS:
         parts.append(f"[이 항목에서 주의할 것]\n{HINTS[item['id']]}")
     if STYLE.get(item["id"]):
-        ex = "\n".join(f"- {p['action']}: {p['text']}" for p in STYLE[item["id"]])
+        ex = "\n".join(f"- {mask_example(p['text'], names)}" for p in STYLE[item["id"]])
         parts.append(
-            "[문체 예시] 다른 시각(12:50 시나리오)의 목표 문단입니다. 형식·구체성만 참고하십시오. "
-            "숫자·이름·시각·action 구성은 반드시 이번 입력을 따르십시오.\n" + ex
+            "[문체 예시] 다른 상황의 목표 문단입니다(값은 N · HH:MM · ○○로 가림). 문장 꼴과 구체성만 참고하십시오. "
+            "예시에 있는 대상이라도 이번 facts에 없으면 쓰지 말고, 값·이름·action 구성은 반드시 이번 입력을 따르십시오.\n"
+            + ex
         )
     parts.append("[입력]\n" + json.dumps(body, ensure_ascii=False, indent=1))
     parts.append("[근거 발췌]\n" + evidence_text(chunks, extra))

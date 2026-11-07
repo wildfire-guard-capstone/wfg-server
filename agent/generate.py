@@ -108,7 +108,7 @@ class Agent:
         allowed = check.allowed_from(
             common, item.get("finding"), item.get("facts"), *[c["text"] for c in chunks + extra]
         )
-        msgs = prompt.messages(common, item, chunks, extra)
+        msgs = prompt.messages(common, item, chunks, extra, self.known_names)
         thinking = item["id"] in self.thinking
         for attempt in (1, 2):
             try:

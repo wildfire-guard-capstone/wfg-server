@@ -78,6 +78,7 @@ def known_names(md: MapData) -> set[str]:
     ):
         names |= {p.name for p in group}
     names |= {b.name for b in md.bases} | {r.name for r in md.sigungu}
+    names |= {v.emd for v in md.villages}  # 읍면 이름(문체 예시 가리기에도 씀)
     return {n for n in names if len(n) >= 2}
 
 

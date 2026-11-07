@@ -10,6 +10,7 @@
 
 from typing import Any
 
+from rules.bundles.agencies import agencies_bundle
 from rules.bundles.alerts import alerts_bundle
 from rules.bundles.area import area_bundle
 from rules.bundles.commander import commander_bundle
@@ -46,4 +47,5 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "resources": resources_bundle(ctx),
         "weather": weather_bundle(ctx),
         "spread": spread_bundle(ctx),
+        "agencies": agencies_bundle(ctx),
     }

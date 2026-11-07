@@ -65,7 +65,8 @@ def roads_bundle(ctx: Context) -> dict[str, Any]:
     sections: dict[tuple[str, str], dict[str, Any]] = {}
     missing_junctions = False
     for pieces in groups.values():
-        merged = linemerge(unary_union([pc.geom.intersection(p5) for pc in pieces]))  # 2
+        union = unary_union([pc.geom.intersection(p5) for pc in pieces])  # 2
+        merged = linemerge(union) if union.geom_type == "MultiLineString" else union
         head = pieces[0]
         motorway = _grade(head) == "motorway"
         for part in getattr(merged, "geoms", [merged]):

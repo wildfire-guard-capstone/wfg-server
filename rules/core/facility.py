@@ -37,11 +37,15 @@ class FacilityCount:
         return self.houses + self.heritage
 
 
-def count_facilities(p5: BaseGeometry, houses: Points, heritage: Points) -> FacilityCount:
+def count_facilities(
+    p5: BaseGeometry, houses: Points, heritage: Sequence[BaseGeometry]
+) -> FacilityCount:
     """P5 안 주택 등 주요시설 동수(시설피해 우려, 대응단계 요소)를 센다.
 
     1. P5 안 주택 점 수
-    2. P5 안 국가유산 점 수
+    2. P5와 닿는 국가유산 수(점 · 면)
     3. 둘을 합친 값이 대응단계의 시설 요소(`total`)
     """
-    return FacilityCount(houses=count_in(p5, houses), heritage=count_in(p5, heritage))
+    return FacilityCount(
+        houses=count_in(p5, houses), heritage=sum(1 for g in heritage if g.intersects(p5))
+    )

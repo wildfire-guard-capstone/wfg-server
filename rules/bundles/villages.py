@@ -3,32 +3,21 @@
 from dataclasses import asdict
 from typing import Any
 
+from rules.bundles.common import timing
 from rules.context import Context
-from rules.core.convert import Zone, p_from, p_time, p_until, zone_of
-from rules.core.sun import is_night
+from rules.core.convert import Zone, zone_of
 from rules.core.villages import Reached, VillageField
 
 
 def _village(ctx: Context, reached: Reached) -> dict[str, Any]:
-    """마을 한 줄. 밤 = 닿을 수 있는 구간의 시작이나 끝이 밤인가(J2, 11/7 — 끝만 보면 해 뜰 무렵
-    「앞은 밤 · 끝은 낮」 구간을 낮으로 놓침). 이미 닿은 마을은 0시로 본다.
-
-    `passed` = 닿는 시각이 생성 시각보다 이름(정정 버전에서 「예상 시각 경과」, 11/7).
-    """
-    v, p = reached.village, reached.p
-    t = p_time(ctx.base_at, p)
+    """마을 한 줄: 이름 · 읍면 · 시각 칸(구간 · from ~ until · 경과 · 밤) · 인구 · 현장 입력."""
+    v = reached.village
     return {
         "id": v.id,
         "name": v.name,
         "emd": v.emd,
         "sigungu": v.sigungu,
-        "first_p": p,
-        "zone": zone_of(p).value,
-        "from": p_from(ctx.base_at, p),
-        "until": p_until(ctx.base_at, p),
-        "passed": p > 0 and t < ctx.generated_at,
-        "night": is_night(t, *ctx.site)
-        or (p > 0 and is_night(p_time(ctx.base_at, p - 1), *ctx.site)),
+        **timing(ctx, reached.p),
         "population": v.population,
         "pop65_est": v.pop65_est,
         "field": asdict(ctx.field.get(v.id, VillageField())),

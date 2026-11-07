@@ -3,9 +3,10 @@
 from datetime import datetime
 from math import sqrt
 
-from shapely.geometry import box
+from shapely.geometry import Point, box
 
 from rules.context import Inputs
+from rules.core.places import Place
 from rules.core.regions import Region
 from rules.core.villages import Village
 
@@ -46,6 +47,27 @@ VILLAGES = [
 ]
 
 
+def place(id_, name, kind, x, y=0.0, **kw) -> Place:
+    return Place(id_, name, kind, Point(x, y), **kw)
+
+
+# 취약시설: 철파리(P2) 2곳 · 정자리(P8) 1곳 · 먼리(P8 밖) 1곳
+VULNERABLE = [
+    place(55, "의성군공립요양병원", "요양병원", 750, village_id=4),
+    place(56, "의성행복한노인복지센터", "주야간보호", 760, village_id=4, daytime_only=True),
+    place(
+        58,
+        "의료법인 해안의료재단 해안1병원",
+        "정신병원",
+        770,
+        village_id=4,
+        short_name="해안1병원",
+    ),
+    place(61, "정자요양원", "노인요양원", 1150, village_id=5),
+    place(62, "먼요양원", "노인요양원", 1250, village_id=6),
+]
+
+
 def inputs(**kw) -> Inputs:
     base = dict(
         base_at=BASE,
@@ -53,9 +75,10 @@ def inputs(**kw) -> Inputs:
         reader="의성군수",
         prev_stage=None,
         ranges=[square(ha) for ha in AREAS],
+        ignition=Point(0, 0),
         wind_ms={0: 3.4, **{h: 2.0 for h in range(1, 9)}},
+        wind_deg={h: 270.0 for h in range(9)},  # 서풍
         houses=([0.0, 10.0], [0.0, 10.0]),  # P5 안 주택 2동
-        heritage=([], []),
         sido=[Region("경상북도", WORLD)],
         sigungu=[Region("의성군", WORLD)],
         villages=[village(99, "먼리", "옥산면", 5000, 5100)],  # 의성군 리 자료(P8 밖)

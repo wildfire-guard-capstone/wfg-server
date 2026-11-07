@@ -15,6 +15,7 @@ from rules.bundles.commander import commander_bundle
 from rules.bundles.stage import stage_bundle
 from rules.bundles.timing import time_bundle
 from rules.bundles.villages import villages_bundle
+from rules.bundles.vulnerable import vulnerable_bundle
 from rules.context import Context
 
 
@@ -26,4 +27,5 @@ def build_bundles(ctx: Context) -> dict[str, Any]:
         "stage": stage_bundle(ctx),
         "commander": commander_bundle(ctx),
         "villages": villages_bundle(ctx),
+        "vulnerable": vulnerable_bundle(ctx),
     }

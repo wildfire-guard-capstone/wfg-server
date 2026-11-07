@@ -6,7 +6,7 @@
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from shapely.geometry.base import BaseGeometry
@@ -14,6 +14,7 @@ from shapely.geometry.base import BaseGeometry
 from rules.core.area import range_areas
 from rules.core.commander import Commander, decide_commander
 from rules.core.facility import FacilityCount, Points, count_facilities
+from rules.core.places import Base, Deployed, Place, PowerLine, RoadPiece
 from rules.core.regions import Region, spanned
 from rules.core.stage import (
     Change,
@@ -31,21 +32,40 @@ from rules.core.weather import WindSummary, summarize_wind
 
 @dataclass(frozen=True)
 class Inputs:
-    """어댑터(app)가 DB에서 모아 넘기는 값."""
+    """어댑터(app)가 DB에서 모아 넘기는 값. 목록 칸은 「없음」이면 빈 목록으로 넘긴다."""
 
     base_at: datetime  # 0시 = 기준 화선 관측 시각
     generated_at: datetime  # 제안서 생성 시각
     reader: str  # 읽는 사람 직함(로그인 사용자, 예: 의성군수)
     prev_stage: Stage | None  # 직전 제안서의 현재 단계(`proposals.judged_stage`), 첫 제안서면 None
     ranges: Sequence[BaseGeometry]  # P0(현재 화선, 없으면 발화점) ~ P8, R-01
+    ignition: BaseGeometry  # 발화점(공중 동원 반경 · 거리의 기준점)
     wind_ms: Mapping[int, float]  # 0시 뒤 몇 시간 → 풍속(m/s)
+    wind_deg: Mapping[int, float]  # 0시 뒤 몇 시간 → 풍향(도, 북 = 0 · 시계 방향)
     houses: Points  # 주택 점(GIS건물통합정보 단독 · 공동주택)
-    heritage: Points  # 국가유산 점
     sido: Sequence[Region]  # 시 · 도 경계
     sigungu: Sequence[Region]  # 시 · 군 · 구 경계
     villages: Sequence[Village]  # 리(마을) 경계 · 인구. 지금은 의성만 있음
     site: tuple[float, float]  # 기준점(발화점) 위도 · 경도(WGS84) — 일출 · 일몰 계산
     field: Mapping[int, VillageField]  # 마을 id → 현장 입력. 없는 마을은 기본값
+    temp_c: float | None = None  # 0시 기온
+    rh_pct: float | None = None  # 0시 상대습도
+    heritage: Sequence[Place] = ()  # 국가유산(지정)
+    temples: Sequence[Place] = ()  # 전통사찰
+    substations: Sequence[Place] = ()  # 변전소 · 발전소(종류 = kind)
+    power_lines: Sequence[PowerLine] = ()  # 송전선(345 · 154 kV)
+    vulnerable: Sequence[Place] = ()  # 취약시설(요양원 · 요양병원 · 주야간보호 등)
+    shelters: Sequence[Place] = ()  # 대피소 후보(tier = village · hub)
+    roads: Sequence[RoadPiece] = ()  # 큰 도로 조각
+    junctions: Sequence[Place] = ()  # 고속도로 나들목 · 분기점(IC · JC) 점
+    police: Sequence[Place] = ()  # 경찰 관서(kind = 경찰서 · 지구대 …)
+    fire_stations: Sequence[Place] = ()  # 소방 관서(kind = 소방서 · 119안전센터 …)
+    hospitals: Sequence[Place] = ()  # 병원(emergency = 응급 이송처)
+    bases: Sequence[Base] = ()  # 진화자원 기지
+    deployed: Deployed | None = None  # 상황 보고 투입 수(보고 전이면 None)
+    neighbors: Mapping[str, Sequence[str]] = field(default_factory=dict)  # 시군구 → 인접 시군구
+    forest_dept: Mapping[str, str] = field(default_factory=dict)  # 시군구 → 산림 부서 이름
+    prev_alerts: Sequence[tuple[str, str, str]] = ()  # 직전 제안서 (시군구, 읍면, go · set)
 
 
 @dataclass(frozen=True)
@@ -77,6 +97,11 @@ class Context:
     sunset: datetime  # 0시 뒤 처음 오는 일몰
     sunrise: datetime  # 0시 뒤 처음 오는 일출
     now_is_night: bool  # 0시가 밤인가(J2)
+    inputs: Inputs  # 묶음이 자기 주제의 자료를 읽을 때(지도 자료 · 현장 입력)
+
+    @property
+    def village_by_id(self) -> dict[int, Reached]:
+        return {r.village.id: r for r in self.villages}
 
 
 def _span(area: BaseGeometry, inputs: Inputs) -> Span:
@@ -104,7 +129,7 @@ def build_context(inputs: Inputs) -> Context:
     p0, p5 = inputs.ranges[0], inputs.ranges[5]
     areas = range_areas(inputs.ranges)  # 1
     wind = summarize_wind(inputs.wind_ms)  # 2
-    facility = count_facilities(p5, inputs.houses, inputs.heritage)  # 3
+    facility = count_facilities(p5, inputs.houses, [h.geom for h in inputs.heritage])  # 3
     # 4
     stage_now = judge_stage(areas[0], wind.now_ms, facility.total)
     stage_p5 = judge_stage(areas[5], wind.mean_0_5_ms, facility.total)
@@ -139,6 +164,7 @@ def build_context(inputs: Inputs) -> Context:
         sunset=sunset,  # 9
         sunrise=sunrise,
         now_is_night=is_night(inputs.base_at, *inputs.site),
+        inputs=inputs,
     )
 
 

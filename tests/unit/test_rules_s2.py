@@ -58,10 +58,8 @@ def test_points_houses_and_exclusions():
     assert [r["rank"] for r in rows] == [1, 2, 3]
     life = rows[0]["text"]
     assert life.startswith("① **인명**: 지금(이미 닿음) 안평면 괴산리·신월리, ")
-    assert (
-        "의성읍 철파리(의료법인 해안의료재단 해안1병원·의성군공립요양병원·의성행복한노인복지센터 주변)"
-        in life
-    )
+    near = "의료법인 해안의료재단 해안1병원·의성군공립요양병원·의성행복한노인복지센터 주변"
+    assert f"의성읍 철파리({near})" in life
     labels = [b["label"] for b in sec["sections"][1]["blocks"]]
     assert labels == ["주택", "문화유산"]  # 송전선 없음 → 송전시설 블록 없음
     assert sec["sections"][0]["blocks"][2]["text"] == (

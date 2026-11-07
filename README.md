@@ -10,6 +10,7 @@ Wildfire Guard 백엔드 — API 서버, 확산 예측(ELMFIRE), 평가 하네�
 |---|---|
 | `app/` | FastAPI (Router / Service / Adapter). 웹 요청 처리 |
 | `spread/` | 확산 예측 패키지. **FastAPI에 의존하지 않음** — 서버와 평가가 같은 코드를 호출 |
+| `rules/` | 규칙 엔진(대응단계 · 지휘권자 등 판정). 순수 함수만, **FastAPI · DB · `spread`에 의존하지 않음** |
 | `evaluation/` | 평가 하네스 (시나리오 S0~S6, 지표, 데이터셋 리더) |
 | `migrations/` | Alembic DB 마이그레이션 |
 | `docker/worker/` | ELMFIRE + `spread` 워커 이미지 |

@@ -110,3 +110,44 @@ def test_s3_templates():
     assert a2.endswith("세부 내용은 S6 참조.")
     a3 = fixed.paragraph(item, {"id": "S3-a3", "anchors": ["고시 별표"]}, COMMON)["text"]
     assert "공중은 전국으로 넓어지므로" in a3
+
+
+def test_s4_and_e4_road():
+    s4 = {
+        "id": "S4",
+        "facts": {
+            "sun": {"sunset": "18:38", "sunset_zone": "p5", "now_is_night": False},
+            "max": {"ms": 6.9, "dir": "서", "label": "15:20"},
+        },
+    }
+    a1 = fixed.paragraph(s4, {"id": "S4-a1", "anchors": ["p.77", "p.78"]}, COMMON)["text"]
+    assert "일몰(18:38) 뒤" in a1 and a1.endswith("[p.77·78].")
+    a2 = fixed.paragraph(s4, {"id": "S4-a2", "anchors": ["p.78"]}, COMMON)["text"]
+    assert a2.startswith("15:20에 서풍 6.9 m/s로 바람이 가장 셉니다.")
+    e4 = {
+        "id": "E4",
+        "facts": {
+            "roads": [
+                {
+                    "road": "안평의성로",
+                    "section": "신월리",
+                    "zone": "p5",
+                    "from": "15:20",
+                    "police": {"name": "의성경찰서"},
+                },
+                {
+                    "road": "이름 없는 도로",
+                    "section": "철파리",
+                    "zone": "p5",
+                    "from": "18:20",
+                    "police": {"name": "의성경찰서"},
+                },
+            ]
+        },
+    }
+    blk = {"id": "E4-a3", "anchors": ["p.79", "p.95"], "see": "E6"}
+    t = fixed.paragraph(e4, blk, COMMON)["text"]
+    assert t.startswith(
+        "안평의성로 신월리 구간, 철파리 구간 도로에 15:20부터 불이 닿을 수 있습니다."
+    )
+    assert "의성경찰서와 도로 관리기관에" in t and t.endswith("세부 내용은 E6 참조.")

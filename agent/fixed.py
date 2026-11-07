@@ -286,6 +286,87 @@ def _s3_a3(item: dict, block: dict, common: dict) -> dict | None:
     }
 
 
+# ── S4 시간대 · 바람 · 헬기 재투입(매뉴얼 p.77 · 78 원칙을 판정 값에 맞춤) ─────────────
+
+
+def _s4_a1(item: dict, block: dict, common: dict) -> dict | None:
+    sun = item["facts"]["sun"]
+    if sun.get("now_is_night"):
+        c = _cite(block, ["p.78"])
+        text = f"지금은 밤이므로 지상 인력과 진화장비로 진화하고, 풍속이 잦아드는 일출 전 시간대에 집중 진화하십시오 {c}."
+    elif sun.get("sunset_zone") in ("p5", "p8") and sun.get("sunset"):
+        c = _cite(block, ["p.77", "p.78"])
+        text = (
+            f"지금은 낮이므로 지상·공중 진화를 이어 가고, 일몰({sun['sunset']}) 뒤 풍속이 잦아드는 "
+            f"시간대에는 지상 인력으로 집중 진화할 수 있게 준비하십시오 {c}."
+        )
+    else:
+        c = _cite(block, ["p.77"])
+        text = f"지금은 낮이므로 지상·공중 진화를 이어 가십시오 {c}."
+    if not c:
+        return None
+    return {"action": block["id"], "category": "즉시", "text": text}
+
+
+def _s4_a2(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["p.78"])
+    mx = item["facts"].get("max") or {}
+    if not c or mx.get("ms") is None:
+        return None
+    return {
+        "action": block["id"],
+        "category": "대기",
+        "text": f"{mx['label']}에 {mx['dir']}풍 {_num(mx['ms'])} m/s로 바람이 가장 셉니다. "
+        f"강풍으로 헬기 운용이 어려워지면 지상 인력과 진화장비에 의한 지상진화에 중점을 두십시오 {c}.",
+    }
+
+
+def _s4_a3(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["p.78"])
+    if not c:
+        return None
+    return {
+        "action": block["id"],
+        "category": "대기",
+        "text": "강풍이 풀리면 헬기를 바로 다시 넣을 수 있게 이륙 준비 현황과 격납고 지역 풍속을 확인하고, "
+        f"인접 지자체와 유관기관의 헬기 현황을 파악하십시오 {c}.",
+    }
+
+
+# ── E4 큰 도로 ──────────────────────────────────────────────────────────
+
+
+def _e4_a3(item: dict, block: dict, common: dict) -> dict | None:
+    c = _cite(block, ["p.79", "p.95"])
+    rows = item["facts"].get("roads") or []
+    if not c or not rows or any(a not in (block.get("anchors") or []) for a in ("p.79", "p.95")):
+        return None
+    groups: dict[str, list[str]] = {}
+    for r in rows:
+        groups.setdefault(r["road"], [])
+        if r["section"] not in groups[r["road"]]:
+            groups[r["road"]].append(r["section"])
+    where = ", ".join(
+        f"{'·'.join(s)} 구간 도로" if road == "이름 없는 도로" else f"{road} {'·'.join(s)} 구간"
+        for road, s in groups.items()
+    )
+    first = rows[0]
+    when = (
+        "지금"
+        if first.get("zone") == "burning" or not first.get("from")
+        else f"{first['from']}부터"
+    )
+    police = list(dict.fromkeys(r["police"]["name"] for r in rows if r.get("police")))
+    who = f"{'·'.join(police)}와 도로 관리기관" if police else "관할 경찰서와 도로 관리기관"
+    text = (
+        f"{where}에 {when} 불이 닿을 수 있습니다. "
+        f"{who}에 교통통제와 우회도로 지정, 도로 이용객 대피를 요청하십시오 {c}."
+    )
+    if block.get("see"):
+        text += f" 세부 내용은 {block['see']} 참조."
+    return {"action": block["id"], "category": "요청", "text": text}
+
+
 # ── 목록 · 표 앞 문단 ───────────────────────────────────────────────────────
 
 
@@ -330,6 +411,10 @@ TEMPLATES = {
     "S3-a1": _s3_a1,
     "S3-a2": _s3_a2,
     "S3-a3": _s3_a3,
+    "S4-a1": _s4_a1,
+    "S4-a2": _s4_a2,
+    "S4-a3": _s4_a3,
+    "E4-a3": _e4_a3,
     "S6-a1": _simple(
         ["p.22", "p.73"], "산불현장 대책회의를 열어 아래 기관별로 임무를 부여", "즉시", False
     ),

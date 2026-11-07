@@ -11,7 +11,8 @@ STATUS = {"up": "scope_expands", "same": "same_scope", "down": "same_scope"}
 
 
 def _base(r: dict[str, Any]) -> dict[str, Any]:
-    return {k: r[k] for k in ("name", "kind", "sigungu", "jurisdiction", "km", "available")}
+    keys = ("name", "kind", "sigungu", "jurisdiction", "km", "available", "deployed")
+    return {k: r[k] for k in keys}
 
 
 def _scope_text(s: dict[str, Any]) -> str:
@@ -30,14 +31,14 @@ def _scope_text(s: dict[str, Any]) -> str:
 def s3_input(bundles: dict[str, Any]) -> dict[str, Any]:
     """S3 입력을 만든다. 늘 만든다(범위는 늘 있음).
 
-    1. 투입 = `resources` 그대로(라벨 고정)
+    1. 투입 = `resources` 그대로(라벨 고정 합계 + 기지별 투입)
     2. 범위 = `mobilization.now` · `p5`
     3. 부를 수 있는 기지: 지금 범위 안(now) / 5시간 뒤 새로 드는 곳(p5) — 이름표로 거르기
     4. 상황 = 단계 추세 이름 바꾸기(범위는 단계를 따름)
     """
     res, mob = bundles["resources"], bundles["mobilization"]
     facts = {
-        "deployed": {k: res[k] for k in ("helicopter", "crew", "vehicle")},  # 1
+        "deployed": {k: res[k] for k in ("helicopter", "crew", "vehicle", "by_base")},  # 1
         "scope": {"now": mob["now"], "p5": mob["p5"]},  # 2
         "available_now": [_base(r) for r in mob["bases"] if r["first_scope"] == "now"],  # 3
         "added_at_p5": [_base(r) for r in mob["bases"] if r["first_scope"] == "p5"],

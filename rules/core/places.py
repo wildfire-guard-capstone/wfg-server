@@ -54,6 +54,8 @@ class Base:
     geom: BaseGeometry  # 점
     helicopters: int | None = None  # 부를 수 있는(대기) 헬기 수. 모르면 None
     vehicles: int | None = None  # 부를 수 있는 차량 수. 모르면 None
+    deployed_helicopters: int | None = None  # 이 산불에 투입된(자원 연결) 헬기 수. 모르면 None
+    deployed_vehicles: int | None = None  # 이 산불에 투입된(자원 연결) 차량 수. 모르면 None
 
 
 @dataclass(frozen=True)

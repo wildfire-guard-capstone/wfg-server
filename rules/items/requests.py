@@ -28,13 +28,19 @@ def _join(names) -> str:
     return ", ".join(dict.fromkeys(n for n in names if n))
 
 
+def _spare(r: dict[str, Any]) -> int | None:
+    """기지에 남은(대기) 대수: 헬기 기지 = 헬기, 지상 기지 = 차량. None = 모름."""
+    return r["available"]["helicopters" if r["kind"].endswith("헬기") else "vehicles"]
+
+
 def s_rows(b: dict[str, Any]) -> list[dict[str, str]]:
     """진화 쪽 요청(S2 · S3 대상).
 
     1. 소방(p.79): 5시간 안 주택 · 문화유산 → 관할 소방서
     2. 전력(p.95): 5시간 안에 걸린 송전선 → 한국전력공사
     3. 경찰(p.79) · 국가유산(p.79 · 96): 5시간 안 사찰 · 국가유산 → 가까운 경찰서 · 국가유산청
-    4. 헬기 · 지상 응원(고시 별표): 지금 범위 안 응원 기지를 종류별로
+    4. 헬기 · 지상 응원(고시 별표): 지금 범위 안 응원 기지를 종류별로. 대기가 0인 기지(다 나감)는
+       빼고, 모름(null)은 남긴다
     """
     rows = []
     pr, h, home = b["protected"], b["houses"], _home(b)
@@ -58,7 +64,11 @@ def s_rows(b: dict[str, Any]) -> list[dict[str, str]]:
     mob = b["mobilization"]  # 4
     air = mob["now"]["air"]
     reach = "전국" if air["kind"] == "national" else f"발화지 반경 {air['km']} km 안"
-    support = [r for r in mob["bases"] if r["first_scope"] == "now" and r["jurisdiction"] == "응원"]
+    support = [
+        r
+        for r in mob["bases"]
+        if r["first_scope"] == "now" and r["jurisdiction"] == "응원" and _spare(r) != 0
+    ]
     asks = {"산림청 헬기": f"진화헬기 추가 투입({reach})", "소방 헬기": "소방헬기 지원"}
     asks["지자체 임차헬기"] = "임차헬기 지원"
     for kind, group in HELI_GROUP.items():

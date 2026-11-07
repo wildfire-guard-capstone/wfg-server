@@ -55,14 +55,7 @@ def place(id_, name, kind, x, y=0.0, **kw) -> Place:
 VULNERABLE = [
     place(55, "의성군공립요양병원", "요양병원", 750, village_id=4),
     place(56, "의성행복한노인복지센터", "주야간보호", 760, village_id=4, daytime_only=True),
-    place(
-        58,
-        "의료법인 해안의료재단 해안1병원",
-        "정신병원",
-        770,
-        village_id=4,
-        short_name="해안1병원",
-    ),
+    place(58, "의료법인 해안의료재단 해안1병원", "정신병원", 770, village_id=4),
     place(61, "정자요양원", "노인요양원", 1150, village_id=5),
     place(62, "먼요양원", "노인요양원", 1250, village_id=6),
 ]

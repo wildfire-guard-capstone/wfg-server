@@ -18,20 +18,21 @@ def test_facilities_follow_their_village_and_outside_is_left_out():
     bundles, e3, sec = _run(vulnerable=VULNERABLE)
     v = bundles["vulnerable"]
     # 철파리(P2) 3곳 · 정자리(P8) 1곳. 먼리(P8 밖) 시설은 빠짐
-    assert [r["short_name"] for r in v["in_range"]] == [
+    assert [r["name"] for r in v["in_range"]] == [
+        "의료법인 해안의료재단 해안1병원",
         "의성군공립요양병원",
         "의성행복한노인복지센터",
-        "해안1병원",
         "정자요양원",
     ]
-    hospital = v["in_range"][0]
+    hospital = v["in_range"][1]
     assert (hospital["zone"], hospital["from"], hospital["until"]) == ("p5", "13:50", "14:50")
-    assert hospital["ministry"] == "보건복지부"
+    assert "ministry" not in hospital  # 소관 부처는 매뉴얼 기관별 임무 → LLM · 요청 표 틀
     assert v["counts"] == {"within_p5": 3, "p8": 1, "daytime_only": 1}
     # E3: 나누기만, 할 일(이송 · 사전대피)은 넣지 않음
-    assert [r["name"] for r in e3["facts"]["immediate"]][2] == "해안1병원"
     assert e3["facts"]["weekday"] == "토요일"
-    assert e3["finding"].startswith("위험구역 시설 3곳: 의성군공립요양병원(요양병원, 철파리)")
+    assert e3["finding"].startswith(
+        "위험구역 시설 3곳: 의료법인 해안의료재단 해안1병원(정신병원, 철파리)"
+    )
     # 섹션: 1. 우선 대피(a1 + 목록 + 낮에만 운영 a2) · 2. 사전대피(a3) · 3. 이송(a4, E6 참조)
     titles = [s["title"] for s in sec["sections"]]
     assert titles == ["1. 우선 대피", "2. 사전대피", "3. 이송"]
@@ -39,8 +40,9 @@ def test_facilities_follow_their_village_and_outside_is_left_out():
     assert rows == [
         {
             "village": "철파리",
-            "text": "13:50 ~ 14:50 닿을 수 있음, **철파리**: 의성군공립요양병원(요양병원), "
-            "의성행복한노인복지센터(주야간보호), 해안1병원(정신병원)",
+            "text": "13:50 ~ 14:50 닿을 수 있음, **철파리**: "
+            "의료법인 해안의료재단 해안1병원(정신병원), "
+            "의성군공립요양병원(요양병원), 의성행복한노인복지센터(주야간보호)",
         }
     ]
     assert sec["sections"][0]["blocks"][2]["kind"] == "check"

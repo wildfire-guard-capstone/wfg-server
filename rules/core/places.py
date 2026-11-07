@@ -21,7 +21,6 @@ class Place:
     geom: BaseGeometry  # 위치(점, 넓은 시설은 면도 됨)
     village_id: int | None = None  # 들어 있는 리(관할 밖 시설은 None)
     sigungu: str | None = None  # 들어 있는 시 · 군 · 구
-    short_name: str | None = None  # 표시 이름(「의료법인 해안의료재단 해안1병원」 → 「해안1병원」)
     daytime_only: bool = False  # 취약시설: 낮에만 운영(주야간보호)
     emergency: bool = False  # 병원: 응급실 있음(응급 이송처)
     capacity: int | None = None  # 대피소: 수용 인원(없으면 모름)

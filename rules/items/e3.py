@@ -11,9 +11,9 @@ ID, NAME = "E3", "취약시설 조치"
 
 
 def _row(r: dict[str, Any]) -> dict[str, Any]:
-    """시설 한 줄: 표시 이름을 이름으로, 나머지는 그대로 옮긴다."""
+    """시설 한 줄: 그대로 옮긴다."""
     return {
-        "name": r["short_name"],
+        "name": r["name"],
         "kind": r["kind"],
         "village": r["village"],
         "emd": r["emd"],
@@ -30,7 +30,7 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     """E3 입력을 만든다. 시설이 없으면 None.
 
     1. 5시간 안(이미 닿음 · 위험구역) 시설 / 잠재 위험구역 시설로 나눈다(이름표로 거르기)
-    2. 낮에만 운영 개수 · 요일 · 지금 밤 · 소관 부처를 옮긴다
+    2. 낮에만 운영 개수 · 요일 · 지금 밤을 옮긴다
     3. finding 틀 — 사실만
     """
     v, t = bundles["vulnerable"], bundles["time"]
@@ -45,7 +45,6 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "daytime_only_count": v["counts"]["daytime_only"],  # 2
         "weekday": t["weekday"],
         "now_is_night": t["sun"]["now_is_night"],
-        "ministries": list(dict.fromkeys(r["ministry"] for r in rows if r["ministry"])),
     }
     return {
         "id": ID,

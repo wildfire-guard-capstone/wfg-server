@@ -84,7 +84,7 @@ def s_rows(b: dict[str, Any]) -> list[dict[str, str]]:
 def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
     """대피 쪽 요청(E2 · E3 · E4 · E5 대상).
 
-    1. 보건복지(p.89 · 95): 취약시설 → 소관 부처
+    1. 보건복지(p.89 · 95): 취약시설 → 보건복지부(매뉴얼 기관별 임무)
     2. 의료(p.89): 5시간 안 취약시설이 있고 응급의료기관이 있으면
     3. 교통(p.79 · 83 · 95): 큰 도로 구간마다 → 가까운 경찰서 · 관리기관
     4. 치안(p.96): 위험구역 마을 → 관할 경찰서
@@ -97,12 +97,12 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
         later = [r for r in vul if r["zone"] == "p8"]
         groups: dict[str, list[str]] = {}
         for r in now:
-            groups.setdefault(_when(r), []).append(r["short_name"])
+            groups.setdefault(_when(r), []).append(r["name"])
         ask = "; ".join(f"{', '.join(names)}({when})" for when, names in groups.items())
         ask = f"소관 시설 거주자 이송: {ask}" if ask else ""
         if later:
-            ask += (". " if ask else "") + f"{_join(r['short_name'] for r in later)} 이송 준비"
-        rows.append(_row("보건복지", _join(r["ministry"] for r in vul), ask, "E3", "p.89·95"))
+            ask += (". " if ask else "") + f"{_join(r['name'] for r in later)} 이송 준비"
+        rows.append(_row("보건복지", "보건복지부", ask, "E3", "p.89·95"))  # p.89 · 95 소관시설 이송
         medical = b["agencies"]["emergency_medical"]
         if now and medical:  # 2
             rows.append(

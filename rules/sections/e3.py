@@ -83,7 +83,7 @@ def e3_sections(e3: dict[str, Any]) -> dict[str, Any]:
     sections.append(  # 3
         {
             "title": "3. 이송",
-            "blocks": [_action(4, "거주자 이송", ["ministries"], ["p.95"], see="E6")],
+            "blocks": [_action(4, "거주자 이송", [], ["p.95"], see="E6")],
         }
     )
     anchors = [

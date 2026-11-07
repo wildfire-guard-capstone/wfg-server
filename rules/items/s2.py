@@ -29,7 +29,7 @@ def _life_village(r: dict[str, Any]) -> dict[str, Any]:
 
 def _life_facility(r: dict[str, Any]) -> dict[str, Any]:
     return {
-        "name": r["short_name"],
+        "name": r["name"],
         "kind": r["kind"],
         "village": r["village"],
         "zone": r["zone"],

@@ -632,6 +632,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "shapely" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -640,7 +641,6 @@ dependencies = [
 spread = [
     { name = "numpy" },
     { name = "pyproj" },
-    { name = "shapely" },
 ]
 
 [package.dev-dependencies]
@@ -660,7 +660,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "pyproj", marker = "extra == 'spread'", specifier = ">=3.6" },
-    { name = "shapely", marker = "extra == 'spread'", specifier = ">=2.0" },
+    { name = "shapely", specifier = ">=2.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

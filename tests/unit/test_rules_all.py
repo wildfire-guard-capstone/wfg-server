@@ -26,7 +26,6 @@ def test_whole_proposal_has_12_items_and_request_tables():
         "경찰",
         "국가유산",
         "산림 헬기",
-        "소방 헬기",
         "임차 헬기",
     ]
     assert groups(items["E6"]) == ["보건복지", "의료", "교통", "치안", "재난방송", "마을 조직"]

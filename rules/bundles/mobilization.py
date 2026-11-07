@@ -58,7 +58,8 @@ def mobilization_bundle(ctx: Context) -> dict[str, Any]:
     1. 관할 = 현재 화선이 가장 많이 걸친 시 · 군 · 구, 그 시 · 도(R-02)
     2. 현재 · P5 단계(R-17)마다 범위(J7)
     3. 기지마다: 지금 범위 안이면 now, 아니고 P5 범위 안이면 p5, 둘 다 아니면 뺀다
-    4. 관할 / 응원 = 기지 관할 구역에 산불 시군구가 있나 · 발화지에서 거리 · 부를 수 있는 대수
+    4. 관할 / 응원 = 기지 관할 구역에 산불 시군구 또는 그 시 · 도가 있나(DB 설계) · 발화지에서
+       거리 · 부를 수 있는 대수
     5. 발화지에서 가까운 순(고시 비고 ② 「가까운 기관」 — 순위가 아니라 보여 주는 순서)
     """
     home, sido = ctx.span_now.sigungu[0], ctx.span_now.sido[0]  # 1
@@ -74,7 +75,7 @@ def mobilization_bundle(ctx: Context) -> dict[str, Any]:
                 "name": b.name,
                 "kind": b.kind,
                 "sigungu": b.sigungu,
-                "jurisdiction": "관할" if home in b.coverage else "응원",  # 4
+                "jurisdiction": "관할" if {home, sido} & set(b.coverage) else "응원",  # 4
                 "first_scope": first,
                 "km": km(ctx.inputs.ignition, b.geom),
                 "available": {"helicopters": b.helicopters, "vehicles": b.vehicles},

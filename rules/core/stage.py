@@ -112,3 +112,22 @@ def stage_change(prev: Stage | None, now: Stage) -> Change:
     if now < prev:
         return Change.DOWN
     return Change.SAME
+
+
+class Trend(StrEnum):
+    UP = "up"  # P5 단계가 더 높음
+    SAME = "same"
+    DOWN = "down"  # P5 단계가 더 낮음(바람이 약해지는 경우 등)
+
+
+def stage_trend(now: Stage, p5: Stage) -> Trend:
+    """P5 단계를 현재 단계와 비교한다.
+
+    1. P5가 높으면 `up`, 낮으면 `down`
+    2. 같으면 `same`
+    """
+    if p5 > now:
+        return Trend.UP
+    if p5 < now:
+        return Trend.DOWN
+    return Trend.SAME

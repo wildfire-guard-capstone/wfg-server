@@ -47,6 +47,22 @@ def p_clock(base_at: datetime, p: int) -> str:
     return clock(p_time(base_at, p), base_at)
 
 
+NOW = "지금"  # P0(현재 화선)의 시각
+
+
+def p_until(base_at: datetime, p: int) -> str:
+    """LLM에 넘길 Pn 끝 시각: P0은 「지금」(이미 닿음, 11/7), 그 밖은 0시 + n시간."""
+    return NOW if p == 0 else p_clock(base_at, p)
+
+
+WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
+
+
+def weekday(t: datetime) -> str:
+    """요일을 글로 쓴다: 2025-03-22 → 「토요일」."""
+    return WEEKDAYS[t.weekday()]
+
+
 def round1(value: float) -> int | float:
     """숫자를 LLM에 넘길 값으로 줄인다. 판정은 줄이기 전 값으로 한다(11/7).
 

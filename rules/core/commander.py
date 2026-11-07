@@ -90,23 +90,3 @@ def decide_commander(area_ha: float, sido: Sequence[str], sigungu: Sequence[str]
     else:
         title = head_title(sigungu[0])
     return Commander(level, title, reasons)
-
-
-class Handover(StrEnum):
-    REVIEW = "검토"  # 읽는 사람이 이미 지휘권자가 아님
-    PREPARE = "대비"  # 읽는 사람이 지금은 지휘권자지만 P5에서는 아님
-    NONE = "없음"
-
-
-def decide_handover(reader: str, now: str, next_: str) -> Handover:
-    """읽는 사람 기준으로 지휘권 인계가 필요한지 정한다.
-
-    1. 읽는 사람이 지금 지휘권자가 아니면 검토(이미 넘어감)
-    2. 지금은 지휘권자인데 곧(P5) 지휘권자가 바뀌면 대비
-    3. 둘 다 아니면 없음
-    """
-    if reader != now:
-        return Handover.REVIEW
-    if now != next_:
-        return Handover.PREPARE
-    return Handover.NONE

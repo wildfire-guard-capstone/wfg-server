@@ -1,14 +1,6 @@
 import pytest
 
-from rules.core.commander import (
-    Handover,
-    Level,
-    Reason,
-    ReasonKind,
-    decide_commander,
-    decide_handover,
-    head_title,
-)
+from rules.core.commander import Level, Reason, ReasonKind, decide_commander, head_title
 
 GB, US, AD = "경상북도", "의성군", "안동시"
 
@@ -59,15 +51,3 @@ def test_wind_driven_stage2_alone_does_not_move_command():
 )
 def test_head_title(region, head):
     assert head_title(region) == head
-
-
-@pytest.mark.parametrize(
-    ("reader", "now", "next_", "expected"),
-    [
-        ("의성군수", "의성군수", "경상북도지사", Handover.PREPARE),
-        ("의성군수", "경상북도지사", "경상북도지사", Handover.REVIEW),
-        ("의성군수", "의성군수", "의성군수", Handover.NONE),
-    ],
-)
-def test_handover(reader, now, next_, expected):
-    assert decide_handover(reader, now, next_) is expected

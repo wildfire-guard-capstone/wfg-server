@@ -1,6 +1,16 @@
 import pytest
 
-from rules.core.stage import Change, Stage, by_area, by_facility, by_wind, judge_stage, stage_change
+from rules.core.stage import (
+    Change,
+    Stage,
+    Trend,
+    by_area,
+    by_facility,
+    by_wind,
+    judge_stage,
+    stage_change,
+    stage_trend,
+)
 
 INIT, S1, S2 = Stage.INITIAL, Stage.STAGE1, Stage.STAGE2
 
@@ -46,3 +56,11 @@ def test_initial_has_no_deciding_factor():
 )
 def test_stage_change(prev, now, expected):
     assert stage_change(prev, now) is expected
+
+
+@pytest.mark.parametrize(
+    ("now", "p5", "expected"),
+    [(S1, S2, Trend.UP), (S1, S1, Trend.SAME), (S1, INIT, Trend.DOWN)],
+)
+def test_stage_trend(now, p5, expected):
+    assert stage_trend(now, p5) is expected

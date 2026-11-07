@@ -86,7 +86,8 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
 
     1. 보건복지(p.89 · 95): 취약시설 → 보건복지부(매뉴얼 기관별 임무)
     2. 의료(p.89): 5시간 안 취약시설이 있고 응급의료기관이 있으면
-    3. 교통(p.79 · 83 · 95): 큰 도로 구간마다 → 가까운 경찰서 · 관리기관
+    3. 교통(p.79 · 83 · 95): 큰 도로 구간마다 → 가까운 경찰서 · 한국도로공사(p.83 · 95 기관별 임무
+       「고속도로, 국도, 지방도 등 교통통제」)
     4. 치안(p.96): 위험구역 마을 → 관할 경찰서
     5. 재난방송(p.78) · 마을 조직(p.76): Go · Set 읍면
     """
@@ -115,7 +116,7 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
                 )
             )
     for r in b["roads"]["sections"]:  # 3
-        agency = _join([(r["police"] or {}).get("name"), r["manager"]]) or "관할 경찰서"
+        agency = _join([(r["police"] or {}).get("name") or "관할 경찰서", "한국도로공사"])
         ask = f"{r['road']} {r['section']} {_when(r)} 교통통제, 우회도로 지정, 도로 이용객 대피"
         rows.append(_row("교통", agency, ask, "E4", "p.79·83·95"))
     n = b["villages"]["totals"]["within_p5"]["count"]

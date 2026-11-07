@@ -70,7 +70,7 @@ def test_motorway_section_merges_both_directions_and_names_junctions():
     (road,) = bundles["roads"]["sections"]  # 상행 · 하행이 한 구간으로
     assert (road["road"], road["section"]) == ("서산영덕고속도로", "서의성IC~안동분기점")
     assert (road["first_p"], road["from"], road["until"], road["km"]) == (5, "16:50", "17:50", 1.9)
-    assert (road["police"]["name"], road["manager"]) == ("의성경찰서", "한국도로공사")
+    assert road["police"]["name"] == "의성경찰서"
     assert e4["status"] == ["has_options", "roads_at_risk"]
     assert sec["sections"][1]["blocks"][0]["see"] == "E6"
     # 나들목 자료가 없으면 리 이름으로 쓰고 모름으로 알림

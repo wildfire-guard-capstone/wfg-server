@@ -37,7 +37,6 @@ def _road(r: dict[str, Any]) -> dict[str, Any]:
         "until": r["until"],
         "km": r["km"],
         "police": r["police"],
-        "operator": r["manager"],
     }
 
 

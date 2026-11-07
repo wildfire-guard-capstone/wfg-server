@@ -1,7 +1,8 @@
 """`roads` 묶음: 불이 닿았거나 5시간 안에 닿을 큰 도로 구간(R-19).
 
-엔진은 「어느 도로의 어느 구간에 언제 불이 닿나」와 관할 경찰서 · 관리기관(사실)까지만 낸다.
-누구에게 무엇을 요청할지는 LLM이 p.79 · 83 · 95로 쓴다. 정렬은 닿는 순(순위 아님).
+엔진은 「어느 도로의 어느 구간에 언제 불이 닿나」와 가까운 경찰서(사실)까지만 낸다.
+누구에게 무엇을 요청할지는 LLM이 도로 등급과 p.79 · 83 · 95로 쓴다(관리기관 짝짓기는 매뉴얼 몫,
+11/4). 정렬은 닿는 순(순위 아님).
 """
 
 from typing import Any
@@ -15,8 +16,6 @@ from rules.core.places import RoadPiece
 from rules.core.reach import first_p, touches
 
 MAJOR = ("motorway", "trunk", "primary", "secondary", "tertiary")  # 큰 도로만(D, OSM 품질)
-# 도로 등급 → 관리기관(관리 사실). 고속도로만 분명하다 — 국도 · 지방도는 노선 등급 자료가 필요
-MANAGER = {"motorway": "한국도로공사"}
 
 
 def _grade(piece: RoadPiece) -> str:
@@ -54,7 +53,7 @@ def roads_bundle(ctx: Context) -> dict[str, Any]:
     1. 큰 도로 조각 중 P5와 겹친 길이 > 0인 것
     2. 같은 노선(번호, 없으면 도로명)끼리 P5 안 부분을 합치고, 이어진 덩어리 하나 = 구간 하나
     3. 구간마다 처음 닿는 P · 시각 칸 · 범위 안 길이 · 이름(노선 + 양 끝)
-    4. 가장 가까운 경찰서(관서만) · 관리기관(고속도로 = 한국도로공사)
+    4. 가장 가까운 경찰서(관서만)
     5. 노선과 양 끝 이름이 같은 구간(상행 · 하행)은 하나로 합친다(이른 P, 긴 길이)
     """
     p5 = ctx.inputs.ranges[5]
@@ -86,7 +85,6 @@ def roads_bundle(ctx: Context) -> dict[str, Any]:
                 "police": None
                 if station is None
                 else {"name": station.name, "km": km(part, station.geom)},
-                "manager": MANAGER.get(_grade(head)),
             }
             key = (row["road"], row["section"])  # 5
             old = sections.get(key)
@@ -97,8 +95,6 @@ def roads_bundle(ctx: Context) -> dict[str, Any]:
                 old["km"] = max(old["km"], row["km"])
     rows = sorted(sections.values(), key=lambda r: (r["first_p"], r["road"], r["section"]))
     unknown = []
-    if any(r["manager"] is None for r in rows):
-        unknown.append({"field": "국도 · 지방도 관리기관", "reason": "노선 등급 자료 없음"})
     if missing_junctions:
         unknown.append({"field": "고속도로 나들목 이름", "reason": "자료 없음(리 이름으로 씀)"})
     return {"sections": rows, "basis": ["SM-p079", "SM-p083"], "unknown": unknown}

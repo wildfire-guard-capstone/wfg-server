@@ -41,7 +41,7 @@ class Evidence:
 @dataclass
 class LLM:
     url: str = "http://127.0.0.1:8031"
-    model: str = "exaone-4.0-32b-awq"
+    model: str = "exaone-4.5-33b-awq"
     timeout: float = 900
     calls: list[dict] = field(default_factory=list)  # 호출 기록(토큰 · 시간)
 
@@ -57,8 +57,8 @@ class LLM:
         """한 번 부르고 답 글을 돌려준다. schema가 있으면 JSON 형식으로 묶는다
         (추론 모드에서는 묶지 않음).
 
-        EXAONE 4.0: 추론 모드는 chat_template_kwargs.enable_thinking,
-        답에는 <think> … </think>가 앞에 붙는다.
+        EXAONE 4.5: 추론 모드는 chat_template_kwargs.enable_thinking(4.5는 기본이 켜짐이라
+        매번 넘긴다), 답에는 추론 글 … </think>가 앞에 붙는다(vLLM reasoning parser 안 씀).
         """
         body: dict[str, Any] = {
             "model": self.model,

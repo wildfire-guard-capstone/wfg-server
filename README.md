@@ -37,7 +37,7 @@ uv run alembic upgrade head
 ## 대응 제안 생성(`agent/`)과 의성 데모(`demo/uiseong/`)
 
 규칙 엔진은 규칙으로 판단할 수 있는 것(대응단계 · 지휘권자 · 위험구역 마을 · 도달 시각 · 면적 · 자원 · 바람 · 일몰)만 판정해 넘기고,
-**무엇을 할지(대응 제안)는 LLM(EXAONE 4.0 32B)이 표준매뉴얼 · 법령을 검색해 그 근거로 쓴다.** 코드가 문장을 미리 정해 두지 않는다.
+**무엇을 할지(대응 제안)는 LLM(EXAONE 4.5 33B)이 표준매뉴얼 · 법령을 검색해 그 근거로 쓴다.** 코드가 문장을 미리 정해 두지 않는다.
 
 ```
 입력(scenario.json · 상황도 화선 · 지도 · ELMFIRE 입력)
@@ -55,7 +55,7 @@ uv run alembic upgrade head
 ```
 
 실행에는 GPU 서버의 세 서비스가 필요하다: ELMFIRE 1.1(CPU), 근거 검색 서버(`127.0.0.1:8032`, KURE-v1 + FAISS + PostgreSQL —
-`rag-pipeline`, 이 저장소 밖), vLLM(`127.0.0.1:8031`, EXAONE 4.0 32B AWQ). 입력 데이터(지도 자료 · ELMFIRE 입력)와 근거 코퍼스는
+`rag-pipeline`, 이 저장소 밖), vLLM(`127.0.0.1:8031`, EXAONE 4.5 33B AWQ). 입력 데이터(지도 자료 · ELMFIRE 입력)와 근거 코퍼스는
 공개 저장소에 넣지 않는다.
 
 ```bash

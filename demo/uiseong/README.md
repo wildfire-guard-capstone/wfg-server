@@ -51,7 +51,7 @@ input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
 | 검증 기준 | `~/wfg/demo/reference` | 시나리오 v3 회차 1 목표 문단 · 백서 실제 기록 |
 | ELMFIRE 1.1 | `~/wfg/elmfire/bin/elmfire` | conda `wfg-elm`(gfortran · openmpi · GDAL 3.10)으로 빌드, CPU로 돈다 |
 | 근거 검색 | 127.0.0.1:8032 | `rag-pipeline/serve_evidence.py`(KURE-v1 + FAISS + PostgreSQL). 색인 빌드 `20261108-144205`(법령 1,475 + 표준매뉴얼 조각 155) |
-| LLM | 127.0.0.1:8031 | EXAONE 4.0 32B AWQ, vLLM 0.10.1.1(`rag-pipeline/deploy/server/llm.sh start`) |
+| LLM | 127.0.0.1:8031 | EXAONE 4.5 33B AWQ, vLLM 0.32.0(`rag-pipeline/deploy/server/llm.sh start`). 11/9 서버 드라이버가 올라가 4.0 32B에서 바꿈 — tune15까지의 결과는 4.0으로 낸 것 |
 
 켜고 끄기 · 실행 명령은 구조서 3장. 자주 쓰는 것:
 
@@ -91,7 +91,7 @@ PYTHONPATH=. ~/miniforge3/envs/wfg-elm/bin/python -X utf8 -m demo.uiseong.verify
 ## 실행 결과(2026-11-08 저녁, `runs/tune10` — 시나리오 v3 꼴 최종)
 
 확산 예측은 `runs/rebuild1`(ELMFIRE 포함 첫 실행)의 01_spread를 다시 썼다(`--reuse-spread`). 규칙 판정 · LLM 대응 생성은
-4회차 1,046초, 회차당 EXAONE 15 ~ 20회. vLLM은 xgrammar + 공백 금지(`--guided-decoding-disable-any-whitespace`)로 띄운다 —
+4회차 1,046초, 회차당 EXAONE 15 ~ 20회. vLLM은 xgrammar + 공백 금지(`--structured-outputs-config`의 `disable_any_whitespace`, vLLM 0.10 때는 `--guided-decoding-disable-any-whitespace`)로 띄운다 —
 그 전에는 JSON 안에 공백이 3,000토큰까지 이어져 항목이 깨지고 회차가 15분씩 걸렸다.
 
 | 회차 | 보정 배율 | P0 / P5 / P8 (ha) | 항목 상태 | 제안 | 뺀 제안 | 다룰 주제 / 제안 붙음 | 문단 평균 글자 |

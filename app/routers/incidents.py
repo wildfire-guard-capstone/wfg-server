@@ -24,6 +24,7 @@ from app.schemas.incident import (
     PerimeterOut,
     StatusName,
 )
+from app.services import operations
 
 router = APIRouter(prefix="/incidents", tags=["산불 · 보고"])
 Reader = require_roles("COMMANDER", "VIEWER", "REPORTER")
@@ -211,6 +212,8 @@ def end_incident(
         raise ApiError(409, "INCIDENT_ENDED", "이미 종료된 산불입니다.")
     if incidents.current_perimeter(db, incident_id).id != body.expected_perimeter_id:
         raise ApiError(409, "STALE_PERIMETER", "화선이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
+    if operations.is_running(incident_id):
+        raise ApiError(409, "RESOURCE_BUSY", "예측을 계산하는 중입니다. 끝난 뒤 종료하세요.")
     incident.status = IncidentStatus.ENDED
     incident.ended_at = datetime.now(UTC)
     incident.ended_by = user.id

@@ -8,7 +8,7 @@ from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.validation import make_valid
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.db.models import EventLog, Prediction, PredictionSlice
@@ -117,3 +117,16 @@ def latest_prediction_id(session: Session, incident_id: int) -> int | None:
         .order_by(Prediction.id.desc())
         .limit(1)
     )
+
+
+def slice_rows(session: Session, prediction_id: int, hour: int | None = None) -> list[tuple]:
+    """(시간, 면적 ha, 4326 GeoJSON 문자열) — 시간 순. hour를 주면 그 시간만."""
+    q = (
+        "SELECT hour, ST_Area(geom) / 10000, ST_AsGeoJSON(ST_Transform(geom, 4326), 6)"
+        " FROM prediction_slices WHERE prediction_id = :p"
+    )
+    params: dict = {"p": prediction_id}
+    if hour is not None:
+        q += " AND hour = :h"
+        params["h"] = hour
+    return list(session.execute(text(q + " ORDER BY hour"), params))

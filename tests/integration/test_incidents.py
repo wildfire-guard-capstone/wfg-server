@@ -1,38 +1,10 @@
-import json
-
 import pytest
 from sqlalchemy import text
 
+from tests.integration.conftest import incident_body as body
+from tests.integration.conftest import square
+
 URL = "/api/v1/incidents"
-
-
-@pytest.fixture
-def anpyeong(db) -> list[float]:
-    """안평면 안의 한 점 [경도, 위도]."""
-    g = db.scalar(
-        text(
-            "SELECT ST_AsGeoJSON(ST_Transform(ST_PointOnSurface(geom), 4326)) FROM admin_areas"
-            " WHERE level = 'EMD' AND name = '안평면'"
-        )
-    )
-    return json.loads(g)["coordinates"]
-
-
-def body(lon: float, lat: float, **extra) -> dict:
-    return {
-        "ignition_point": {"type": "Point", "coordinates": [lon, lat]},
-        "address": "경북 의성군 안평면 시험",
-        "reported_at": "2025-03-22T11:25:00+09:00",
-        "started_at": "2025-03-22T11:24:00+09:00",
-        "reporter_name": "미상",
-        "reporter_phone": "미상",
-        **extra,
-    }
-
-
-def square(lon: float, lat: float, d: float = 0.003) -> dict:
-    ring = [[lon - d, lat - d], [lon + d, lat - d], [lon + d, lat + d], [lon - d, lat + d]]
-    return {"type": "Polygon", "coordinates": [ring + [ring[0]]]}
 
 
 def test_report_list_detail_perimeters(client, login, anpyeong):

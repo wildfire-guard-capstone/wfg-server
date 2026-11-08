@@ -1,5 +1,7 @@
 """라우터 공통 의존성: DB 세션, 로그인 사용자, 역할 검사(명세 2.1 · 3.1)."""
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Annotated
 
 import jwt
@@ -11,7 +13,7 @@ from app.api.errors import ApiError
 from app.core.security import decode_access_token
 from app.db.models import User
 from app.db.models.enums import UserRole
-from app.db.session import get_session
+from app.db.session import SessionLocal, get_session
 from app.repositories import users
 
 Db = Annotated[Session, Depends(get_session)]
@@ -58,3 +60,13 @@ AnyUser = require_roles("COMMANDER", "VIEWER", "REPORTER", "ADMIN")
 def no_store(response: Response) -> None:
     """계정 · 로그 응답은 브라우저 · 중간 서버에 저장하지 않게(명세 2.1)."""
     response.headers["Cache-Control"] = "no-store"
+
+
+def get_session_factory() -> Callable[[], AbstractContextManager[Session]]:
+    """뒤에서 도는 작업(예측)이 쓸 세션 만들기. 테스트는 이것을 바꿔 끼운다."""
+    return SessionLocal
+
+
+SessionFactory = Annotated[
+    Callable[[], AbstractContextManager[Session]], Depends(get_session_factory)
+]

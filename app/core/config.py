@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # 개발 중 다른 출처(예: Vite http://127.0.0.1:5173)에서 부를 때만. 같은 출처 배포면 비워 둔다.
     cors_origins: list[str] = []
 
+    # 예측 API(PRED-01)가 쓰는 예측 제공자(app.predict). file이면 PREDICTOR_PATH(P1~P8 GeoJSON)
+    predictor: str = "synthetic"
+    predictor_path: str | None = None
+    predictor_crs: int = 4326
+    predictor_weather: str | None = None
+
     # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)
     jwt_secret: str = ""
     jwt_expires_s: int = 1800

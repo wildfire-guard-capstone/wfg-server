@@ -35,12 +35,18 @@ def temporary_password() -> str:
     return secrets.token_urlsafe(9)
 
 
+_warned = False
+
+
 def _secret() -> str:
+    global _warned
     secret = get_settings().jwt_secret
-    if not secret:
+    if secret:
+        return secret
+    if not _warned:
         log.warning("JWT_SECRET이 없어 임시 키를 씁니다(서버를 다시 켜면 다시 로그인).")
-        return _fallback_secret
-    return secret
+        _warned = True
+    return _fallback_secret
 
 
 def create_access_token(user_id: int, role: str, now: datetime | None = None) -> tuple[str, int]:

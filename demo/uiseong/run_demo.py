@@ -1,355 +1,162 @@
-"""의성 데모 실행(GPU 서버): 회차마다 ELMFIRE 보정 · 예측 → 규칙 엔진 → 에이전트(EXAONE) → 저장.
+# ruff: noqa: E501
+"""의성 데모 실행(GPU 서버): 입력 → 1 확산 예측 → 2 규칙 판정 → 3 LLM 대응 생성 → 출력.
 
-    python -m demo.uiseong.run_demo --data <데모 데이터> --deck <ELMFIRE 입력>
-        --elmfire <실행 파일> --out <결과>
-        [--rounds 1,2,3,4] [--skip-llm] [--llm http://127.0.0.1:8031] [--evidence http://127.0.0.1:8032]
-        [--calibration blend|interval|rate|from_first]
+    python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
+        [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
+        [--calibration blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
 
-회차 k(11/7 · 11/8 사용자 결정):
-  1. 보정: 확산속도 배율(adj) 하나. 기본 blend = 두 배율의 기하평균
-     (k−1보 화선 → k보 화선 면적 맞춤 배율, k보 화선에서 발화 뒤 평균 성장 속도를 1시간 잇는 배율).
-     1회차는 발화 뒤 평균 성장 속도만(12:50 1보 화선 + 1시간)
-  2. 예측: k보 화선에서 그 배율로 8시간 → P0(관측 화선) ~ P8
-  3. 검증: 8시간 안에 들어오는 뒤 상황도 화선과 면적 · 겹침(IoU) 비교(제안에는 쓰지 않음)
-  4. 규칙 엔진: build_llm_input(Inputs) — 직전 회차의 현재 단계 · 읍면 Set/Go를 이어 받는다
-  5. 에이전트: 항목별 문단 생성 · 검사 · 조립
-결과: <out>/round_<k>.json(전부) + <out>/summary.json
+입력 폴더(input/): scenario.json(사고 · 회차 · 현장 보고) · perimeters.json(상황도 화선) · regions.json ·
+map/(지도 레이어) · elmfire_deck/(ELMFIRE 입력). 자세한 것은 input/README.md.
+
+결과 폴더(--out):
+  round_k/01_spread/   spread.json(보정 · P0~P8 · 검증, 다시 쓰기용 WKT) · ranges_4326.geojson
+  round_k/02_rules/    inputs.json(규칙 엔진에 넣은 값) · llm_input.json(규칙 엔진 출력: bundles · common · items)
+  round_k/03_rag/      <항목>.json(질의 · 찾은 근거)
+  round_k/04_llm/      <항목>.json(보낸 메시지 · 답 원문 · 검사) · <항목>_prompt.txt(사람이 읽는 판)
+  round_k/05_output/   proposal.json(화면용 제안서)
+  round_k.json         회차 전부(뷰어 입력) · summary.json · run.log
+
+디버깅: --reuse-spread로 앞 결과의 01_spread를 다시 쓰면 ELMFIRE 없이 규칙 · 제안만 돈다.
+--items로 항목 몇 개만 돌린다. 각 단계 출력 폴더를 열어 보면 어디서 틀렸는지 보인다.
 """
 
 import argparse
 import json
-import math
 import time
 from datetime import timedelta
 from pathlib import Path
 
-import numpy as np
-from shapely.geometry import mapping
-from shapely.ops import unary_union
-
 from agent.clients import LLM, Evidence
 from agent.generate import Agent
-from demo.uiseong.data import MapData, lonlat, to4326
-from demo.uiseong.rounds import INCIDENT, ROUNDS
-from rules.context import Inputs
-from rules.core.stage import LABEL
-from rules.llm_input import build_llm_input
+from demo.uiseong import rounds as rounds_mod
+from demo.uiseong import step1_spread, step2_rules, step3_agent
+from demo.uiseong.data import MapData, to4326
 from spread import perimeter_run as pr
-
-IGNITION_T_S = 1440.0  # 11:24
-MPH = 0.44704
-STAGE_OF = {v: k for k, v in LABEL.items()}
-
-
-def wind_series(deck: Path, at_xy, t0_s: float, hours: int = 8) -> list[tuple[float, float]]:
-    """ELMFIRE 입력의 시간별 풍속(mph) · 풍향을 한 점에서 읽어
-    t0 + h시간으로 선형 보간(u · v 성분)."""
-    import rasterio
-
-    def band_vals(name):
-        with rasterio.open(deck / "inputs" / f"{name}.tif") as r:
-            row, col = r.index(*at_xy)
-            return r.read()[:, row, col].astype(float)
-
-    ws, wd = band_vals("ws") * MPH, band_vals("wd")
-    u = -ws * np.sin(np.radians(wd))
-    v = -ws * np.cos(np.radians(wd))
-    out = []
-    for h in range(hours + 1):
-        x = (t0_s + h * 3600) / 3600.0  # 밴드 1 = 0시간
-        i = min(int(math.floor(x)), len(ws) - 2)
-        f = x - i
-        uu, vv = u[i] * (1 - f) + u[i + 1] * f, v[i] * (1 - f) + v[i + 1] * f
-        out.append((math.hypot(uu, vv), (math.degrees(math.atan2(-uu, -vv)) + 360) % 360))
-    return out
-
-
-CAL_METHODS = {
-    "blend": "직전 구간 배율과 발화 뒤 평균 속도 배율의 기하평균(11/8 사용자 결정, 기본)",
-    "interval": "직전 구간(k−1보 화선 → k보 화선) 면적 맞춤(11/7)",
-    "rate": "발화 뒤 평균 성장 속도 유지(k보 화선 + 1시간 = 면적 ÷ 발화 뒤 시간)",
-    "from_first": "1보 화선 → k보 화선 면적 맞춤",
-}
-
-
-def _part(cal: pr.Calibration, how: str) -> dict:
-    return {
-        "from": how,
-        "adj": cal.adj,
-        "target_ha": round(cal.target_ha, 1),
-        "got_ha": round(cal.got_ha, 1),
-        "tries": [(round(k, 3), round(v, 1)) for k, v in cal.tries],
-        "clipped": cal.clipped,
-    }
-
-
-def calibrate_round(deck: pr.Deck, work: Path, md: MapData, rd, method: str = "blend") -> dict:
-    """회차 rd의 확산속도 배율과 그 근거(round_k.json의 calibration).
-
-    1회차는 어느 방법이든 rate(11/7 사용자 결정 — 발화점에서 출발하면 점 출발 가속 구간 때문에
-    배율이 폭주한다). blend = interval과 rate의 기하평균(11/8): 직전 구간 하나로 맞춘 배율은
-    손으로 그린 화선 차이와 급성장 구간에 따라 2.75 ~ 7.0으로 흔들렸고(14:20 예측이 22:00에
-    실측의 3.6배), 발화 뒤 평균만 쓰면 13:10 · 13:45 예측이 실측의 0.6배로 작았다(backtest.py).
-    """
-    if method not in CAL_METHODS:
-        raise ValueError(f"보정 방법 {method}: {list(CAL_METHODS)} 중 하나")
-    observed = md.report(rd.at)
-
-    def rate_part() -> dict:
-        # k보 화선에서 1시간 동안 늘어나는 면적 = 발화(11:24) ~ k보 평균 속도. 그 시각에 아는 정보만
-        rate = observed.area / 1e4 / ((rd.t_s - IGNITION_T_S) / 3600)
-        target = observed.area / 1e4 + rate
-        cal = pr.calibrate(
-            deck,
-            work / f"cal_{rd.no}_rate",
-            observed,
-            rd.t_s,
-            rd.t_s + 3600,
-            None,
-            target_ha=target,
-        )
-        return _part(
-            cal, f"발화 뒤 평균 성장 속도 유지(시간당 {rate:.1f} ha, {rd.report} 화선 + 1시간)"
-        )
-
-    def span_part(before) -> dict:
-        cal = pr.calibrate(
-            deck,
-            work / f"cal_{rd.no}_from{before.no}",
-            md.report(before.at),
-            before.t_s,
-            rd.t_s,
-            observed,
-        )
-        return _part(cal, f"{before.report} {before.at} → {rd.report} {rd.at} 화선")
-
-    if rd.no == 1 or method == "rate":
-        method, parts = "rate", [rate_part()]
-    elif method == "interval":
-        parts = [span_part(ROUNDS[rd.no - 2])]
-    elif method == "from_first":
-        parts = [span_part(ROUNDS[0])]
-    else:
-        parts = [span_part(ROUNDS[rd.no - 2]), rate_part()]
-    adj = math.exp(sum(math.log(p["adj"]) for p in parts) / len(parts))
-    how = (
-        parts[0]["from"] if len(parts) == 1 else "두 배율의 기하평균(직전 구간 · 발화 뒤 평균 속도)"
-    )
-    return {"method": method, "adj": adj, "from": how, "parts": parts}
-
-
-def validate(md: MapData, rd, observed, res: pr.RunResult, hours: float = 8) -> list[dict]:
-    """예측을 뒤 상황도 화선과 비교(면적 · IoU). 둘 다 기준 화선과 합친 범위로 잰다."""
-    checks = []
-    for later in md.perimeters["reports"] + md.perimeters["later"]:
-        h, m = map(int, later["at"].split(":"))
-        dt_h = (h * 60 + m - (rd.base_at.hour * 60 + rd.base_at.minute)) / 60
-        if 0 < dt_h <= hours:
-            pred = pr.polygonize(res.burned_by(rd.t_s + dt_h * 3600), res.transform)
-            pred = unary_union([pred, observed])
-            obs = unary_union([md.report(later["at"]), observed])
-            inter = pred.intersection(obs).area
-            checks.append(
-                {
-                    "at": later["at"],
-                    "hours": round(dt_h, 2),
-                    "pred_ha": round(pred.area / 1e4, 1),
-                    "obs_ha": round(obs.area / 1e4, 1),
-                    "iou": round(inter / pred.union(obs).area, 3) if pred.area else 0,
-                }
-            )
-    return checks
 
 
 def geo4326(g) -> dict:
+    from shapely.geometry import mapping
+
     return mapping(to4326(g))
-
-
-def known_names(md: MapData) -> set[str]:
-    names = {v.name for v in md.villages}
-    for group in (
-        md.vulnerable,
-        md.shelters,
-        md.heritage,
-        md.police,
-        md.fire_stations,
-        md.hospitals,
-    ):
-        names |= {p.name for p in group}
-    names |= {b.name for b in md.bases} | {r.name for r in md.sigungu}
-    names |= {v.emd for v in md.villages}  # 읍면 이름(문체 예시 가리기에도 씀)
-    return {n for n in names if len(n) >= 2}
-
-
-def list_names(md: MapData) -> set[str]:
-    """목록에 나오는 마을 · 시설 이름(목록 바로 앞 문단에서는 쓰지 않음)."""
-    names = {v.name for v in md.villages}
-    for group in (md.vulnerable, md.shelters, md.heritage):
-        names |= {p.name for p in group}
-    return {n for n in names if len(n) >= 2}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", type=Path, required=True)
-    ap.add_argument("--deck", type=Path, required=True)
-    ap.add_argument("--elmfire", required=True)
+    ap.add_argument("--input", type=Path, required=True, help="demo-uiseong/input")
+    ap.add_argument("--deck", type=Path, help="ELMFIRE 입력(기본 <input>/elmfire_deck)")
+    ap.add_argument("--elmfire", default="elmfire")
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--rounds", default="1,2,3,4")
-    ap.add_argument("--skip-llm", action="store_true")
-    ap.add_argument(
-        "--spread-only", action="store_true", help="보정 · 예측 · 검증만(규칙 엔진 · 에이전트 없음)"
-    )
+    ap.add_argument("--rounds", default="")
+    ap.add_argument("--items", default="", help="이 항목만(예: S1,E2). 비우면 전부")
+    ap.add_argument("--reuse-spread", type=Path, help="앞 결과 폴더: round_k/01_spread를 다시 쓴다")
+    ap.add_argument("--spread-only", action="store_true", help="1단계만")
+    ap.add_argument("--skip-llm", action="store_true", help="1 · 2단계만(제안 생성 없음)")
+    ap.add_argument("--calibration", default="blend", choices=list(step1_spread.CAL_METHODS))
     ap.add_argument("--llm", default="http://127.0.0.1:8031")
     ap.add_argument("--evidence", default="http://127.0.0.1:8032")
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--thinking", default="", help="추론 모드로 쓸 항목(예: S2,S4,S5). 기본 끔")
-    ap.add_argument("--calibration", default="blend", choices=list(CAL_METHODS))
+    ap.add_argument("--k", type=int, default=8, help="항목마다 검색 근거 수")
+    ap.add_argument("--thinking", action="store_true", help="EXAONE 추론 모드(기본 끔)")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
+    deck_dir = a.deck or a.input / "elmfire_deck"
     work = a.out / "_elmfire"
-    md = MapData(a.data)
-    deck = pr.Deck(a.deck, a.elmfire, env={})
+    sc = rounds_mod.load(a.input)
+    md = MapData(a.input)
+    deck = pr.Deck(deck_dir, a.elmfire, env={})
+    only = {x.strip() for x in a.items.split(",") if x.strip()} or None
     agent = None
-    if not a.skip_llm:
-        thinking = {x.strip() for x in a.thinking.split(",") if x.strip()}
+    if not (a.skip_llm or a.spread_only):
         agent = Agent(
             LLM(a.llm),
             Evidence(a.evidence),
-            known_names(md),
+            step3_agent.known_names(md),
             workers=a.workers,
-            thinking=thinking,
-            list_names=list_names(md),
+            k=a.k,
+            thinking=a.thinking,
         )
     t_all = time.time()
+    print(f"시나리오: {sc.title} · 회차 {[r.at for r in sc.rounds]}", flush=True)
     print(
-        f"지도 자료: 마을 {len(md.villages)} · 주택 {len(md.houses[0])} · "
-        f"대피소 {len(md.shelters)} · "
+        f"지도 자료: 마을 {len(md.villages)} · 주택 {len(md.houses[0])} · 대피소 {len(md.shelters)} · "
         f"취약시설 {len(md.vulnerable)} · 인접 시군 {md.neighbors['의성군']}",
         flush=True,
     )
-    wanted = {int(x) for x in a.rounds.split(",")}
-    prev_stage, prev_alerts, prev_paras, summary = None, (), {}, []
-    for rd in ROUNDS:
+    wanted = {int(x) for x in a.rounds.split(",") if x.strip()} or {r.no for r in sc.rounds}
+    prev_stage, prev_alerts, prev, summary = None, (), {}, []
+    for rd in sc.rounds:
         if rd.no not in wanted:
             continue
         t_round = time.time()
+        rdir = a.out / f"round_{rd.no}"
         print(f"\n=== 회차 {rd.no} {rd.version} {rd.at} ({rd.report}, {rd.reader}) ===", flush=True)
-        observed = md.report(rd.at)
-        # 1. 보정
-        cal = calibrate_round(deck, work, md, rd, a.calibration)
-        for p in cal["parts"]:
+        # 1. 확산 예측
+        if a.reuse_spread:
+            sp = step1_spread.load(a.reuse_spread / f"round_{rd.no}" / "01_spread")
             print(
-                f"  보정 {p['from']}: adj {p['adj']:.3f} · 목표 {p['target_ha']} ha · "
-                f"결과 {p['got_ha']} ha · 시도 {len(p['tries'])}회"
-                f"{' · 범위 끝(' + p['clipped'] + ')' if p['clipped'] else ''}",
+                f"  1 확산: {a.reuse_spread.name}의 결과를 다시 씀 · 배율 {sp.calibration['adj']:.3f}",
                 flush=True,
             )
-        print(f"  배율 {cal['adj']:.3f} ({cal['method']})", flush=True)
-        # 2. 예측
-        res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"])
-        rngs = pr.ranges(res, observed)
-        areas = [round(g.area / 1e4, 1) for g in rngs]
-        print(f"  예측 {res.wall_s:.1f}초 · P0~P8 {areas} ha", flush=True)
-        # 3. 검증(뒤 상황도)
-        checks = validate(md, rd, observed, res)
+        else:
+            sp = step1_spread.run_spread(deck, work, md, rd, sc, a.calibration)
+            for p in sp.calibration["parts"]:
+                print(
+                    f"  1 보정 {p['from']}: adj {p['adj']:.3f} · 목표 {p['target_ha']} → {p['got_ha']} ha",
+                    flush=True,
+                )
+            print(
+                f"  1 확산: 배율 {sp.calibration['adj']:.3f} ({sp.calibration['method']}) · {sp.wall_s}초",
+                flush=True,
+            )
+        step1_spread.save(sp, rdir / "01_spread")
+        print(f"    P0~P8 {sp.areas_ha} ha", flush=True)
         print(
-            f"  검증 {[(c['at'], c['pred_ha'], c['obs_ha'], c['iou']) for c in checks]}", flush=True
+            f"    검증 {[(c['at'], c['pred_ha'], c['obs_ha'], c['iou']) for c in sp.validation]}",
+            flush=True,
         )
         if a.spread_only:
             summary.append(
                 {
                     "round": rd.no,
                     "at": rd.at,
-                    "adj": cal["adj"],
-                    "areas_ha": areas,
-                    "validation": checks,
+                    "adj": sp.calibration["adj"],
+                    "areas_ha": sp.areas_ha,
+                    "validation": sp.validation,
                 }
             )
             continue
-        # 4. 규칙 엔진
-        winds = wind_series(a.deck, (observed.centroid.x, observed.centroid.y), rd.t_s)
-        wind_ms = {0: rd.wind_ms, **{h: round(w[0], 1) for h, w in enumerate(winds) if h > 0}}
-        wind_deg = {0: rd.wind_dir_deg, **{h: round(w[1]) for h, w in enumerate(winds) if h > 0}}
-        field = {v.id: rd.field_by_name[v.name] for v in md.villages if v.name in rd.field_by_name}
-        lon, lat = lonlat(md.ignition)
-        inputs = Inputs(
-            base_at=rd.base_at,
-            generated_at=rd.base_at,
-            reader=rd.reader,
-            prev_stage=prev_stage,
-            ranges=rngs,
-            ignition=md.ignition,
-            wind_ms=wind_ms,
-            wind_deg=wind_deg,
-            houses=md.houses,
-            sido=md.sido,
-            sigungu=md.sigungu,
-            villages=md.villages,
-            site=(lat, lon),
-            field=field,
-            temp_c=rd.temp_c,
-            rh_pct=rd.rh_pct,
-            heritage=md.heritage,
-            temples=(),
-            substations=md.substations,
-            power_lines=md.power_lines,
-            vulnerable=md.vulnerable,
-            shelters=md.shelters,
-            roads=md.roads,
-            junctions=(),
-            police=md.police,
-            fire_stations=md.fire_stations,
-            hospitals=md.hospitals,
-            bases=md.bases,
-            deployed=rd.deployed,
-            neighbors=md.neighbors,
-            forest_dept={"의성군": "의성군 산림녹지과"},
-            prev_alerts=prev_alerts,
-        )
-        t_rule = time.time()
-        llm_in = build_llm_input(inputs, INCIDENT)
-        rule_s = time.time() - t_rule
-        llm_in["common"]["proposal"] |= {
-            "version": rd.version,
-            "trigger": "예측 갱신",
-            "base_perimeter": f"{rd.report} ({rd.at}, 상황도)",
-        }
-        b = llm_in["bundles"]
+        # 2. 규칙 판정
+        ru = step2_rules.run_rules(md, rd, sc, sp, deck_dir, prev_stage, prev_alerts)
+        (rdir / "02_rules").mkdir(parents=True, exist_ok=True)
+        for name, obj in (("inputs.json", ru["inputs"]), ("llm_input.json", ru["llm_input"])):
+            (rdir / "02_rules" / name).write_text(
+                json.dumps(obj, ensure_ascii=False, indent=1, default=str), encoding="utf-8"
+            )
+        llm_in = ru["llm_input"]
         print(
-            f"  규칙 엔진 {rule_s:.1f}초 · 현재 {b['stage']['now']['stage']} · "
-            f"P5 {b['stage']['p5']['stage']} · "
-            f"지휘권자 {b['commander']['now']['title']} → {b['commander']['next']['title']} · "
+            f"  2 규칙: {ru['seconds']}초 · 현재 {ru['stage_now']} · P5 {ru['stage_p5']} · 지휘권자 {ru['commander']} · "
             f"항목 {[i['id'] for i in llm_in['items']]}",
             flush=True,
         )
-        # 5. 에이전트
-        items, logs, llm_s = None, [], 0.0
+        prev_stage, prev_alerts = ru["next_prev_stage"], ru["next_prev_alerts"]
+        # 3. LLM 대응 생성
+        items, logs, llm_s, calls = [], [], 0.0, []
         if agent is not None:
             n0 = len(agent.llm.calls)
             t_llm = time.time()
-            items, logs = agent.run(llm_in["common"], llm_in["items"], prev_paras)
+            items, logs = step3_agent.run_agent(agent, llm_in, prev, only)
             llm_s = time.time() - t_llm
-            states = {i["id"]: i["state"] for i in items}
-            print(
-                f"  에이전트 {llm_s:.0f}초 · 호출 {len(agent.llm.calls) - n0}회 · {states}",
-                flush=True,
-            )
-            prev_paras = {
-                i["id"]: {
-                    "input_key": i["input_key"],
-                    "paras": i.get("paras"),
-                    "state": i["state"],
-                    "version": rd.version,
-                }
-                for i in items
-                if i.get("paras")
-            }
             calls = agent.llm.calls[n0:]
-        else:
-            calls = []
-        prev_stage = STAGE_OF[b["stage"]["now"]["stage"]]
-        prev_alerts = tuple((r["sigungu"], r["emd"], r["level"]) for r in b["alerts"]["areas"])
+            step3_agent.save(items, logs, rdir)
+            prev |= step3_agent.next_prev(items, rd.version)
+            states = {
+                i[
+                    "id"
+                ]: f"{i['state']}({sum(b['type'] == 'paragraph' for s in i['sections'] for b in s['blocks'])})"
+                for i in items
+            }
+            print(f"  3 제안: {llm_s:.0f}초 · 호출 {len(calls)}회 · {states}", flush=True)
+        # 출력(뷰어 입력)
         out = {
             "round": {
                 "no": rd.no,
@@ -363,21 +170,22 @@ def main() -> None:
                     (rd.base_at + timedelta(hours=h)).strftime("%H:%M") for h in range(9)
                 ],
             },
-            "calibration": cal,
+            "calibration": sp.calibration,
             "spread": {
-                "areas_ha": areas,
-                "wall_s": round(res.wall_s, 1),
-                "ranges": [geo4326(g) for g in rngs],
-                "observed": geo4326(observed),
-                "validation": checks,
+                "areas_ha": sp.areas_ha,
+                "wall_s": sp.wall_s,
+                "reused_from": sp.reused_from,
+                "ranges": [geo4326(g) for g in sp.ranges],
+                "observed": geo4326(sp.observed),
+                "validation": sp.validation,
             },
-            "weather": {"wind_ms": wind_ms, "wind_deg": wind_deg},
+            "weather": ru["weather"],
             "llm_input": llm_in,
             "proposal": items,
             "agent_log": logs,
             "llm_calls": calls,
             "timing": {
-                "rules_s": round(rule_s, 2),
+                "rules_s": ru["seconds"],
                 "llm_s": round(llm_s, 1),
                 "round_s": round(time.time() - t_round, 1),
             },
@@ -389,16 +197,20 @@ def main() -> None:
             {
                 "round": rd.no,
                 "at": rd.at,
-                "adj": cal["adj"],
-                "areas_ha": areas,
-                "validation": checks,
-                "stage_now": b["stage"]["now"]["stage"],
-                "stage_p5": b["stage"]["p5"]["stage"],
-                "states": {i["id"]: i["state"] for i in (items or [])},
+                "adj": sp.calibration["adj"],
+                "areas_ha": sp.areas_ha,
+                "validation": sp.validation,
+                "stage_now": ru["stage_now"],
+                "stage_p5": ru["stage_p5"],
+                "states": {i["id"]: i["state"] for i in items},
+                "n_proposals": {i["id"]: len(i.get("proposals", [])) for i in items},
                 "timing": out["timing"],
             }
         )
-        print(f"  저장 round_{rd.no}.json · 회차 {time.time() - t_round:.0f}초", flush=True)
+        print(
+            f"  저장 round_{rd.no}/ · round_{rd.no}.json · 회차 {time.time() - t_round:.0f}초",
+            flush=True,
+        )
     (a.out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8"
     )

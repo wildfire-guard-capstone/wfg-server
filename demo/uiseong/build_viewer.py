@@ -1,6 +1,7 @@
+# ruff: noqa: E501
 """데모 결과(round_*.json) → 한 장짜리 뷰어 HTML(로컬에서 연다).
 
-    python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <데모 데이터> --out <viewer.html>
+    python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <demo-uiseong/input> --out <viewer.html>
 
 지도(Leaflet · OpenStreetMap 타일): P1 ~ P8 예측 범위, P0(관측 화선),
 8시간 안 뒤 상황도 화선(검증, 점선),
@@ -57,8 +58,8 @@ def _round(path: Path) -> dict:
                 "id": lg["id"],
                 "reused_from": lg.get("reused_from"),
                 "evidence": lg.get("evidence"),
-                "extra": lg.get("extra"),
-                "missing": lg.get("missing"),
+                "queries": (lg.get("retrieval") or {}).get("queries"),
+                "dropped": lg.get("dropped"),
                 "attempts": [{"errors": a["errors"]} for a in lg.get("attempts", [])],
             }
         )

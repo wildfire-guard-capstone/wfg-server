@@ -1,18 +1,21 @@
 # 의성 데모: 확산 예측부터 AI 제안 생성까지
 
 2025-03-22 의성 산불(안평면 괴산리)을 상황도 화선 보고 4번(12:50 · 13:10 · 13:45 · 14:20)마다
-**ELMFIRE 예측 → 규칙 엔진 → 에이전트(EXAONE)** 순서로 실제로 돌려 회차별 제안서를 만든다.
-결과는 한 장짜리 뷰어 HTML로 본다.
+**입력 → 1 확산 예측(ELMFIRE) → 2 규칙 판정 → 3 LLM 대응 생성(EXAONE + RAG) → 출력** 순서로 실제로 돌려
+회차별 제안서를 만든다. 결과는 한 장짜리 뷰어 HTML로 본다. **코드 · 데이터 구조와 디버깅 방법은
+[`docs/의성-데모-구조서.md`](../../docs/의성-데모-구조서.md)**, 입력 데이터는 `demo-uiseong/input/README.md`.
 
 ```
-상황도 k보 화선 ─┬─ 보정: 확산속도 배율(ELMFIRE adj) = 두 배율의 기하평균           (run_demo.calibrate_round)
-                 │        ① k−1보 → k보 화선 면적 맞춤 ② k보 화선 + 발화 뒤 평균 성장 속도 1시간
-                 └─ 예측: k보 화선에서 8시간 → P0 ~ P8          (spread/perimeter_run.py)
-지도 자료 + 현장 입력(상황 보고) + P0 ~ P8 → rules.Inputs       (demo/uiseong/data.py · rounds.py)
-  → build_llm_input → 엔진 JSON 16묶음 + 12개 항목 LLM 입력      (rules/)
-  → 항목별: 근거 청크(앵커 ID + 보충 검색) + EXAONE → 검사 → 조립 (agent/)
-  → round_k.json → build_viewer.py → viewer.html
+input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
+  → step1_spread.py  보정(두 배율의 기하평균) · 8시간 예측 → P0 ~ P8 · 뒤 상황도 검증      → round_k/01_spread/
+  → step2_rules.py   rules.Inputs → build_llm_input(판정 16묶음 + 12개 항목)              → round_k/02_rules/
+  → step3_agent.py   항목마다: 판정만 → 근거 검색(질의 3개 + 판정 근거) → EXAONE 제안
+                     → 검사(판정 값 · 근거 · 권한 · 형식) → 1회 다시 → 근거 표기 · 조립     → round_k/03_rag · 04_llm · 05_output/
+  → round_k.json → build_viewer.py → viewer.html · verify.py → 검증_보고.md
 ```
+
+**11/8 재설계(사용자 결정):** 규칙 엔진은 규칙으로 판단할 수 있는 것만 판정해 넘기고, 무엇을 할지는 LLM이
+표준매뉴얼 · 법령 검색 결과에서 골라 쓴다. 11/7 형식의 문단 자리(topic · anchors)와 11/8 오전의 고정문(`agent/fixed.py`)은 없앴다.
 
 ## 회차(11/7 사용자 결정)
 
@@ -44,48 +47,37 @@
 
 | 무엇 | 어디 | 비고 |
 |---|---|---|
-| ELMFIRE 1.1 | `~/wfg/elmfire/bin/elmfire` | `elmfire-linux` 소스를 conda 환경 `wfg-elm`(gfortran · openmpi · GDAL 3.10)으로 `make_gnu.sh fast` 빌드. CPU로 돈다 |
-| ELMFIRE 입력 | `~/wfg/demo/deck` → `~/wfg/elmfire/deck` | 「ELMFIRE 입력」(11/1) 그대로. 회차마다 phi · adj · 시간 창만 바꾼 실행 폴더를 만든다 |
-| 데모 데이터 | `~/wfg/demo/data` | `prepare_data.py` 결과(지도 GeoJSON · SGIS 경계 · 화선). 공개 저장소에 넣지 않는다 |
-| 근거 검색 | 127.0.0.1:8032 | `rag-pipeline/serve_evidence.py`(KURE-v1 + FAISS + PostgreSQL). 표준매뉴얼 17쪽(SM-pNNN) 추가 |
+| 입력 | `~/wfg/demo/input` | 로컬 `demo-uiseong/input`과 같은 구조(ELMFIRE 입력은 `~/wfg/demo/deck` 사본) |
+| 검증 기준 | `~/wfg/demo/reference` | 시나리오 v3 회차 1 목표 문단 · 백서 실제 기록 |
+| ELMFIRE 1.1 | `~/wfg/elmfire/bin/elmfire` | conda `wfg-elm`(gfortran · openmpi · GDAL 3.10)으로 빌드, CPU로 돈다 |
+| 근거 검색 | 127.0.0.1:8032 | `rag-pipeline/serve_evidence.py`(KURE-v1 + FAISS + PostgreSQL). 색인 빌드 `20261108-144205`(법령 1,475 + 표준매뉴얼 조각 155) |
 | LLM | 127.0.0.1:8031 | EXAONE 4.0 32B AWQ, vLLM 0.10.1.1(`rag-pipeline/deploy/server/llm.sh start`) |
 
+켜고 끄기 · 실행 명령은 구조서 3장. 자주 쓰는 것:
+
 ```bash
-# 1) 서비스 켜기(공용 서버라 데모가 끝나면 끈다)
-bash ~/wfg/rag-pipeline/deploy/server/db.sh start
-source ~/wfg/rag-pipeline/deploy/server/env.sh   # WFG_DB_DSN(없으면 근거 서버가 바로 끝난다)
-nohup setsid ~/miniforge3/envs/wfg/bin/python ~/wfg/rag-pipeline/serve_evidence.py --device cuda > ~/wfg/logs/evidence.log 2>&1 < /dev/null &
-bash ~/wfg/rag-pipeline/deploy/server/llm.sh start
-# 2) 실행(약 n분) → ~/wfg/demo/runs/<시각>/round_k.json
-cd ~/wfg/demo/wfg-server && bash demo/uiseong/run_demo.sh
-# 3) 끄기
-bash ~/wfg/rag-pipeline/deploy/server/llm.sh stop; pkill -f "[s]erve_evidence.py"; bash ~/wfg/rag-pipeline/deploy/server/db.sh stop
+cd ~/wfg/demo/wfg-server
+OUT=~/wfg/demo/runs/<이름> bash demo/uiseong/run_demo.sh                                       # 전부
+OUT=~/wfg/demo/runs/<이름> bash demo/uiseong/run_demo.sh --reuse-spread ~/wfg/demo/runs/rebuild1  # 규칙 · 제안만
+PYTHONPATH=. ~/miniforge3/envs/wfg-elm/bin/python -X utf8 -m demo.uiseong.verify --runs ~/wfg/demo/runs/<이름> --ref ~/wfg/demo/reference
 ```
 
-보정 방법 비교(ELMFIRE만, 약 5분): `python -m demo.uiseong.backtest --data … --deck … --elmfire … --out <결과>`
-(환경 변수는 `run_demo.sh`와 같다). 다른 방법으로 데모를 돌리려면 `run_demo.sh --calibration interval|rate|from_first`.
+보정 방법 비교(ELMFIRE만, 약 5분): `python -m demo.uiseong.backtest --input … --elmfire … --out <결과>`.
+뷰어(로컬): `uv run python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <demo-uiseong/input> --out viewer.html`.
 
-뷰어(로컬): 결과 폴더를 내려받아
-`uv run python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <데모 데이터> --out viewer.html`.
+## LLM 대응 생성(agent/, 11/8 재설계)
 
-## 에이전트 규칙(agent/)
-
-- 호출 1회 = 지시문 + `common` + 항목(조립기 블록은 자리만) + 근거 청크 본문. 출력은 action마다 `{action, category, text}`
-- 근거 = `rule_basis ∪ anchor_basis` 청크를 ID로 가져오고, 항목 이름 + 주제로 보충 검색 2개
-- 검사: 입력에 없는 숫자 · 시각 · 한글 수사 · 이름, anchors 밖 근거 표기, 근거 없는 할 일 문장, 「등」, 항목별 금칙
-  (S3 추가 대수, S4 운항 가능 단정, E4 배정 인원 · 경로, E5 문안)
-- **고정문(`agent/fixed.py`, 11/8):** 판정 칸만으로 정해지는 문단은 LLM을 부르지 않고 틀을 채운다
-  — S1(단계 · 격상 · 지휘권), S3(투입 · 동원 범위), S4(시간대 · 바람 · 헬기 재투입), 목록 · 표 바로 앞 문단
-  (S2-a1 · S6-a1 · E1-a1 · E2-a1 · E2-a2 · E3-a1 · E3-a3 · E4-a1 · E4-a2 · E5-a1), E3-a2 · E3-a4 · E4-a3 · E5-a2.
-  읽는 사람이 시 · 도지사 이상이면 시장 · 군수 권한은 「의성군수에게 …하도록 지시하십시오」로 쓴다.
-  LLM은 S2-a2 · a3(주택 · 송전시설 보호)과 S5(인력 안전)만 쓴다
-- 의미 검사(LLM 문단): 할 일 부정(「협의하지 않」), 「~하십시오」 없음, 상위 읽는 사람의 대피명령 · 위험구역 직접 지시,
-  「최소 N동」의 최소 빠짐, 문장 수(S4 2 · 나머지 3), 큰 도로 문단은 「요청하십시오」. 구분은 문장의 할 일에 맞춘다
-- 목록 · 표 바로 앞 문단은 마을 · 시설 이름 없이 「아래 …」로 가리킨다(목표 문단 꼴). 문체 예시는 값을 가려서 준다
-- 실패하면 문제 목록(+ 목표 문단 꼴)을 주고 1회 다시. 그래도 실패하면 LLM 문단 자리만 「문장 생성 실패」(고정문 · 판정 · 목록 · 표는 남김)
-- 추론 모드는 기본 끔(`--thinking S2,S4,S5`로 켬). 11/7 결정은 S2 · S4 · S5만 켜고 비교였는데, 켜 보니 세 항목 모두
-  영어 추론이 4,096토큰을 넘겨(호출당 약 7.5분) JSON이 잘렸다
-- 입력이 직전 회차와 같은 항목은 직전 문단을 다시 쓴다(11/7)
+- **넘기는 것:** 규칙 엔진 항목의 판정만 — `finding` · `facts` · `withheld` · `do_not_state` · 조립기 목록 · 표 · ※(`agent/judgment.py`).
+  문단 자리(action의 topic · anchors · see) · `anchor_basis` · 조립기 고정 문장은 넘기지 않는다
+- **근거 검색:** 항목마다 질의 3개(항목 범위 · 이름 + 판정 요약 · 범위 + 상황) → 상위 8개 + 규칙 엔진 판정 근거(`rule_basis`)(`agent/retrieve.py`)
+- **프롬프트:** 지시문(근거에 적힌 조치만, 판정 값 그대로, 지금 할 일과 앞으로의 일 구분, 읽는 사람에게 「~하십시오」, 대상 모아 쓰기) +
+  다른 항목 목록 + 읽는 사람의 권한(도지사면 「의성군수에게 …하도록 지시하십시오」) + 상황 + 판정 + 근거 발췌(`agent/prompt.py`)
+- **출력:** json_schema로 묶은 `{"proposals": [{category, text, evidence}]}` 1~5개. evidence는 그 호출에 준 청크 ID만 고를 수 있다.
+  근거 표기는 `agent/cite.py`가 evidence로 만든다(LLM은 괄호를 쓰지 않음)
+- **검사:** 근거 없음 · 판정에 없는 숫자/시각/수사/단계/이름 · 입력 설명 옮김 · 할 일 부정 · 「~하십시오」 없음 · 방법 빠진 말 ·
+  3문장 · 320자 · 권한 · 「최소 N동」 · 「등」 · 항목 금칙 · 반복(`agent/check.py`). 실패하면 1회 다시, 그래도 걸린 제안만 뺀다
+- **시나리오 목표 문단은 예시로 넣지 않는다:** 어떤 조치를 쓸지 알려 주게 되고 회차 1 검증이 무의미해진다
+- 추론 모드는 기본 끔(`--thinking`), 입력이 직전 회차와 같은 항목은 직전 제안을 다시 쓴다
 
 ## 실행 결과(2026-11-08, `runs/final7`)
 

@@ -1,225 +1,194 @@
-# ruff: noqa: E501  (지시문 · 항목별 주의는 문장 단위로 둔다)
-"""LLM 입력: 호출 1회 = 지시문 + common + item(조립기 블록은 자리만) + 근거 청크 본문(11/7 형식).
+# ruff: noqa: E501  (지시문은 문장 단위로 둔다)
+"""LLM 입력(11/8 재설계): 호출 1회 = 항목 하나 = 지시문 + 읽는 사람 · 상황 + 규칙 엔진 판정 + 근거 발췌.
 
-- 조립기가 채우는 list · table · note · fixed 블록은 내용을 빼고 자리 표시만 남긴다(LLM이 명단을 다시 쓰지 않게,
-  그러나 「아래」 목록이 붙는다는 것은 알게)
-- withheld · targets · rule_basis · anchor_basis는 넘기지 않는다. do_not_state만 언급 금지로 넘긴다
-- 근거 청크는 앵커(rule_basis ∪ anchor_basis)를 ID로 가져오고, 보충 검색 결과를 덧붙인다
+- 규칙 엔진은 판정만 넘긴다(judgment.py). 문단 자리 · 주제 · 근거 쪽을 미리 정하지 않는다.
+- 무엇을 제안할지는 LLM이 근거 발췌(retrieve.py)에서 고르고, 제안마다 근거 청크 ID(evidence)를 단다.
+  근거 표기([p.79])는 cite.py가 evidence로 만든다.
+- 출력 형식은 vLLM json_schema로 묶는다: evidence는 이번에 준 청크 ID 중에서만 고를 수 있다.
+- 시나리오 목표 문단(LLM-출력-예시)은 예시로 넣지 않는다. 어떤 조치를 쓸지 알려 주게 되고, 회차 1 검증이 무의미해진다.
 """
 
 import json
-import re
-from pathlib import Path
 from typing import Any
 
 CATEGORIES = ["즉시", "대기", "협의", "요청"]
+MAX_PROPOSALS = 5
+MAX_EVIDENCE = 4
 
-SYSTEM = """당신은 산불 통합지휘권자에게 올릴 대응 제안서의 문단을 쓰는 보조자입니다.
-규칙 엔진이 판정한 값(finding, facts)과 근거 문서 발췌를 받아, 항목 안의 action 자리마다 문단 하나를 씁니다.
+SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대응 제안서의 한 항목을 쓰는 보조자입니다.
+입력은 두 가지입니다.
+- [규칙 엔진 판정]: 규칙으로 정한 값(단계 · 지휘권자 · 구역 · 마을 · 도달 시각 · 면적 · 인원 · 자원 · 바람 · 일몰)과 그 목록 · 표입니다. 확정된 사실로 다룹니다.
+- [근거 발췌]: 표준매뉴얼 · 법령 · 규정에서 찾은 원문입니다. 무엇을 해야 하는지는 여기서 찾습니다.
 
-[반드시 지킬 것]
-1. 판정을 바꾸지 마십시오. 단계·구역·시각·면적·인원은 finding과 facts에 적힌 그대로 씁니다.
-2. 숫자는 finding·facts·근거 발췌에 있는 것만 씁니다. 더하기·빼기·반올림으로 새 숫자를 만들지 마십시오.
-3. 마을·시설·기관·도로 이름은 finding·facts에 있는 것만 씁니다.
-4. do_not_state에 적힌 내용은 언급하지 마십시오(값을 추측하지도 마십시오).
-5. 문단은 1~3문장, 합쇼체로 씁니다. 할 일은 「~하십시오」로 끝내고, 누가 누구에게 무엇을 언제까지 할지 구체적으로 씁니다.
-   「등」·「등의」·「등을」은 쓰지 않습니다. 근거 발췌에 「등」이 있어도 옮기지 말고 대상을 나열하거나 빼십시오.
-6. 할 일을 말하는 문장은 마침표 바로 앞, 괄호 하나에 근거를 붙입니다.
-   맞음: 「… 협의하십시오 [p.73·91].」 「… 인계하십시오 [p.72·114, 시행령 제21조①].」
-   틀림: 「… 협의하십시오. [p.73, p.91]」(마침표 뒤)
-   근거는 그 action의 anchors에서만 고릅니다. 상황만 설명하는 문장과 anchors가 빈 action에는 근거를 달지 않습니다.
-7. action에 see가 있을 때만 문단 끝에 「세부 내용은 S6 참조.」처럼 see 값을 넣어 붙입니다. see가 없으면 「참조」를 쓰지 않습니다.
-8. facts에 없는 상황(강풍·야간·급변·피해 발생)을 지어내지 마십시오. 예: 풍속이 3.4 m/s이면 「강풍」이라고 쓰지 않습니다.
-   근거 발췌는 할 일과 근거를 고르는 데만 씁니다. 발췌 문장을 그대로 옮겨 붙이거나 topic과 다른 조치(출동·폴리스라인·장비 점검)를 늘어놓지 마십시오.
-9. 바로 뒤에 조립기 목록·표(type이 list·table)가 붙는 action은 마을·시설·대피소 이름과 인원을 쓰지 말고 「아래 마을」·「아래 시각까지」처럼 가리킵니다. 목록이 이미 보여 줍니다.
-10. 각 action의 topic이 그 문단의 주제이고, use에 적힌 facts 키가 쓸 값입니다. 다른 action의 주제를 끌어오지 마십시오.
-11. category는 즉시(지금 할 일)·대기(조건이 되면 할 일, 미리 준비할 일)·협의(산림청장 등 발령권자와 협의)·요청(다른 기관에 요청) 중 하나입니다. 잠재 위험구역(8시간 안) 조치는 대기입니다.
+[할 일]
+이번 판정 상황에서 읽는 사람이 지금 또는 곧 해야 할 조치를 근거 발췌에서 골라 이 항목의 대응 제안으로 씁니다.
+1. 조치는 근거 발췌에 적힌 것만 제안합니다. 제안마다 그 조치가 적힌 발췌 ID를 evidence에 넣고, 그 발췌에서 조치를 적은 문장을 글자 그대로 옮긴 부분(20~80자)을 quote에 넣습니다. 발췌에 없는 조치 · 기관 · 수치는 쓰지 않습니다. 먼저 근거 발췌 전체를 훑어 이번 판정 상황(시각 · 바람 · 대상)에 맞는 문장을 고르십시오.
+2. 판정 상황에 맞는 조치만 고릅니다. 판정에 없는 상황(강풍 · 야간 · 피해 발생 · 통신 두절)이나 판정에 없는 대상(도로 · 시설 · 마을)을 가정해 「…할 경우」로 제안하지 않습니다. 이 항목 범위 밖의 일은 [다른 항목]이 다루므로 쓰지 않습니다.
+   지금 할 일과 앞으로의 일을 구분합니다. 판정이 「5시간 뒤 2단계」 「지휘권자 의성군수 → 경상북도지사」 「19:20 ~ 20:20 닿을 수 있음」처럼 앞으로의 일이면, 그 시각 · 조건을 밝히고 「…까지(…되면) …하십시오」로 씁니다(구분 대기). 아직 일어나지 않은 일을 지금 하라고 쓰지 않습니다.
+3. 판정 값은 바꾸지 않습니다. 단계 · 시각 · 면적 · 인원 · 이름은 판정에 적힌 그대로 쓰고, 더하기 · 빼기 · 반올림으로 새 숫자를 만들지 않습니다. 숫자 · 시각 · 마을 · 시설 · 기관 이름은 판정과 발췌에 있는 것만 씁니다.
+4. withheld(판단하지 않은 것)와 do_not_state에 적힌 값은 추측해 쓰지 않습니다.
+5. 구체적으로 씁니다: 누가(읽는 사람, 또는 읽는 사람이 지시 · 요청할 기관) 무엇을 어디에(마을 · 시설 · 구간) 언제까지(판정의 시각) 하는지. 판정에 대상 이름과 시각이 있으면 문장에 넣습니다. 명단이 길면 「아래 목록의 마을」처럼 판정 자료의 목록을 가리켜도 됩니다.
+6. 읽는 사람의 권한에 맞게 씁니다. [읽는 사람의 권한]에 적힌 대로 씁니다.
+7. 제안서는 읽는 사람에게 직접 권하는 글입니다. 할 일은 반드시 읽는 사람에게 「~하십시오」로 씁니다.
+   - 읽는 사람이 직접 할 일: 「…을 발령하십시오」 「…을 산림청장과 협의하십시오」
+   - 소속 부서 · 하급 기관이 할 일: 「○○에게 …하도록 지시하십시오」
+   - 다른 기관에 맡길 일: 「○○에 …을 요청하십시오」
+   틀림: 「○○과장은 …하라」 「○○군수는 …해야 합니다」 「…조치를 취해야 합니다」(제삼자에게 시키거나 서술로 끝냄)
+   읽는 사람을 주어로 쓰지 않습니다(틀림: 「의성군수는 …하십시오」 → 맞음: 「…하십시오」).
+   제안 하나는 1~3문장, 합쇼체입니다. 근거가 되는 상황을 한 문장으로 먼저 밝힐 수 있습니다. 할 일을 부정하는 문장(「~하지 않습니다」)과 「등」은 쓰지 않습니다. 근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).
+   「보호 조치를 취하십시오」 「철저히 하십시오」처럼 방법이 빠진 말은 쓰지 말고, 근거 발췌에 적힌 구체적인 방법(무엇을 · 어떻게)을 씁니다. 발췌의 제목 · 일반 문구를 그대로 옮기지 말고 이번 상황(대상 · 시각)에 맞게 씁니다.
+8. 제안은 인명 보호와 급한 일부터 2~4개 씁니다. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「괴산리 · 석탑리 주민을 …」).
+9. category: 즉시(지금 할 일) · 대기(조건이 되면 할 일, 미리 준비할 일) · 협의(산림청장 등 발령권자와 협의) · 요청(다른 기관에 요청). 잠재 위험구역(5~8시간) 조치는 대기입니다.
 
-[출력] JSON 하나만: {"paragraphs": [{"action": "<action id>", "category": "<구분>", "text": "<문단>"}]}
-action마다 하나씩, 입력 순서대로 씁니다."""
+[출력] JSON 하나만: {"proposals": [{"category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문 그대로>"}]}"""
 
-
-STYLE = json.loads((Path(__file__).parent / "style_examples.json").read_text(encoding="utf-8"))[
-    "items"
-]
-# 문체 예시에만 나오는 고유 이름: 이번 입력에 없으면 검사에서 걸러 낸다
-STYLE_NAMES = {"운람사", "서산영덕고속도로", "서의성IC", "안동분기점", "한국도로공사"}
-_CITE = re.compile(r"(\[[^\[\]]+\])")
-# 예시 문장의 시설 · 도로 이름(지도 자료 이름 목록에 없는 것)
-EXAMPLE_PLACES = {
-    "신월리",
-    "원당리",
-    "신안리",
-    "괴산리",
-    "정자리",
-    "철파리",
-    "석탑리",
-    "안평면",
-    "옥산면",
-    "의성읍",
-    "후죽리",
-    "기쁨의집",
-    "의성자혜원",
+# 항목 범위: 이 항목이 다루는 것(검색 질의로도 쓴다)과 지킬 것(11/7 결정 · 근거 부족 규칙). 할 일을 정하지는 않는다
+ITEM_SCOPE = {
+    "S1": (
+        "산불 확산대응 단계 판정과 발령 · 격상 협의, 통합지휘권자와 지휘권 인계",
+        "공식 발령 단계는 입력받지 않으므로 단계는 「판정 기준상 ○단계」로 씁니다. 지금 단계와 5시간 뒤 단계, 지금 지휘권자와 다음 지휘권자를 구분해 지금 할 일과 기준을 넘을 때 할 일을 나눠 씁니다.",
+    ),
+    "S2": (
+        "산불 진화 우선순위와 인명 · 주택 · 국가기간시설(송전시설) · 국가유산 보호 조치",
+        "판정의 보호 대상(마을 주택 · 송전선 · 국가유산)마다 무엇으로 어떻게 지킬지 씁니다. 주민 대피는 E2가 다룹니다.",
+    ),
+    "S3": (
+        "진화자원(헬기 · 인력 · 장비) 투입 현황과 대응 단계별 진화자원 동원 범위, 응원 요청",
+        "투입 현황과 지금 · 5시간 뒤 동원 범위를 밝힙니다. 헬기 · 인력을 몇 대 · 몇 명 더 넣으라는 수치는 쓰지 않습니다(산정 기준 없음).",
+    ),
+    "S4": (
+        "주간 · 야간 시간대와 바람에 따른 진화 방식, 공중 진화와 지상 진화",
+        "판정의 일몰 시각과 최대 풍속 시각을 기준으로 시간대별 진화 방식을 씁니다. 헬기 운항 가능 여부는 판단하지 않습니다(운항 기준 없음).",
+    ),
+    "S5": (
+        "진화 인력 안전 관리: 안전장구, 위치 추적, 안전 교육, 위험 요소 전달, 철수 기준, 통신",
+        "판정의 주 확산 방향과 최대 풍속을 현장에 전달할 위험 요소로 씁니다.",
+    ),
+    "S6": ("유관기관 동원 · 협조 요청과 재난안전대책본부 · 산불현장 통합지휘본부 운영", ""),
+    "E1": ("주민 대피를 위한 위험구역(5시간) · 잠재 위험구역(8시간) 설정", ""),
+    "E2": ("주민 대피 대상 · 순서 · 시점, 대피명령, 야간 사전대피, 안전취약계층 우선 대피", ""),
+    "E3": ("요양원 · 요양병원 · 장애인 시설 같은 취약시설 거주자의 대피와 이송", ""),
+    "E4": (
+        "대피소 지정과 안내, 산불이 도로로 번질 때 교통 통제 · 우회도로 지정 · 도로 이용객 대피",
+        "대피소별 배정 인원과 대피 경로는 쓰지 않습니다.",
+    ),
+    "E5": ("재난문자 · 재난방송 · 마을방송으로 대피 정보 전파", "재난문자 문안은 쓰지 않습니다."),
+    "E6": ("유관기관에 할 요청: 거주자 이송, 교통 통제, 주민대피 지원, 재난방송 송출", ""),
 }
 
 
-def mask_example(text: str, names: set[str] = frozenset()) -> str:
-    """문체 예시의 값을 가린다: 숫자 → N, 시각 → HH:MM, 알려진 지명 · 시설명 → ○○(근거 표기는 그대로)."""
-    hide = sorted(set(names) | STYLE_NAMES | EXAMPLE_PLACES, key=len, reverse=True)
-    out = []
-    for i, part in enumerate(_CITE.split(text)):
-        if i % 2 == 0:  # 근거 표기 밖
-            part = re.sub(r"\d{1,2}:\d{2}", "HH:MM", part)
-            part = re.sub(r"(?<![A-Za-z\d])\d+(?:[.,]\d+)?", "N", part)
-            for name in hide:
-                part = part.replace(name, "○○")
-        out.append(part)
-    return "".join(out)
+def scope_of(item_id: str) -> str:
+    return ITEM_SCOPE.get(item_id, ("", ""))[0]
 
 
-# 항목별 주의(11/7 결정 · 매뉴얼 원칙). 판정이 아니라 쓰는 방법만 정한다
-HINTS = {
-    "S1": "공식 발령 단계는 입력받지 않으므로 단계는 「판정 기준상 ○단계」로 쓰고, 발령·격상은 「산림청장과 협의하십시오」로 씁니다. "
-    "요소(면적·풍속·시설)마다 단계가 다르면 그대로 밝힙니다. 지휘권: 100 ha 이상 대형산불은 시·도지사가 통합지휘하고, "
-    "넘을 때 즉시 알리고 상황 정보를 인계합니다(시행령 제21조②). 지금 지휘권자가 읽는 사람이면 그 사람에게 쓰고, "
-    "이미 인계받은 지휘권자에게는 인계받은 상황을 전제로 씁니다.",
-    "S2": "S2-a1은 대상 이름 없이 「진화 우선순위에 따라 아래 순서로 방어하고 보호하십시오」 꼴로 아래 목록을 가리킵니다. "
-    "나머지 문단은 그 대상(주택·송전시설·문화유산)을 어떻게 지킬지 씁니다.",
-    "S3": "투입 현황과 동원 범위(고시 별표)를 쓰고, 지휘권자가 할 일(가용 자원 집중 투입, 단계에 따른 응원 요청 준비)로 끝냅니다. "
-    "헬기·인력을 몇 대·몇 명 더 넣으라는 수치는 넣지 마십시오.",
-    "S4": "헬기 운항 가능 여부는 판단하지 않습니다(조립기가 ※ 문장을 붙임). 문단마다 한두 문장만 씁니다. "
-    "시간대 문단 = 지금 낮인지 밤인지와 일몰 시각에 맞춘 진화 방식(주간 진화 유지, 일몰 전 야간 진화 체제 준비). "
-    "바람 문단 = facts.max의 가장 센 시각·풍향·풍속을 밝히고 그 시간대에 지상 인력·진화장비 중심으로 바꿀 준비. "
-    "헬기 재투입 문단 = 바람이 약해지면 바로 다시 넣을 수 있게 이륙 준비 현황과 격납고 지역 풍속 확인.",
-    "S5": "투입 인력 안전 책임자에게 전달할 내용을 씁니다. 철수 기준은 규정 별표 3의 조건만 씁니다.",
-    "E1": "마을 이름은 아래 목록이 보여 주므로 문단에 쓰지 말고 「리 단위로 아래와 같이 구역을 설정하십시오」 꼴로 씁니다. "
-    "「○○ 전체」로 적힌 곳은 리 자료가 없어 읍면 단위로 넣은 곳입니다.",
-    "E2": "위험구역은 전 주민 즉시 대피, 잠재 위험구역은 대피 준비와 취약계층 사전대피입니다. 야간에 닿으면 일몰 전 사전대피입니다. "
-    "대피명령은 시장·군수의 권한이므로 읽는 사람이 시·도지사이면 「군수에게 지시하십시오」로 씁니다.",
-    "E3": "취약시설은 시설별 우선 대피와 이송 준비를 지시합니다. 주야간보호는 운영 여부 확인만 씁니다.",
-    "E4": "대피소 배정 인원과 대피 경로는 쓰지 않습니다. 마을·대피소 이름은 아래 목록이 보여 주므로 "
-    "대피소 문단(E4-a1·a2)에 쓰지 말고 「아래와 같이 지정하고 안내하십시오」 꼴로 씁니다. 큰 도로 문단만 도로·구간 이름을 씁니다. "
-    "큰 도로 문단 = 어느 도로 어느 구간에 몇 시부터 불이 닿을 수 있는지 밝히고, 관할 경찰서와 도로 관리기관에 교통통제·우회도로 지정·도로 이용객 대피를 요청하십시오로 끝냅니다. "
-    "도로 이름이 「이름 없는 도로」이면 구간(리 이름)만 씁니다.",
-    "E5": "재난문자 문안은 쓰지 않습니다. 송출 요청과 전파 수단만 씁니다.",
-}
-
-
-def strip_item(item: dict[str, Any], fixed: dict[str, dict] | None = None) -> dict[str, Any]:
-    """LLM에 넘길 항목: 판정 칸 + 문단 자리. 조립기 블록은 자리 표시만.
-
-    fixed = 조립기가 이미 쓴 action 문단: 다시 쓰지 않게 글을 보여 주고 type을 fixed로 둔다.
-    """
-    fixed = fixed or {}
-    sections = []
-    for s in item["sections"]:
-        blocks = []
-        for b in s["blocks"]:
-            if b["type"] == "action" and b["id"] in fixed:
-                blocks.append({"type": "fixed", "writer": "조립기", "text": fixed[b["id"]]["text"]})
-            elif b["type"] == "action":
-                blocks.append({k: v for k, v in b.items() if k != "type"} | {"type": "action"})
-            else:
-                blocks.append({"type": b["type"], "writer": "조립기(내용은 따로 붙음)"})
-        sections.append({"title": s.get("title", ""), "blocks": blocks})
-    keep = ("id", "name", "status", "finding", "facts")
-    return {
-        **{k: item[k] for k in keep if k in item},
-        "sections": sections,
-        "do_not_state": item.get("do_not_state", []),
-    }
-
-
-def actions(item: dict[str, Any]) -> list[dict[str, Any]]:
-    return [b for s in item["sections"] for b in s["blocks"] if b["type"] == "action"]
-
-
-def chunk_label(c: dict[str, Any]) -> str:
-    if c.get("doc_id") == "SM":
-        return f"표준매뉴얼 p.{c['page']}"
-    return f"{c['doc_name']} {c.get('section') or ''}".strip()
-
-
-def evidence_text(chunks: list[dict[str, Any]], extra: list[dict[str, Any]]) -> str:
+def evidence_text(chunks: list[dict[str, Any]]) -> str:
     parts = []
     for c in chunks:
-        parts.append(f"■ [{c['chunk_id']}] {chunk_label(c)}\n{c['text']}")
-    for c in extra:
-        parts.append(f"■ [보충 {c['chunk_id']}] {chunk_label(c)}\n{c['text']}")
+        where = f"{c.get('doc_name', '')} {c.get('section') or ''}".strip()
+        parts.append(
+            f"■ {c['chunk_id']} ({c.get('label', '')} · {where} · {c.get('origin', '')})\n{c['text']}"
+        )
     return "\n\n".join(parts)
 
 
-def messages(
-    common: dict,
-    item: dict,
-    chunks: list[dict],
-    extra: list[dict],
-    names: set[str] = frozenset(),
-    fixed: dict[str, dict] | None = None,
-) -> list[dict[str, str]]:
-    fixed = fixed or {}
-    body = {"common": common, "item": strip_item(item, fixed)}
-    parts = [
-        "아래 입력에서 type이 action인 자리만 문단을 쓰십시오(type이 fixed인 문단은 조립기가 이미 썼습니다)."
-    ]
-    if item["id"] in HINTS:
-        parts.append(f"[이 항목에서 주의할 것]\n{HINTS[item['id']]}")
-    examples = [p for p in STYLE.get(item["id"], []) if p["action"] not in fixed]
-    if examples:
-        ex = "\n".join(f"- {mask_example(p['text'], names)}" for p in examples)
-        parts.append(
-            "[문체 예시] 다른 상황의 목표 문단입니다(값은 N · HH:MM · ○○로 가림). 문장 꼴과 구체성만 참고하십시오. "
-            "예시에 있는 대상이라도 이번 facts에 없으면 쓰지 말고, 값·이름·action 구성은 반드시 이번 입력을 따르십시오.\n"
-            + ex
+UPPER = ("도지사", "특별시장", "광역시장", "특별자치", "산림청장")
+
+
+def head_of(sigungu: str) -> str:
+    """의성군 → 의성군수, ○○구 → ○○구청장, ○○시 → ○○시장."""
+    if sigungu.endswith("군"):
+        return sigungu + "수"
+    if sigungu.endswith("구"):
+        return sigungu + "청장"
+    return sigungu + "장"
+
+
+def authority(common: dict) -> str:
+    """읽는 사람의 권한 줄(재난안전법 제40조: 대피명령은 시장 · 군수 · 구청장). 판정이 아니라 법이 정한 권한이다."""
+    reader = common.get("reader", "")
+    head = (
+        head_of((common.get("incident") or {}).get("sigungu", ""))
+        if (common.get("incident") or {}).get("sigungu")
+        else "시장 · 군수"
+    )
+    if any(u in reader for u in UPPER):
+        return (
+            f"읽는 사람은 {reader}입니다. 대피명령 · 대피 권고 · 위험구역 설정 · 주민대피는 {head}의 권한이므로 "
+            f"「{head}에게 …하도록 지시하십시오」로 씁니다. 「{reader}는 …」처럼 제삼자로 쓰지 않습니다."
         )
-    parts.append("[입력]\n" + json.dumps(body, ensure_ascii=False, indent=1))
-    parts.append("[근거 발췌]\n" + evidence_text(chunks, extra))
+    return (
+        f"읽는 사람은 {reader}입니다. {reader}가 직접 할 일은 「…하십시오」로, 소속 부서 · 읍면이 할 일은 "
+        f"「○○에게 …하도록 지시하십시오」로 씁니다. 「{reader}는 …해야 합니다」처럼 제삼자로 쓰지 않습니다."
+    )
+
+
+def messages(common: dict, judgment: dict, chunks: list[dict]) -> list[dict[str, str]]:
+    scope, rule = ITEM_SCOPE.get(judgment["id"], ("", ""))
+    head = f"이번 항목: {judgment['id']} {judgment.get('name', '')}"
+    if scope:
+        head += f"\n이 항목이 다루는 것: {scope}"
+    if rule:
+        head += f"\n이 항목에서 지킬 것: {rule}"
+    situation = {
+        k: common.get(k)
+        for k in ("reader", "incident", "proposal", "current_stage", "commander")
+        if k in common
+    }
+    judged = {k: judgment.get(k) for k in ("finding", "facts", "withheld", "do_not_state")}
+    others = " · ".join(
+        f"{k} {v[0].split(',')[0]}" for k, v in ITEM_SCOPE.items() if k != judgment["id"]
+    )
+    parts = [
+        head,
+        "[다른 항목 — 이 항목에 쓰지 않음]\n" + others,
+        "[읽는 사람의 권한]\n" + authority(common),
+        "[읽는 사람 · 상황]\n" + json.dumps(situation, ensure_ascii=False),
+        "[규칙 엔진 판정]\n" + json.dumps(judged, ensure_ascii=False),
+    ]
+    if judgment.get("data"):
+        parts.append(
+            "[판정 자료 — 제안 아래에 목록 · 표로 함께 보입니다]\n" + "\n".join(judgment["data"])
+        )
+    parts.append("[근거 발췌]\n" + evidence_text(chunks))
+    parts.append("위 판정 상황에 맞는 대응 제안을 근거 발췌에서 골라 JSON으로 쓰십시오.")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def schema(item: dict[str, Any], only: set[str] | None = None) -> dict[str, Any]:
-    ids = [a["id"] for a in actions(item) if only is None or a["id"] in only]
+def schema(evidence_ids: list[str]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "paragraphs": {
+            "proposals": {
                 "type": "array",
-                "minItems": len(ids),
-                "maxItems": len(ids),
+                "minItems": 1,
+                "maxItems": MAX_PROPOSALS,
                 "items": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ids},
                         "category": {"type": "string", "enum": CATEGORIES},
                         "text": {"type": "string"},
+                        "quote": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": MAX_EVIDENCE,
+                            "items": {"type": "string", "enum": evidence_ids},
+                        },
                     },
-                    "required": ["action", "category", "text"],
+                    "required": ["category", "text", "evidence", "quote"],
                 },
             }
         },
-        "required": ["paragraphs"],
+        "required": ["proposals"],
     }
 
 
-def retry_message(
-    errors: list[str], paras: list[dict[str, Any]], names: set[str] = frozenset()
-) -> dict[str, str]:
-    bad = {e.split(":")[0] for e in errors}
-    shown = "\n".join(
-        f"- {p.get('action')}: {p.get('text')}" for p in paras if p.get("action") in bad
-    )
-    # 목록 앞 문단 이름 문제: 같은 action의 목표 문단 꼴(값 가림)을 보여 준다
-    forms = []
-    for e in errors:
-        aid = e.split(":")[0]
-        if "아래 목록이" in e:
-            ex = [p for ps in STYLE.values() for p in ps if p["action"] == aid]
-            if ex:
-                forms.append(f"- {aid}: {mask_example(ex[0]['text'], names)}")
+def retry_message(errors: list[str], proposals: list[dict[str, Any]]) -> dict[str, str]:
+    shown = "\n".join(f"- 제안 {i + 1}: {p.get('text')}" for i, p in enumerate(proposals))
     return {
         "role": "user",
-        "content": "검사에서 아래 문제가 나왔습니다. 문제를 고쳐 같은 JSON 형식으로 모든 action을 다시 쓰십시오.\n"
+        "content": "검사에서 아래 문제가 나왔습니다. 문제를 고쳐 같은 JSON 형식으로 제안을 모두 다시 쓰십시오. "
+        "근거 발췌에서 찾을 수 없는 조치는 빼십시오.\n"
         + "\n".join(f"- {e}" for e in errors)
-        + (f"\n\n[문제가 있던 문단]\n{shown}" if shown else "")
-        + ("\n\n[이렇게 이름 없이 쓰십시오]\n" + "\n".join(dict.fromkeys(forms)) if forms else ""),
+        + (f"\n\n[직전 제안]\n{shown}" if shown else ""),
     }

@@ -1,10 +1,10 @@
 """확산 예측 보정 방법 비교: 회차 예측을 뒤 상황도 화선으로 검증한다(GPU 서버, ELMFIRE만).
 
-    python -m demo.uiseong.backtest --data <데모 데이터> --deck <ELMFIRE 입력>
-        --elmfire <실행 파일> --out <결과> [--grid 1,1.5,2,2.75,3.5,5,7] [--workers 4]
+    python -m demo.uiseong.backtest --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
+        [--grid 1,1.5,2,2.75,3.5,5,7] [--workers 4]
 
 1. 격자: 회차마다 배율 격자로 8시간 예측 → 뒤 화선과 면적비 · IoU(어떤 배율이 맞았나)
-2. 방법: run_demo.CAL_METHODS 마다 회차 배율 → 8시간 예측 → 같은 검증.
+2. 방법: step1_spread.CAL_METHODS 마다 회차 배율 → 8시간 예측 → 같은 검증.
    blend = interval과 rate 배율의 기하평균(계산만)
 점수: 회차마다 |ln(예측 면적 ÷ 실측 면적)| 평균 → 회차 평균(작을수록 좋음), 치우침 = ln 평균
 결과: <out>/backtest.json
@@ -19,8 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from demo.uiseong.data import MapData
-from demo.uiseong.rounds import ROUNDS
-from demo.uiseong.run_demo import CAL_METHODS, calibrate_round, validate
+from demo.uiseong.rounds import load
+from demo.uiseong.step1_spread import CAL_METHODS, calibrate_round, validate
 from spread import perimeter_run as pr
 
 
@@ -33,7 +33,7 @@ def score(checks: list[dict]) -> dict:
     }
 
 
-def one_round(deck, work: Path, md: MapData, rd, grid: list[float]) -> dict:
+def one_round(deck, work: Path, md: MapData, rd, sc, grid: list[float]) -> dict:
     observed = md.report(rd.at)
     done: dict[float, dict] = {}
 
@@ -51,7 +51,7 @@ def one_round(deck, work: Path, md: MapData, rd, grid: list[float]) -> dict:
     out = {"round": rd.no, "at": rd.at, "grid": [forecast(k) for k in grid], "methods": {}}
     adjs = {}
     for m in (m for m in CAL_METHODS if m != "blend"):  # blend는 interval · rate에서 계산만
-        cal = calibrate_round(deck, work, md, rd, m)
+        cal = calibrate_round(deck, work, md, rd, sc, m)
         adjs[m] = cal["adj"]
         out["methods"][m] = {"how": cal["from"], "parts": cal["parts"]}
     adjs["blend"] = math.sqrt(adjs["interval"] * adjs["rate"])
@@ -90,19 +90,22 @@ def table(rounds: list[dict]) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", type=Path, required=True)
-    ap.add_argument("--deck", type=Path, required=True)
+    ap.add_argument("--input", type=Path, required=True)
+    ap.add_argument("--deck", type=Path, help="기본 <input>/elmfire_deck")
     ap.add_argument("--elmfire", required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--grid", default="1,1.5,2,2.75,3.5,5,7")
     ap.add_argument("--workers", type=int, default=4)
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    md = MapData(a.data)
-    deck = pr.Deck(a.deck, a.elmfire, env={})
+    md = MapData(a.input)
+    sc = load(a.input)
+    deck = pr.Deck(a.deck or a.input / "elmfire_deck", a.elmfire, env={})
     grid = [float(x) for x in a.grid.split(",")]
     with ThreadPoolExecutor(a.workers) as ex:
-        rounds = list(ex.map(lambda rd: one_round(deck, a.out / "_elmfire", md, rd, grid), ROUNDS))
+        rounds = list(
+            ex.map(lambda rd: one_round(deck, a.out / "_elmfire", md, rd, sc, grid), sc.rounds)
+        )
     (a.out / "backtest.json").write_text(
         json.dumps(rounds, ensure_ascii=False, indent=1), encoding="utf-8"
     )

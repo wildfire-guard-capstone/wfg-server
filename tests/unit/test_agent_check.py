@@ -1,157 +1,113 @@
-"""에이전트 문장 검사 · 조립의 핵심 경우."""
+"""제안 검사(11/8 재설계): 근거 · 판정 값 · 권한 · 형식."""
 
 from agent import check
-from agent.generate import assemble
 
-ITEM = {
-    "id": "S1",
-    "name": "대응단계",
-    "finding": "현재 기준 1단계(피해면적 48.5 ha) · P5 기준 2단계(피해면적 363 ha)",
-    "facts": {
-        "now": {"area_ha": 48.5, "wind_ms": 3.4},
-        "area": {"slices": [{"until": "14:50", "ha": 205}]},
-    },
-    "sections": [
-        {
-            "title": "1. 단계",
-            "blocks": [
-                {
-                    "type": "action",
-                    "id": "S1-a1",
-                    "topic": "현재",
-                    "use": ["now"],
-                    "anchors": ["p.73", "p.91"],
-                },
-                {"type": "list", "writer": "조립기", "rows": [{"text": "**신월리**"}]},
-                {
-                    "type": "action",
-                    "id": "S1-a2",
-                    "topic": "지휘권",
-                    "use": [],
-                    "anchors": ["p.72", "시행령 제21조①"],
-                    "see": "S6",
-                },
-            ],
-        }
-    ],
-}
-ALLOWED = check.allowed_from(ITEM["finding"], ITEM["facts"], "제21조 100 ha")
+JUDGED = "의성군수 확산대응 1단계 피해면적 48.5 ha 신월리 주택 최소 2동 14:50 경상북도지사"
+EV = {"SM-p079-s02", "SM-p091-s01"}
+EV_TEXT = "보호 대상 건물 둘레에 소방차와 진화차를 모아 두고 필요하면 헬기로 물을 뿌림 ... 8.2km"
+ALLOWED = check.allowed_from(JUDGED, EV_TEXT)
+NAMES = {"신월리", "석탑리"}
 
 
-A2 = "지휘 체계를 유지하십시오 [p.72, 시행령 제21조①]."
-
-
-def _p(a1: str, a2: str = A2) -> list[dict]:
-    return [
-        {"action": "S1-a1", "category": "즉시", "text": a1},
-        {"action": "S1-a2", "category": "대기", "text": a2},
-    ]
+def _c(text, ev=("SM-p079-s02",), cat="즉시", reader="의성군수", item="S2"):
+    p = {"category": cat, "text": text, "evidence": list(ev)}
+    return check.check_one(item, p, EV, ALLOWED, JUDGED, NAMES, reader)
 
 
 def test_pass():
-    errs = check.check_item(
-        ITEM, _p("피해면적 48.5 ha로 1단계입니다. 발령을 협의하십시오 [p.73·91]."), ALLOWED, set()
-    )
-    assert errs == []
+    assert _c("신월리 주택 최소 2동 주변에 소방차와 진화차를 집중 배치하십시오.") == []
 
 
-def test_number_not_in_input():
-    errs = check.check_item(ITEM, _p("피해면적 50 ha입니다. 협의하십시오 [p.73]."), ALLOWED, set())
-    assert any("50" in e for e in errs)
+def test_needs_evidence_from_given_chunks():
+    assert any("evidence" in e for e in _c("소방차를 배치하십시오.", ev=()))
+    assert any("evidence" in e for e in _c("소방차를 배치하십시오.", ev=("SM-p999-s01",)))
 
 
-def test_time_and_korean_count():
-    errs = check.check_item(ITEM, _p("15:30까지 세 곳을 확인하십시오 [p.73]."), ALLOWED, set())
-    assert any("15:30" in e for e in errs) and any("세 곳" in e for e in errs)
+def test_numbers_times_names_stages():
+    errs = _c("석탑리에 15:30까지 50 ha 기준 확산대응 2단계로 세 곳을 배치하십시오.")
+    joined = " ".join(errs)
+    assert "15:30" in joined and "50" in joined and "석탑리" in joined
+    assert "확산대응 2단계" in joined and "세 곳" in joined
 
 
-def test_citation_outside_anchors_and_missing():
-    errs = check.check_item(
-        ITEM, _p("협의하십시오 [p.75].", "의성군수가 지휘합니다."), ALLOWED, set()
-    )
-    assert any("p.75" in e for e in errs)
-    assert any("S1-a2" in e and "근거 표기" in e for e in errs)
+def test_form_rules():
+    joined = " ".join(_c("신월리 주민 등을 대피하지 않습니다. 판정 자료를 보면 됩니다."))
+    assert "등" in joined and "부정" in joined and "하십시오" in joined and "입력 설명" in joined
 
 
-def test_unknown_name_and_etc():
-    errs = check.check_item(ITEM, _p("석탑리 등 주변을 지키십시오 [p.73]."), ALLOWED, {"석탑리"})
-    assert any("석탑리" in e for e in errs) and any("등" in e for e in errs)
-
-
-def test_parse_thinking_and_fence():
-    body = '{"paragraphs": [{"action": "S1-a1", "category": "즉시", "text": "x"}]}'
-    raw = "생각…</think>\n```json\n" + body + "\n```"
-    assert check.parse(raw)[0]["action"] == "S1-a1"
-
-
-def test_expand_citations():
-    assert check.citations("가 [p.72·114, 시행령 제21조①]. 나 [규정 제8·9조].") == [
-        "p.72",
-        "p.114",
-        "시행령 제21조①",
-        "규정 제8조",
-        "규정 제9조",
-    ]
-
-
-def test_assemble_adds_see_and_keeps_blocks():
-    paras = {p["action"]: p for p in _p("협의하십시오 [p.73].")}
-    out = assemble(ITEM, paras, "ok")
-    blocks = out["sections"][0]["blocks"]
-    assert [b["type"] for b in blocks] == ["paragraph", "list", "paragraph"]
-    assert blocks[2]["text"].endswith("세부 내용은 S6 참조.")
-    failed = assemble(ITEM, None, "failed")["sections"][0]["blocks"]
-    assert failed[0]["type"] == "failed" and failed[1]["type"] == "list"
-
-
-def test_tidy_and_placement_and_see():
-    assert (
-        check.tidy_citations("가 [p.73, p.91, 시행령 제21조①].") == "가 [p.73·91, 시행령 제21조①]."
-    )
-    errs = check.check_item(
-        ITEM, _p("협의하십시오. [p.73]", "지휘합니다 [p.72]. 세부 내용은 S4 참조."), ALLOWED, set()
-    )
-    assert any("마침표 앞" in e for e in errs) and any("S4 참조" in e for e in errs)
-
-
-def test_parse_bare_list():
-    raw = '</think> [{"action": "S1-a1", "category": "즉시", "text": "x"}]'
-    assert check.parse(raw)[0]["action"] == "S1-a1"
-
-
-def test_list_led_paragraph_must_not_name():
-    errs = check.check_item(ITEM, _p("신월리를 협의하십시오 [p.73]."), ALLOWED, set(), {"신월리"})
-    assert any("아래 목록" in e for e in errs)
-    assert check.tidy("동원합니다 [고시 별표]..") == "동원합니다 [고시 별표]."
-
-
-def test_meaning_checks():
-    reader_upper = check.check_item(
-        ITEM,
-        _p("주민에게 대피명령을 내리십시오 [p.73].", "산림청장과 협의하지 않습니다 [p.72]."),
-        ALLOWED,
-        set(),
-        reader="경상북도지사",
-    )
-    assert any("시장 · 군수 권한" in e for e in reader_upper)
-    assert any("부정" in e for e in reader_upper)
-    assert any("S1-a2" in e and "십시오" in e for e in reader_upper)
-    ok = check.check_item(
-        ITEM,
-        _p("의성군수에게 대피명령을 내리도록 지시하십시오 [p.73]."),
-        ALLOWED,
-        set(),
-        reader="경상북도지사",
+def test_upper_reader_authority():
+    bad = _c("신월리에 대피명령을 내리십시오.", reader="경상북도지사", item="E2")
+    assert any("시장 · 군수 권한" in e for e in bad)
+    ok = _c(
+        "의성군수에게 신월리 대피명령을 내리도록 지시하십시오.", reader="경상북도지사", item="E2"
     )
     assert ok == []
 
 
-def test_fix_category():
-    blk = {"topic": "잠재 위험구역 사전대피"}
-    assert check.fix_category({}, "발령을 산림청장과 협의하십시오.", "즉시") == "협의"
-    assert check.fix_category({}, "한전에 요청하십시오.", "즉시") == "요청"
-    assert check.fix_category(blk, "안내하십시오.", "즉시") == "대기"
+def test_min_houses_and_forbid():
+    assert any("최소 2동" in e for e in _c("신월리 주택 2동을 보호하십시오."))
+    assert _c("헬기 2대를 추가로 투입하십시오.", item="S3")  # 추가 대수 금지 · 숫자 2는 판정에 있음
 
 
-def test_fix_category_drops_unfounded_consult():
-    assert check.fix_category({}, "소방차를 배치하십시오.", "협의") == "즉시"
+def test_duplicates_and_parse_tidy():
+    props = [
+        {"category": "즉시", "text": "소방차를 배치하십시오.", "evidence": ["SM-p079-s02"]},
+        {"category": "즉시", "text": "소방차를 배치하십시오.", "evidence": ["SM-p079-s02"]},
+    ]
+    bad = check.check("S2", props, EV, ALLOWED, JUDGED, NAMES)
+    assert list(bad) == [1]
+    raw = '</think>```json\n{"proposals": [{"category": "즉시", "text": "x", "evidence": []}]}\n```'
+    assert check.parse(raw)[0]["text"] == "x"
+    assert check.tidy("배치하십시오 [p.79].") == "배치하십시오."
+    assert check.fix_category("산림청장과 협의하십시오.", "즉시") == "협의"
+    assert check.fix_category("배치하십시오.", "요청") == "즉시"
+
+
+def test_subject_strip_and_vague():
+    assert (
+        check.strip_subject("의성군수는 2단계 발령을 협의하십시오.", "의성군수")
+        == "2단계 발령을 협의하십시오."
+    )
+    assert (
+        check.strip_subject("상황입니다. 의성군수는 협의하십시오.", "의성군수")
+        == "상황입니다. 협의하십시오."
+    )
+    assert any("방법이 빠진" in e for e in _c("신월리 주택 최소 2동에 보호 조치를 취하십시오."))
+
+
+def test_quote_must_be_in_cited_text():
+    texts = {"SM-p079-s02": EV_TEXT}
+    p = {"category": "즉시", "text": "소방차를 집중 배치하십시오.", "evidence": ["SM-p079-s02"]}
+    ok = check.check_one(
+        "S2",
+        p | {"quote": "소방차와 진화차를 모아 두고"},
+        EV,
+        ALLOWED,
+        JUDGED,
+        NAMES,
+        "의성군수",
+        texts,
+    )
+    bad = check.check_one(
+        "S2", p | {"quote": "헬기 3대를 띄운다"}, EV, ALLOWED, JUDGED, NAMES, "의성군수", texts
+    )
+    assert ok == [] and any("quote" in e for e in bad)
+
+
+def test_quote_allows_changed_endings():
+    src = "산불의 진화와 관련한 모든 사항을 시ㆍ도지사에게 인계해야 한다."
+    assert check.quote_ok("산불의 진화와 관련한 모든 사항을 시ㆍ도지사에게 인계해야 합니다", [src])
+    assert not check.quote_ok("헬기를 세 대 더 투입한다", [src])
+
+
+def test_self_address_and_split_targets():
+    assert any(
+        "자신에게" in e
+        for e in _c("의성군수에게 협의를 준비하도록 지시하십시오.", reader="의성군수")
+    )
+    props = [
+        {"category": "즉시", "text": "신월리 주민을 대피시키십시오.", "evidence": ["SM-p079-s02"]},
+        {"category": "즉시", "text": "석탑리 주민을 대피시키십시오.", "evidence": ["SM-p079-s02"]},
+    ]
+    bad = check.check("E2", props, EV, ALLOWED, JUDGED + " 석탑리", NAMES)
+    assert 1 in bad and any("모아" in e for e in bad[1])

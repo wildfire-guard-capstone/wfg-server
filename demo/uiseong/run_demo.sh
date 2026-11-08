@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# GPU 서버에서 의성 데모 전체 실행. 근거 검색 서버(8032)와 LLM(8031)은 먼저 켜 둔다(README 참고).
-#   bash demo/uiseong/run_demo.sh [run_demo.py 인자…]      예: --rounds 1 --skip-llm
-# 경로는 환경변수로 바꿀 수 있다: DEMO_HOME(기본 ~/wfg/demo) · ELMFIRE_BIN · ELM_ENV
+# GPU 서버에서 의성 데모 실행(입력 = $DEMO_HOME/input). 근거 검색 서버(8032)와 LLM(8031)은 먼저 켜 둔다(README 참고).
+#   bash demo/uiseong/run_demo.sh [run_demo.py 인자…]
+#   예: --rounds 1 --skip-llm · --reuse-spread ~/wfg/demo/runs/<앞 결과> --items S1,E2
+# 경로는 환경변수로 바꿀 수 있다: DEMO_HOME(기본 ~/wfg/demo) · ELMFIRE_BIN · ELM_ENV · OUT
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"          # wfg-server 루트
 DEMO_HOME="${DEMO_HOME:-$HOME/wfg/demo}"
@@ -13,5 +14,5 @@ export PYTHONPATH="$HERE" PYTHONUTF8=1 PYTHONUNBUFFERED=1
 OUT="${OUT:-$DEMO_HOME/runs/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 cd "$HERE"
-python -m demo.uiseong.run_demo --data "$DEMO_HOME/data" --deck "$DEMO_HOME/deck" \
+python -m demo.uiseong.run_demo --input "$DEMO_HOME/input" \
   --elmfire "$ELMFIRE_BIN" --out "$OUT" "$@" 2>&1 | tee "$OUT/run.log"

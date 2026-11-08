@@ -1,82 +1,102 @@
-"""대응 제안 생성 에이전트: 규칙 엔진의 LLM 입력(common + items) → 항목별 문단 → 조립된 제안서.
+# ruff: noqa: E501
+"""대응 제안 생성(11/8 재설계): 항목마다 판정 → 근거 검색 → EXAONE → 검사 → (1회 다시) → 조립.
 
-항목마다(동시에 여러 개):
-  1. action 블록이 없으면(E6) LLM을 부르지 않는다
-  2. 직전 제안서와 항목 입력이 같으면 직전 문단을 다시 쓴다(11/7 「변경 표시」)
-  3. 판정 값으로 정해지는 문단(S1 · 목록 앞 문단)은 고정문으로 채운다(fixed.py, 11/8)
-  4. 근거: rule_basis ∪ anchor_basis를 ID로 가져오고, 항목 이름 + 주제로 보충 검색 2개
-  5. 남은 문단만 EXAONE 호출 → 검사(숫자 · 이름 · 근거 · 금칙 · 의미)
-     → 실패하면 문제를 알려 1회 다시
-  6. 그래도 실패하면 그 항목의 LLM 문단만 「문장 생성 실패」.
-     고정문 · 판정 값 · 조립기 블록은 남긴다
+    agent = Agent(LLM(url), Evidence(url), known_names)
+    items, logs = agent.run(common, rule_items, prev)
 
-추론 모드: 11/7 결정은 S2 · S4 · S5만 켜고 비교. 11/8 의성 데모에서 켜 보니 세 항목 모두 영어 추론이
-4,096토큰을 넘겨(호출당 약 7.5분) JSON이 잘렸다 → 기본은 끄고 `thinking` 인자로 켤 수 있게 둔다.
+- 규칙 엔진 항목(rule_items)에서 판정만 쓴다(judgment.py). 문단 자리 · 고정문은 없다.
+- 무엇을 제안할지는 LLM이 근거 발췌에서 고른다. 제안마다 근거 청크 ID가 있어야 하고 표기는 cite.py가 붙인다.
+- 기록(logs)에 항목마다 질의 · 근거 · 보낸 메시지 전문 · 받은 답 원문 · 검사 결과가 남는다(디버깅용).
+- 입력(판정 · 상황)이 직전 회차와 같은 항목은 직전 제안을 다시 쓴다(11/7).
 """
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent import check, fixed, prompt
+from agent import check, cite, judgment, prompt, retrieve
 from agent.clients import LLM, Evidence
 
-THINKING_ITEMS: set[str] = set()  # 11/7 비교 대상: {"S2", "S4", "S5"}
-FAILED_TEXT = "문장 생성 실패"
+FAILED_TEXT = (
+    "검사를 통과한 제안이 없어 이 항목의 제안은 표시하지 않았습니다(이벤트 로그: 근거 부족)."
+)
 
 
-def _key(item: dict[str, Any]) -> str:
-    return json.dumps(item, ensure_ascii=False, sort_keys=True)
+def input_key(judg: dict[str, Any], common: dict[str, Any]) -> str:
+    keep = {k: common.get(k) for k in ("reader", "current_stage", "commander")}
+    raw = json.dumps({"j": judg, "c": keep}, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def assemble(item: dict[str, Any], paras: dict[str, dict] | None, state: str) -> dict[str, Any]:
-    """문단 + 조립기 블록 → 제안서 항목. paras가 None이면 문단 자리에 실패 표시."""
-    sections = []
-    for s in item["sections"]:
-        blocks = []
-        for b in s["blocks"]:
-            if b["type"] == "action":
-                p = (paras or {}).get(b["id"])
-                if p is None:
-                    blocks.append(
-                        {
-                            "type": "failed",
-                            "action": b["id"],
-                            "topic": b.get("topic"),
-                            "text": FAILED_TEXT,
-                        }
-                    )
-                    continue
-                text = check.tidy(p["text"])
-                see = b.get("see")
-                if see and f"{see} 참조" not in text:
-                    text += f" 세부 내용은 {see} 참조."
-                blocks.append(
-                    {
-                        "type": "paragraph",
-                        "action": b["id"],
-                        "category": p["category"],
-                        "label": b.get("label"),
-                        "topic": b.get("topic"),
-                        "text": text,
-                        "source": p.get("source", "llm"),
-                    }
-                )
-            else:
-                blocks.append(b)
-        sections.append({"title": s.get("title", ""), "blocks": blocks})
-    keep = (
-        "id",
-        "name",
-        "status",
-        "finding",
-        "withheld",
-        "rule_basis",
-        "anchor_basis",
-        "targets",
-        "do_not_state",
-    )
-    return {**{k: item.get(k) for k in keep}, "state": state, "sections": sections}
+def with_citation(text: str, chunks: list[dict[str, Any]]) -> str:
+    """「…하십시오.」 + 근거 → 「…하십시오 [p.79·95].」"""
+    mark = cite.render(chunks)
+    body = text.rstrip()
+    if body.endswith("."):
+        body = body[:-1]
+    return f"{body} {mark}." if mark else f"{body}."
+
+
+def assemble(
+    item: dict[str, Any],
+    proposals: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    state: str,
+) -> dict[str, Any]:
+    """제안 + 판정 자료 → 화면용 항목."""
+    if proposals:
+        blocks = [
+            {
+                "type": "paragraph",
+                "category": p["category"],
+                "text": with_citation(p["text"], [by_id[e] for e in p["evidence"] if e in by_id]),
+                "evidence": p["evidence"],
+                "quote": p.get("quote", ""),
+                "source": "llm",
+            }
+            for p in proposals
+        ]
+    else:
+        blocks = [{"type": "failed", "text": FAILED_TEXT}]
+    sections = [{"title": "대응 제안", "blocks": blocks}]
+    data = judgment.data_blocks(item)
+    if data:
+        sections.append({"title": "판정 자료(규칙 엔진)", "blocks": data})
+    used = dict.fromkeys(e for p in proposals for e in p["evidence"])
+    return {
+        "id": item["id"],
+        "name": item.get("name", ""),
+        "state": state,
+        "finding": item.get("finding", ""),
+        "withheld": item.get("withheld", []),
+        "sections": sections,
+        "evidence": [
+            {
+                k: by_id[e].get(k)
+                for k in ("chunk_id", "label", "doc_name", "section", "page", "origin", "text")
+            }
+            for e in used
+            if e in by_id
+        ],
+    }
+
+
+def fix_evidence(p: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> dict | None:
+    """quote가 단 근거가 아니라 같은 호출의 다른 청크에서 왔으면 evidence를 그 청크로 바로잡는다(기록을 남김).
+
+    EXAONE은 맞는 문장을 옮기고도 ID를 옆 청크로 다는 일이 잦다(tune4: 257개 중 74개). quote가 출처를 알려 주므로
+    코드가 고친다. 어느 청크에도 없는 quote는 고치지 않는다(검사에서 걸려 다시 쓰게 된다).
+    """
+    q = p.get("quote", "")
+    if not q or check.quote_ok(q, [by_id[e]["text"] for e in p["evidence"]]):
+        return None
+    hits = [cid for cid, c in by_id.items() if check.quote_ok(q, [c["text"]])]
+    if not hits:
+        return None
+    before = list(p["evidence"])
+    p["evidence"] = hits[:2]
+    return {"quote": q[:60], "from": before, "to": p["evidence"]}
 
 
 class Agent:
@@ -86,110 +106,111 @@ class Agent:
         evidence: Evidence,
         known_names: set[str],
         workers: int = 4,
-        thinking: set[str] | None = None,
-        list_names: set[str] = frozenset(),
-        use_fixed: bool = True,
+        k: int = 8,
+        thinking: bool = False,
     ):
-        """known_names = 지도 자료의 모든 이름(입력에 없으면 실패), list_names = 마을 · 시설 이름
-        (목록 바로 앞 문단에 쓰면 실패), use_fixed = S1 · 목록 앞 문단을 고정문으로(fixed.py)."""
-        self.llm, self.evidence, self.workers = llm, evidence, workers
-        self.known_names = set(known_names) | prompt.STYLE_NAMES
-        self.list_names = set(list_names)
-        self.thinking = THINKING_ITEMS if thinking is None else set(thinking)
-        self.use_fixed = use_fixed
+        self.llm, self.evidence, self.workers, self.k = llm, evidence, workers, k
+        self.known_names = set(known_names)
+        self.thinking = thinking
+
+    def _call(self, msgs, ids, attempt, tag):
+        return self.llm.chat(
+            msgs,
+            schema=prompt.schema(ids),
+            thinking=self.thinking,
+            temperature=0.2 if attempt == 1 else 0.5,  # 다시 쓸 때 같은 답이 나오지 않게
+            max_tokens=4096 if self.thinking else 2000,
+            tag=tag,
+        )
 
     def _one(self, common: dict, item: dict, prev: dict | None) -> tuple[dict, dict]:
-        log: dict[str, Any] = {"id": item["id"], "attempts": []}
-        acts = prompt.actions(item)
-        if not acts:
-            return assemble(item, {}, "no_llm"), log
-        if prev and prev.get("input_key") == _key(item) and prev.get("state") in ("ok", "reused"):
+        judg = judgment.judgment_of(item)
+        key = input_key(judg, common)
+        log: dict[str, Any] = {"id": item["id"], "input_key": key, "attempts": []}
+        if (
+            prev
+            and prev.get("input_key") == key
+            and prev.get("state") in ("ok", "partial", "reused")
+        ):
             log["reused_from"] = prev.get("version")
-            return assemble(item, prev["paras"], "reused") | {"paras": prev["paras"]}, log
-        # 판정 값으로 정해지는 문단은 고정문(S1 · 목록 앞 문단, fixed.py)
-        fixed_paras = {}
-        if self.use_fixed:
-            for a in acts:
-                p = fixed.paragraph(item, a, common)
-                if p:
-                    fixed_paras[a["id"]] = p
-        log["fixed"] = list(fixed_paras)
-        todo = {a["id"] for a in acts} - set(fixed_paras)
-        if not todo:
-            return assemble(item, fixed_paras, "ok") | {"paras": fixed_paras}, log
-        ids = list(dict.fromkeys((item.get("rule_basis") or []) + (item.get("anchor_basis") or [])))
-        chunks, missing = self.evidence.fetch(ids)
-        query = f"{item['name']} " + " ".join(a.get("topic", "") for a in acts)
-        extra = self.evidence.search(query, k=2, exclude=ids)
-        log |= {
-            "evidence": [c["chunk_id"] for c in chunks],
-            "missing": missing,
-            "extra": [(c["chunk_id"], c["score"]) for c in extra],
-        }
-        allowed = check.allowed_from(
-            common, item.get("finding"), item.get("facts"), *[c["text"] for c in chunks + extra]
+            out = dict(prev["item"]) | {"state": "reused"}
+            return out | {"input_key": key, "proposals": prev["proposals"]}, log
+        chunks, rlog = retrieve.retrieve(
+            self.evidence, item, judg, common, prompt.scope_of(item["id"]), k=self.k
         )
-        msgs = prompt.messages(common, item, chunks, extra, self.known_names, fixed_paras)
-        thinking = item["id"] in self.thinking
-        by_id = {a["id"]: a for a in acts}
+        by_id = {c["chunk_id"]: c for c in chunks}
+        ids = list(by_id)
+        log |= {
+            "retrieval": rlog,
+            "evidence": [(c["chunk_id"], c["label"], c["origin"]) for c in chunks],
+        }
+        allowed = check.allowed_from(common, judg, *[c["text"] for c in chunks])
+        judged_text = judgment.text_of(judg, common)
+        msgs = prompt.messages(common, judg, chunks)
+        log["messages"] = msgs
+        best: list[dict[str, Any]] = []
+        dropped: list[dict[str, Any]] = []
         for attempt in (1, 2):
             try:
-                raw = self.llm.chat(
-                    msgs,
-                    schema=prompt.schema(item, todo),
-                    thinking=thinking,
-                    temperature=0.1 if attempt == 1 else 0.4,  # 다시 쓸 때 같은 답이 나오지 않게
-                    max_tokens=4096 if thinking else 2000,
-                    tag=f"{item['id']}#{attempt}",
-                )
-            except Exception as e:  # 시간 초과 · 연결 끊김: 그 시도만 실패로 친다
+                raw = self._call(msgs, ids, attempt, f"{item['id']}#{attempt}")
+            except Exception as e:  # 시간 초과 · 연결 끊김: 그 시도만 실패
                 log["attempts"].append(
-                    {"errors": [f"LLM 호출 실패: {type(e).__name__}: {e}"], "raw": ""}
+                    {"raw": "", "errors": {"-": [f"LLM 호출 실패: {type(e).__name__}: {e}"]}}
                 )
                 continue
             try:
-                paras = check.parse(raw)
-                for p in paras:  # 표기 정리(근거 위치 · 끝 마침표 · 구분)는 검사 전에
-                    p["text"] = check.tidy(p.get("text") or "")
-                    if p.get("action") in by_id:
-                        p["category"] = check.fix_category(
-                            by_id[p["action"]], p["text"], p.get("category")
-                        )
-                errors = check.check_item(
-                    item,
-                    paras,
-                    allowed,
-                    self.known_names,
-                    self.list_names,
-                    only=todo,
-                    reader=common.get("reader", ""),
+                props = check.parse(raw)
+            except Exception as e:
+                log["attempts"].append(
+                    {"raw": raw[-3000:], "errors": {"-": [f"출력 형식 오류: {e}"]}}
                 )
-            except Exception as e:  # JSON 깨짐
-                paras, errors = [], [f"출력 형식 오류: {e}"]
-            log["attempts"].append({"errors": errors, "raw": raw[-3000:]})
-            if not errors:
-                by = {**fixed_paras, **{p["action"]: p for p in paras}}
-                return assemble(item, by, "ok") | {"paras": by}, log
-            msgs = msgs + [
-                {"role": "assistant", "content": raw.split("</think>")[-1].strip()},
-                prompt.retry_message(errors, paras, self.known_names),
-            ]
-        # 실패해도 고정문 문단은 남긴다(LLM 문단 자리만 「문장 생성 실패」)
-        return assemble(item, fixed_paras, "failed"), log
+                continue
+            for p in props:
+                p["text"] = check.strip_subject(
+                    check.tidy(p.get("text") or ""), common.get("reader", "")
+                )
+                p["category"] = check.fix_category(p["text"], p.get("category"))
+                p["evidence"] = list(
+                    dict.fromkeys(e for e in p.get("evidence") or [] if e in by_id)
+                )
+                fixed = fix_evidence(p, by_id)
+                if fixed:
+                    log.setdefault("evidence_fixed", []).append(fixed)
+            bad = check.check(
+                item["id"],
+                props,
+                set(ids),
+                allowed,
+                judged_text,
+                self.known_names,
+                common.get("reader", ""),
+                {c["chunk_id"]: c["text"] for c in chunks} | {"_data": " / ".join(judg["data"])},
+            )
+            good = [p for i, p in enumerate(props) if i not in bad]
+            log["attempts"].append(
+                {"raw": raw[-4000:], "errors": {str(i): e for i, e in bad.items()}}
+            )
+            if len(good) >= len(best):
+                best = good
+                dropped = [{"text": props[i].get("text"), "errors": e} for i, e in bad.items()]
+            if not bad:
+                break
+            if attempt == 1:
+                flat = [f"제안 {i + 1}: {e}" for i, errs in bad.items() for e in errs]
+                msgs = msgs + [
+                    {"role": "assistant", "content": raw.split("</think>")[-1].strip()},
+                    prompt.retry_message(flat, props),
+                ]
+        log["dropped"] = dropped  # 끝까지 검사에 걸려 뺀 제안(이벤트 로그 구분: 근거 부족)
+        state = "failed" if not best else ("partial" if dropped else "ok")
+        out = assemble(item, best, by_id, state)
+        return out | {"input_key": key, "proposals": best}, log
 
     def run(
         self, common: dict, items: list[dict], prev: dict[str, dict] | None = None
     ) -> tuple[list, list]:
-        """항목 순서대로 결과와 기록.
-
-        prev = 직전 제안서의 {항목 id: {input_key, paras, state, version}}.
-        """
+        """항목 순서대로 결과와 기록. prev = 직전 회차의 {항목 id: {input_key, proposals, state, item, version}}."""
         prev = prev or {}
         with ThreadPoolExecutor(self.workers) as ex:
-            futs = [ex.submit(self._one, common, it, prev.get(it["id"])) for it in items]
-            done = [f.result() for f in futs]
-        out = []
-        for it, (res, _log) in zip(items, done, strict=True):
-            res["input_key"] = _key(it)
-            out.append(res)
-        return out, [log for _, log in done]
+            res = list(ex.map(lambda it: self._one(common, it, prev.get(it["id"])), items))
+        return [r[0] for r in res], [r[1] for r in res]

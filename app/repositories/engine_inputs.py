@@ -104,7 +104,7 @@ def incident_info(session: Session, incident: Incident) -> dict[str, Any]:
     started = kst(incident.started_at) if incident.started_at else None
     reported = kst(incident.reported_at)
     return {
-        "name": f"{sigungu} {emd} 산불 ({(started or reported):%Y-%m-%d})",
+        "name": incidents.incident_name(session, incident),
         "sigungu": sigungu,
         "emd": emd,
         "address": incident.address,

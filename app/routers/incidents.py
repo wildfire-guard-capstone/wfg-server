@@ -1,0 +1,239 @@
+"""INC-01 목록 · INC-02 보고 · INC-03 상세 · INC-04 종료, PER-01 화선 버전 목록."""
+
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Header, Path, Request
+from geoalchemy2.shape import to_shape
+from sqlalchemy.orm import Session
+
+from app.api.deps import Db, require_roles
+from app.api.envelope import Envelope, Page, ok
+from app.api.errors import ApiError, not_found
+from app.api.geo import from_geojson, to_geojson
+from app.api.pagination import LIMIT, cut, decode_cursor
+from app.db.models import FirePerimeter, Incident, User
+from app.db.models.enums import IncidentStatus
+from app.repositories import event_logs, incidents
+from app.repositories.predictions import to_multipolygon
+from app.schemas.incident import (
+    IncidentCreateIn,
+    IncidentEndIn,
+    IncidentOut,
+    IncidentSummaryOut,
+    PerimeterOut,
+    StatusName,
+)
+
+router = APIRouter(prefix="/incidents", tags=["산불 · 보고"])
+Reader = require_roles("COMMANDER", "VIEWER", "REPORTER")
+Reporter = require_roles("REPORTER")
+Commander = require_roles("COMMANDER")
+IncidentId = Annotated[int, Path(gt=0)]
+
+
+def load_incident(db: Session, user: User, incident_id: int) -> Incident:
+    """산불을 읽고 관할을 확인한다. 없거나 관할 밖이면 404(명세 2.3 — 범위 밖은 숨김)."""
+    incident = db.get(Incident, incident_id)
+    if incident is None:
+        raise not_found("산불을 찾을 수 없습니다.")
+    if user.admin_area_id is not None and incidents.sigungu_of(db, incident) != user.admin_area_id:
+        raise not_found("산불을 찾을 수 없습니다.")
+    return incident
+
+
+def _refs(db: Session, incident: Incident) -> dict:
+    """현재 화선 · 최신 예측 · 제안 참조와 갱신 안내 값."""
+    perimeter = incidents.current_perimeter(db, incident.id)
+    latest = incidents.latest_prediction(db, incident.id)
+    proposal = incidents.latest_proposal(db, incident.id)
+    correction = incidents.latest_correction(db, incident.id)
+    stale = bool(proposal and correction and correction[1] > proposal.created_at)
+    return {
+        "perimeter": perimeter,
+        "latest_prediction_id": latest[0] if latest else None,
+        "latest_proposal_id": proposal.id if proposal else None,
+        "needs_reprediction": latest is None or perimeter.version_no > latest[1],
+        "proposal_stale": stale,
+        # 동시 수정 방지 토큰(명세 2.4 제안). 지금은 최신 정정 id — 방식은 Q-05 · Q-06
+        "situation_revision": f"rev-{correction[0] if correction else 0}",
+    }
+
+
+def incident_out(db: Session, incident: Incident) -> IncidentOut:
+    refs = _refs(db, incident)
+    perimeter = refs.pop("perimeter")
+    return IncidentOut(
+        id=incident.id,
+        name=incidents.incident_name(db, incident),
+        ignition_point=to_geojson(to_shape(incident.ignition_point)),
+        address=incident.address,
+        admin_area_id=incident.admin_area_id,
+        started_at=incident.started_at,
+        reported_at=incident.reported_at,
+        report_text=incident.report_text,
+        reporter_org=incident.reporter_org,
+        reporter_name=incident.reporter_name,
+        reporter_phone=incident.reporter_phone,
+        status=incident.status.name,
+        current_stage=incident.current_stage.name,
+        situation=incident.situation,
+        reported_by=incident.reported_by,
+        created_at=incident.created_at,
+        ended_at=incident.ended_at,
+        ended_by=incident.ended_by,
+        current_perimeter_id=perimeter.id,
+        current_perimeter_version=perimeter.version_no,
+        **refs,
+    )
+
+
+def summary_out(db: Session, incident: Incident) -> IncidentSummaryOut:
+    refs = _refs(db, incident)
+    return IncidentSummaryOut(
+        id=incident.id,
+        name=incidents.incident_name(db, incident),
+        status=incident.status.name,
+        admin_area_id=incident.admin_area_id,
+        reported_at=incident.reported_at,
+        current_stage=incident.current_stage.name,
+        current_perimeter_version=refs["perimeter"].version_no,
+        needs_reprediction=refs["needs_reprediction"],
+        proposal_stale=refs["proposal_stale"],
+    )
+
+
+def perimeter_out(p: FirePerimeter) -> PerimeterOut:
+    geom = to_shape(p.geom)
+    return PerimeterOut(
+        id=p.id,
+        incident_id=p.incident_id,
+        version_no=p.version_no,
+        geometry=to_geojson(geom),
+        observed_at=p.observed_at,
+        reported_by=p.reported_by,
+        created_at=p.created_at,
+        corrected_at=p.corrected_at,
+        area_ha=round(geom.area / 10_000, 2),
+    )
+
+
+@router.get("", response_model=Envelope[Page[IncidentSummaryOut]])
+def list_incidents(
+    request: Request,
+    user: Reader,
+    db: Db,
+    status: StatusName | None = None,
+    cursor: str | None = None,
+    limit: int = LIMIT,
+):
+    """INC-01. 관할 시군구 산불만, 접수 시각 · id 내림차순."""
+    after = decode_cursor(cursor, 2)
+    rows = incidents.list_incidents(
+        db,
+        status=IncidentStatus[status] if status else None,
+        sigungu_id=user.admin_area_id,
+        after=(datetime.fromisoformat(after[0]), int(after[1])) if after else None,
+        limit=limit,
+    )
+    items, next_cursor, has_more = cut(rows, limit, lambda i: (i.reported_at.isoformat(), i.id))
+    page = Page(
+        items=[summary_out(db, i) for i in items], next_cursor=next_cursor, has_more=has_more
+    )
+    return ok(request, page)
+
+
+@router.post("", status_code=201, response_model=Envelope[IncidentOut])
+def report_incident(
+    body: IncidentCreateIn,
+    request: Request,
+    user: Reporter,
+    db: Db,
+    idempotency_key: Annotated[str | None, Header()] = None,
+):
+    """INC-02. 산불 + 화선 v0(발화점), 실측 화선을 함께 보내면 v1까지 한 번에 저장.
+
+    Idempotency-Key는 받기만 한다(중복 막기는 Q-05 뒤). alert_level은 저장하지 않는다.
+    """
+    point = from_geojson(body.ignition_point, ("Point",), "ignition_point")
+    first = None
+    if body.initial_perimeter:
+        geom = from_geojson(
+            body.initial_perimeter.geometry, ("Polygon", "MultiPolygon"), "initial_perimeter"
+        )
+        first = (to_multipolygon(geom), body.initial_perimeter.observed_at)
+    try:
+        emd = incidents.emd_at(db, point)
+    except ValueError as exc:
+        raise ApiError(
+            422, "OUTSIDE_JURISDICTION", "발화 지점이 서비스 범위(의성 + 인근 10 km) 밖입니다."
+        ) from exc
+    if user.admin_area_id is not None and incidents.parent_of(db, emd) != user.admin_area_id:
+        raise ApiError(422, "OUTSIDE_JURISDICTION", "관할 밖의 산불입니다.")
+    incident_id = incidents.create_incident(
+        db,
+        ignition=point,
+        address=body.address,
+        reported_at=body.reported_at,
+        started_at=body.started_at,
+        reporter_name=body.reporter_name,
+        reporter_phone=body.reporter_phone,
+        report_text=body.report_text,
+        reporter_org=body.reporter_org,
+        reported_by=user.id,
+    )
+    event_logs.add(db, "INCIDENT_REPORTED", user_id=user.id, incident_id=incident_id)
+    if first:
+        p = incidents.add_perimeter(
+            db, incident_id=incident_id, geom=first[0], observed_at=first[1], reported_by=user.id
+        )
+        details = {"perimeter_id": p.id, "version_no": p.version_no}
+        event_logs.add(
+            db, "PERIMETER_REPORTED", user_id=user.id, incident_id=incident_id, details=details
+        )
+    db.commit()
+    return ok(request, incident_out(db, db.get(Incident, incident_id)))
+
+
+@router.get("/{incident_id}", response_model=Envelope[IncidentOut])
+def get_incident(incident_id: IncidentId, request: Request, user: Reader, db: Db):
+    """INC-03."""
+    return ok(request, incident_out(db, load_incident(db, user, incident_id)))
+
+
+@router.post("/{incident_id}/end", response_model=Envelope[IncidentOut])
+def end_incident(
+    incident_id: IncidentId, body: IncidentEndIn, request: Request, user: Commander, db: Db
+):
+    """INC-04. 진행 중 산불만, 화면이 본 현재 화선과 같을 때만 종료한다."""
+    incident = load_incident(db, user, incident_id)
+    if incident.status is IncidentStatus.ENDED:
+        raise ApiError(409, "INCIDENT_ENDED", "이미 종료된 산불입니다.")
+    if incidents.current_perimeter(db, incident_id).id != body.expected_perimeter_id:
+        raise ApiError(409, "STALE_PERIMETER", "화선이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
+    incident.status = IncidentStatus.ENDED
+    incident.ended_at = datetime.now(UTC)
+    incident.ended_by = user.id
+    event_logs.add(db, "INCIDENT_ENDED", user_id=user.id, incident_id=incident_id)
+    db.commit()
+    return ok(request, incident_out(db, incident))
+
+
+@router.get("/{incident_id}/perimeters", response_model=Envelope[Page[PerimeterOut]])
+def list_perimeters(
+    incident_id: IncidentId,
+    request: Request,
+    user: Reader,
+    db: Db,
+    cursor: str | None = None,
+    limit: int = LIMIT,
+):
+    """PER-01. 버전 내림차순, v0 · 정정된 버전도 포함."""
+    load_incident(db, user, incident_id)
+    after = decode_cursor(cursor, 1)
+    rows = incidents.list_perimeters(
+        db, incident_id, before_version=int(after[0]) if after else None, limit=limit
+    )
+    items, next_cursor, has_more = cut(rows, limit, lambda p: (p.version_no,))
+    page = Page(items=[perimeter_out(p) for p in items], next_cursor=next_cursor, has_more=has_more)
+    return ok(request, page)

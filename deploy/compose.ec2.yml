@@ -1,0 +1,30 @@
+# EC2: API server container next to the existing DB container (wfg-db, started once with
+# docker run on network wfg-net — this file does not touch it).
+#
+# Lives on EC2 as /home/ubuntu/wfg/compose.yml, beside:
+#   db.env        POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (the same file wfg-db uses)
+#   data/base/    base data load files (copied from capston-data data/지도자원/적재), read-only
+# See deploy/README.md.
+name: wfg
+
+services:
+  api:
+    image: ${API_IMAGE:-ghcr.io/wildfire-guard-capstone/wfg-api:latest}
+    container_name: wfg-api
+    restart: unless-stopped
+    env_file:
+      - ./db.env
+    environment:
+      DB_HOST: wfg-db
+      BASE_DATA_DIR: /data/base
+    volumes:
+      - ./data/base:/data/base:ro
+    # Only reachable from inside EC2 for now (check with an SSH tunnel).
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - wfg-net
+
+networks:
+  wfg-net:
+    external: true

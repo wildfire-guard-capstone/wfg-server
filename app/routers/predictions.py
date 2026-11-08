@@ -1,4 +1,5 @@
-"""PRED-01 예측 요청 · PRED-05 작업 조회 · PRED-02 예측 상세 · PRED-03 도형 · PRED-04 기상."""
+"""PRED-01 예측 요청 · PRED-05 작업 조회 · PRED-02 예측 상세 · PRED-03 도형 · PRED-04 기상,
+RISK-01 위험도(가짜)."""
 
 import json
 from datetime import timedelta
@@ -15,8 +16,10 @@ from app.db.models.enums import IncidentStatus
 from app.repositories import incidents, predictions
 from app.routers.incidents import IncidentId, load_incident
 from app.schemas.prediction import OperationOut, PredictionOut, PredictionRequestIn, SliceSummary
+from app.schemas.risk import RiskOut
 from app.services import operations
 from app.services.prediction import run_prediction_operation
+from app.services.risk import compute_risk
 
 router = APIRouter(prefix="/incidents/{incident_id}", tags=["예측"])
 Commander = require_roles("COMMANDER")
@@ -133,3 +136,12 @@ def get_weather(
     """
     p = load_prediction(db, user, incident_id, prediction_id)
     return ok(request, p.weather)
+
+
+@router.get("/predictions/{prediction_id}/risk", response_model=Envelope[RiskOut])
+def get_risk(
+    incident_id: IncidentId, prediction_id: PredictionId, request: Request, user: Analyst, db: Db
+):
+    """RISK-01. ⚠ 가짜 위험도(method_version = fake-0) — 계산은 services.risk.grade_factors."""
+    p = load_prediction(db, user, incident_id, prediction_id)
+    return ok(request, compute_risk(db, p))

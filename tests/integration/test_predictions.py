@@ -87,3 +87,13 @@ def test_failed_prediction_keeps_nothing(client, login, reported, db, monkeypatc
         {"i": int(reported["id"])},
     )
     assert failed == 1
+
+
+def test_fake_risk(client, login, reported):
+    cmd = login("t_cmd4", "COMMANDER")
+    pid = run(client, reported, cmd)["result"]["prediction_id"]
+    risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]
+    assert risk["prediction_id"] == pid and risk["method_version"] == "fake-0"
+    assert len(risk["factors"]) == 23 and 1 <= risk["score"] <= 5
+    total = sum(f["contribution"] for f in risk["factors"])
+    assert abs(total - risk["score"]) < 0.01

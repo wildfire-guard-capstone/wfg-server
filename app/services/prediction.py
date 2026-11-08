@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
 from app.core.config import get_settings
-from app.db.models import Incident
+from app.db.models import Incident, Prediction
 from app.db.models.enums import IncidentStatus
 from app.predict import PredictionRequest, Predictor, get_predictor
 from app.repositories import event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
 from app.services import operations
+from app.services.risk import compute_risk
 
 log = logging.getLogger(__name__)
 SessionFactory = Callable[[], AbstractContextManager[Session]]
@@ -66,6 +67,15 @@ def _check_still_current(db: Session, incident_id: int, perimeter_id: int) -> No
         raise ApiError(409, "STALE_PERIMETER", "계산하는 동안 화선이 바뀌었습니다.")
 
 
+def _risk_check(db: Session, prediction_id: int) -> None:
+    """위험도 단계. 지금은 저장하지 않고(조회 때 계산, Q-01) 계산되는지만 본다.
+    위험도는 제안의 입력이 아니라 실패해도 예측은 성공으로 둔다(04 수정 필요 6번)."""
+    try:
+        compute_risk(db, db.get(Prediction, prediction_id))
+    except Exception:  # noqa: BLE001
+        log.exception("위험도 계산 실패(예측은 계속) — 예측 %s", prediction_id)
+
+
 def run_prediction_operation(
     op: operations.Operation, perimeter_id: int, session_factory: SessionFactory
 ) -> None:
@@ -85,6 +95,8 @@ def run_prediction_operation(
                 predictor=predictor_from_settings(),
                 requested_by=op.user_id,
             )
+            operations.update(op, stage="RISK")
+            _risk_check(db, pid)
             operations.update(op, stage="COMMIT")
             _check_still_current(db, op.incident_id, perimeter_id)
             db.commit()

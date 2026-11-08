@@ -6,7 +6,7 @@ from app.api.envelope import add_request_id
 from app.api.errors import install_error_handlers
 from app.core.config import get_settings
 from app.demo_results.api import router as demo_results_router  # 김지오 전용 · 임시(지울 때 이 줄)
-from app.routers import auth, health, incidents, predictions, users
+from app.routers import auth, health, incidents, maps, predictions, users
 
 API = "/api/v1"
 
@@ -18,6 +18,7 @@ app.include_router(auth.router, prefix=API)
 app.include_router(users.router, prefix=API)
 app.include_router(incidents.router, prefix=API)
 app.include_router(predictions.router, prefix=API)
+app.include_router(maps.router, prefix=API)
 
 # 김지오 전용 · 임시 결과 조회 API — 지울 때 이 줄 · 위 import 줄과 app/demo_results를 지운다
 app.include_router(demo_results_router)

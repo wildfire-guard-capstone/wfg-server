@@ -3,7 +3,7 @@
 from typing import Annotated
 
 import jwt
-from fastapi import Depends
+from fastapi import Depends, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -53,3 +53,8 @@ def require_roles(*roles: str):
 
 
 AnyUser = require_roles("COMMANDER", "VIEWER", "REPORTER", "ADMIN")
+
+
+def no_store(response: Response) -> None:
+    """계정 · 로그 응답은 브라우저 · 중간 서버에 저장하지 않게(명세 2.1)."""
+    response.headers["Cache-Control"] = "no-store"

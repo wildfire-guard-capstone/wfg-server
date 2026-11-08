@@ -80,6 +80,35 @@ uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.p
 자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
 [`demo/uiseong/README.md`](demo/uiseong/README.md).
 
+## 결과 조회 API(`/api`)
+
+GPU 서버에서 만든 데모 결과를 웹 화면(wfg-client)이 읽을 수 있게 내주는 읽기 전용 API다. DB를 쓰기 전까지는
+결과 묶음 폴더(JSON)를 읽는다(`app/services/results.py` — 나중에 같은 메서드의 DB 구현으로 바꾼다).
+응답 형식 · 열거형 값은 DB 설계(`app/db/models`)를 따른다. 문서: 서버를 띄운 뒤 `/docs`.
+
+| 메서드 · 경로 | 내용 | 권한 |
+|---|---|---|
+| `POST /api/auth/login` | `{login_id, password}` → `access_token`(Bearer) · `user` | — |
+| `GET /api/auth/me` | 로그인한 사용자 | 로그인 |
+| `GET /api/incidents` · `/{id}` | 산불 목록 · 상세(발화점, 현재 대응단계, 최신 버전) | 통합지휘권자 · 열람자 · 상황 보고자 |
+| `GET /api/incidents/{id}/perimeters` | 실측 화선 v0(발화점) ~ vN, `?geometry=false`면 좌표 없이 | 통합지휘권자 · 열람자 · 상황 보고자 |
+| `GET /api/incidents/{id}/predictions` · `/{n}` | 확산 예측 목록 · 상세(P1~P8 범위, 시간별 바람, 보정 배율, 뒤 화선 비교) | 통합지휘권자 · 열람자 |
+| `GET /api/incidents/{id}/proposals` · `/{버전 또는 latest}` | 제안서 목록 · 상세(항목별 판정 · 제안 문장 · 근거 원문) | 통합지휘권자 |
+
+좌표는 GeoJSON(EPSG:4326), 시각은 ISO 8601(+09:00). 로그인 실패 5회면 그 아이디를 잠근다(서버 재시작 시 풀림).
+토큰을 받은 뒤 계정을 지우면 그 토큰도 바로 막힌다.
+
+```bash
+# 1) 결과 묶음 만들기(로컬 또는 GPU 서버) — 프롬프트 · 실행 기록은 빼고 화면에 필요한 것만, 약 1 MB
+uv run python -m demo.uiseong.export_bundle --run <결과 폴더(runs/tune10)> --input <demo-uiseong/input> --out <묶음 폴더>
+# 2) 계정 만들기(비밀번호는 화면에서 묻는다, 8자 이상)
+uv run python -m app.services.accounts add --file <accounts.json> --login cmd01 --role COMMANDER --name 홍길동 --org 의성군
+# 3) .env에 RESULTS_DIR · ACCOUNTS_FILE · AUTH_SECRET(32자 이상 무작위) 넣고 실행
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+묶음 폴더와 계정 파일에는 표준매뉴얼 원문 · 비밀번호 해시가 들어 있으므로 저장소에 넣지 않는다.
+
 ## AI Hub 데이터
 
 ```bash

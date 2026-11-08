@@ -63,3 +63,8 @@ def test_village_has_no_neighbor_ids():
 def test_no_alert_level():
     # 위기경보 dropped on 11/6: the rule engine never uses it (산림청 issues it).
     assert "alert_level" not in Base.metadata.tables["incidents"].c
+
+
+def test_proposal_context():
+    # Rule engine bundles for the version (rules.llm_input), added 11/8.
+    assert "context JSONB DEFAULT '{}'::jsonb NOT NULL" in ddl("proposals")

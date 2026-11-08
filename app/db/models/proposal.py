@@ -38,6 +38,9 @@ class Proposal(Base):
     # Copy of incidents.current_stage at creation time.
     judged_stage: Mapped[ResponseStage] = mapped_column(pg_enum(ResponseStage, "response_stage"))
     predicted_stage: Mapped[ResponseStage] = mapped_column(pg_enum(ResponseStage, "response_stage"))
+    # Rule engine output for this version (rules.llm_input "bundles": 16 topic blocks), saved
+    # once so items, the AI assistant and later reviews see the same facts.
+    context: Mapped[dict[str, Any]] = jsonb_object()
     created_at: Mapped[datetime] = created_at()
 
 

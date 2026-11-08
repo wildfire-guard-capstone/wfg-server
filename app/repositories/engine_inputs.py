@@ -8,13 +8,13 @@
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from geoalchemy2.shape import to_shape
 from pyproj import Transformer
 from shapely.geometry.base import BaseGeometry
 from sqlalchemy.orm import Session
 
+from app.core.time import KST
 from app.db.models import Incident
 from app.repositories import base_data, incidents, predictions
 from rules.context import Inputs
@@ -22,7 +22,6 @@ from rules.core.places import Deployed
 from rules.core.stage import Stage
 from rules.core.villages import VillageField
 
-KST = ZoneInfo("Asia/Seoul")
 AREA_BUFFER_M = 20_000  # P8 둘레 20 km 안 바탕 데이터를 읽는다(도로 · 대피소 · 시군구 경계 …)
 
 # incidents.situation.deployed 키 → 엔진 라벨(rules.bundles.resources.LABELS, 산림청 상황 보고 양식)

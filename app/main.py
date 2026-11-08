@@ -2,11 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.envelope import add_request_id
+from app.api.errors import install_error_handlers
 from app.core.config import get_settings
 from app.demo_results.api import router as demo_results_router  # 김지오 전용 · 임시(지울 때 이 줄)
 from app.routers import health
 
 app = FastAPI(title="Wildfire Guard API", version=__version__)
+add_request_id(app)
+install_error_handlers(app)
 app.include_router(health.router)
 
 # 김지오 전용 · 임시 결과 조회 API — 지울 때 이 줄 · 위 import 줄과 app/demo_results를 지운다

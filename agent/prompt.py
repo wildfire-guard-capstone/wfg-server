@@ -40,11 +40,12 @@ SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대�
    - 다른 기관에 맡길 일: 「○○에 …을 요청하십시오」
    틀림: 「○○과장은 …하라」 「○○군수는 …해야 합니다」 「…조치를 취해야 합니다」(제삼자에게 시키거나 서술로 끝냄)
    읽는 사람을 주어로 쓰지 않습니다(틀림: 「의성군수는 …하십시오」 → 맞음: 「…하십시오」).
-   제안 하나는 2~4문장, 합쇼체입니다. [문단 꼴 예시]처럼 먼저 판정의 상황(시각 · 면적 · 풍속 · 대상 이름 · 인원 · 동수)을 밝히고, 이어서 할 일을 구체적으로 씁니다. 할 일을 부정하는 문장(「~하지 않습니다」)과 「등」은 쓰지 않습니다. 근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).
+   제안 하나는 2~4문장, 합쇼체입니다. [문단 꼴 예시]처럼 먼저 판정의 상황(시각 · 면적 · 풍속 · 대상 이름 · 인원 · 동수)을 밝히고, 이어서 할 일을 구체적으로 씁니다(상황 문장이 붙는 주제는 11번). 할 일을 부정하는 문장(「~하지 않습니다」)과 「등」은 쓰지 않습니다. 근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).
    「보호 조치를 취하십시오」 「철저히 하십시오」처럼 방법이 빠진 말은 쓰지 말고, 근거 발췌에 적힌 구체적인 방법(무엇을 · 어떻게)을 씁니다. 발췌의 제목 · 일반 문구를 그대로 옮기지 말고 이번 상황(대상 · 시각)에 맞게 씁니다.
 8. 다룰 주제가 없으면 인명 보호와 급한 일부터 2~3개 씁니다. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「괴산리 · 석탑리 주민을 …」).
 9. category: 즉시(지금 할 일) · 대기(조건이 되면 할 일, 미리 준비할 일) · 협의(산림청장 등 발령권자와 협의) · 요청(다른 기관에 요청). 잠재 위험구역(5~8시간) 조치는 대기입니다.
 10. [이 항목 작성 지침]은 이번 상황(규모 · 단계 · 시간대 · 읽는 사람)에서 이 항목에 무엇을 쓰고 무엇을 쓰지 않을지 알려 줍니다. 「쓸 것」은 주제별로 따르고, 「덧붙일 제안」은 근거 발췌에 그 조치가 있을 때만 그 주제로 하나 씁니다(없으면 쓰지 않음). 「쓰지 않을 것」은 쓰지 않습니다. 지침의 조치도 근거 발췌에 적힌 것만 씁니다.
+11. [다룰 주제]에 「상황 문장」이 적힌 주제는 판정 값으로 코드가 쓴 그 문장이 제안 앞에 그대로 붙습니다. 그 주제의 text에는 상황 문장 뒤에 이어질 할 일 문장(1~2문장)만 씁니다. 상황 문장의 값(숫자 · 시각 · 면적 · 동수 · 범위)을 되풀이하지 말고, 상황 문장에 없는 숫자를 쓰지 않습니다(「그때」 「그 전에」처럼 상황 문장을 가리켜 씁니다).
 
 [출력] JSON 하나만: {"proposals": [{"topic": "<다룰 주제>", "category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문>"}]}"""
 
@@ -74,8 +75,22 @@ def mask_example(text: str, names: set[str] = frozenset()) -> str:
     return text
 
 
-def examples_of(item_id: str, names: set[str] = frozenset()) -> list[str]:
-    return [mask_example(p["text"], names) for p in STYLE.get(item_id, [])]
+def action_part(text: str) -> str:
+    """예시 문단에서 할 일 문장(「~하십시오」가 든 문장)만 남긴다."""
+    sents = re.split(r"(?<=[.다])\s+", _CITE.sub("", text).strip())
+    return " ".join(s for s in sents if "십시오" in s)
+
+
+def examples_of(
+    item_id: str, names: set[str] = frozenset(), action_only: set[str] = frozenset()
+) -> list[str]:
+    """같은 항목의 v3 목표 문단(값을 가림). action_only의 주제는 상황 문장을 코드가 붙이므로 할 일 문장만 보인다."""
+    out = []
+    for p in STYLE.get(item_id, []):
+        text = action_part(p["text"]) if p.get("action") in action_only else p["text"]
+        if text:
+            out.append(mask_example(text, names))
+    return out
 
 
 # 항목 범위: 이 항목이 다루는 것(검색 질의로도 쓴다)과 지킬 것(11/7 결정 · 근거 부족 규칙). 할 일을 정하지는 않는다
@@ -90,7 +105,7 @@ ITEM_SCOPE = {
     ),
     "S3": (
         "진화자원(헬기 · 인력 · 장비) 투입 현황과 대응 단계별 진화자원 동원 범위, 응원 요청",
-        "투입 현황과 지금 · 5시간 뒤 동원 범위를 밝힙니다. 헬기 · 인력을 몇 대 · 몇 명 더 넣으라는 수치는 쓰지 않습니다(산정 기준 없음).",
+        "투입 현황과 지금 · 5시간 뒤 동원 범위는 상황 문장으로 붙습니다. 헬기 · 인력을 몇 대 · 몇 명 더 넣으라는 수치는 쓰지 않습니다(산정 기준 없음).",
     ),
     "S4": (
         "주간 · 야간 시간대와 바람에 따른 진화 방식, 공중 진화와 지상 진화",
@@ -165,7 +180,12 @@ def messages(
     names: set[str] = frozenset(),
     guide: str = "",
     situation_line: str = "",
+    situations: dict[str, str] | None = None,
+    action_only: set[str] = frozenset(),
 ) -> list[dict[str, str]]:
+    """situations = {주제: 상황 문장}(situate.py, 코드가 판정으로 씀 — LLM은 할 일 문장만).
+    action_only = 상황 문장이 붙는 주제의 action ID: 그 주제의 문단 꼴 예시는 할 일 문장만 보인다."""
+    situations = situations or {}
     scope, rule = ITEM_SCOPE.get(judgment["id"], ("", ""))
     head = f"이번 항목: {judgment['id']} {judgment.get('name', '')}"
     if scope:
@@ -196,12 +216,17 @@ def messages(
             "[다룰 주제 — 주제마다 제안 하나]\n"
             + "\n".join(
                 f"- {tp['topic']} (소제목 {tp['section'] or '없음'} · 쓸 판정 값 {', '.join(tp['use']) or '—'})"
+                + (
+                    f"\n  상황 문장(제안 앞에 그대로 붙음 — text에는 이어질 할 일 문장만): 「{situations[tp['topic']]}」"
+                    if tp["topic"] in situations
+                    else ""
+                )
                 for tp in topics
             )
         )
     if guide:
         parts.append("[이 항목 작성 지침 — 이번 상황에 맞춘 것]\n" + guide)
-    ex = examples_of(judgment["id"], names)
+    ex = examples_of(judgment["id"], names, action_only)
     if ex:
         parts.append(
             "[문단 꼴 예시] 같은 항목의 목표 문단입니다(다른 시각 · 상황, 값은 N · HH:MM · ○○로 가림). 문장 구조와 구체성(상황 → 할 일)만 따르고, "

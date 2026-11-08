@@ -83,6 +83,7 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
                 "id",
                 "input_key",
                 "guide",
+                "situations",
                 "extras",
                 "messages",
                 "attempts",

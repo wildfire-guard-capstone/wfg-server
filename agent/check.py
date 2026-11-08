@@ -37,7 +37,8 @@ KOR_COUNT = re.compile(
 ETC = re.compile(r"(?<=[가-힣\)\s])\s등(?=[\s,.을이의은과도에]|으로)")
 STAGE = re.compile(r"초기대응|확산대응\s?[12]단계|(?<![가-힣\d])[123]단계")
 NEG = re.compile(
-    r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않|마)[가-힣]*"
+    # 「대피하지 않은 주민」처럼 꾸미는 말(않은 · 않는 + 명사)은 할 일을 부정한 것이 아니다(tune13 E2)
+    r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않(?![은는]\s)|마)[가-힣]*"
 )
 # 문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 옮긴 것
 PLACEHOLDER = re.compile(
@@ -93,6 +94,9 @@ def parse(text: str) -> list[dict[str, Any]]:
 
 
 VILLAGE = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=[\s·,~)\]와과의에를은는도]|$)")
+ORG = re.compile(
+    r"(?<![가-힣])([가-힣]{1,4}[시군구])\s([가-힣]{2,8}?(?:과장|과|소방서장|소방서|경찰서장|경찰서|보건소장|보건소))(?=[에은는이가과와의을를도\s,·]|$)"
+)
 NOT_VILLAGE = {"일자리", "마무리", "잠자리", "실마리", "갈무리", "앞머리", "뒷머리", "보따리"}
 
 
@@ -110,7 +114,19 @@ def tidy(text: str) -> str:
     text = re.sub(r"(\d{1,2}:\d{2})시([에부까])", r"\1\2", text)
     if text and text[-1] not in ".?!":
         text += "."
+    # 할 일 동사를 서술로 끝낸 것만 「~하십시오」로(tune14 E2: 「…우선 대피시킵니다.」). 「해당합니다」 같은 말은 그대로
+    text = ACTION_DECL.sub(
+        lambda m: (
+            m.group(1) + ("시키십시오" if m.group(2) == "시킵니다" else "하십시오") + m.group(3)
+        ),
+        text,
+    )
     return text
+
+
+ACTION_DECL = re.compile(
+    r"((?:대피|배치|요청|지시|투입|설정|지정|발령|통보|보고|확인|안내|전파|협의|인계|점검|준비|실시|이송|통제)\s?)(합니다|시킵니다)([.!]|\s*$)"
+)
 
 
 def strip_subject(text: str, reader: str) -> str:
@@ -235,6 +251,11 @@ def check_one(
     for name in known_names:
         if name in text and name not in blob and re.search(rf"(?<![가-힣]){re.escape(name)}", text):
             errs.append(f"판정 · 근거에 없는 이름 「{name}」")
+    # 시군 부서 · 기관 이름 오기(tune11 · 12: 「의성군 산림녹색과」 — 산림녹지과). 「○○군 ○○과(장)」 꼴만 본다
+    for m in ORG.finditer(text):
+        sigungu, org = m.group(1), m.group(2)
+        if not any(x in blob for x in (f"{sigungu} {org}", org, org.removesuffix("장"))):
+            errs.append(f"판정 · 근거에 없는 기관 이름 「{sigungu} {org}」")
     # 지도 자료에도 없는 마을 이름(tune10: 「괴산리~신신리」 — 신안리를 잘못 씀). 「○○리」 꼴만 본다
     for v in dict.fromkeys(VILLAGE.findall(text)):
         if v not in blob and v not in NOT_VILLAGE and v not in known_names:
@@ -280,6 +301,63 @@ def check_one(
     return errs
 
 
+def overlap(a: str, b: str) -> float:
+    """a의 네 글자 조각 가운데 b에 있는 비율(띄어쓰기 · 문장부호 무시)."""
+    na, nb = _norm(a), _norm(b)
+    if len(na) < 4:
+        return 0.0
+    grams = {na[i : i + 4] for i in range(len(na) - 3)}
+    return sum(g in nb for g in grams) / len(grams)
+
+
+def split_sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.?!])\s+", (text or "").strip()) if s]
+
+
+def drop_restated(text: str, situation: str) -> str:
+    """상황 문장을 코드가 붙이는 주제: LLM이 상황을 다시 쓴 문장(할 일이 없고 상황 문장과 겹침)을 지운다.
+    할 일 문장이 하나도 남지 않으면 그대로 둔다(검사가 「할 일 문장이 없습니다」로 다시 쓰게 함)."""
+    s_times, s_nums = _nums(situation)
+
+    def restated(s: str) -> bool:
+        if "십시오" in s:
+            return False
+        t, n = _nums(s)
+        vals = t | n
+        return bool(vals) and vals <= (s_times | s_nums) or overlap(s, situation) >= 0.5
+
+    keep = [s for s in split_sentences(text) if not restated(s)]
+    return " ".join(keep) if any("십시오" in s for s in keep) else text
+
+
+SOFT = "(되풀이) "  # 다시 쓰게는 하지만 제안을 빼지는 않는 문제(문체) — generate가 끝까지 남으면 그대로 쓴다
+_STAGE_NUM = re.compile(r"\d단계")  # 「2단계」의 2는 값이 아니라 단계 이름
+
+
+def check_action(text: str, situation: str) -> list[str]:
+    """상황 문장 뒤에 붙는 할 일 문장 검사: 상황 문장에 없는 숫자 · 시각(제안을 뺌), 상황 값 되풀이(SOFT — 빼지 않음)."""
+    errs = []
+    times, nums = _nums(_STAGE_NUM.sub("단계", text))
+    s_times, s_nums = _nums(_STAGE_NUM.sub("단계", situation))
+    s_nums |= {n.rstrip("0").rstrip(".") for n in s_nums if "." in n}
+    if bad := sorted((times - s_times) | (nums - s_nums)):
+        errs.append(
+            f"상황 문장에 없는 숫자 · 시각 {bad}을 썼습니다. 상황 문장은 코드가 앞에 붙이므로 할 일만 쓰십시오"
+        )
+    repeated = (times & s_times) | (nums & s_nums)
+    if len(repeated) >= 2 or (len(times | nums) >= 2 and overlap(text, situation) >= 0.5):
+        errs.append(
+            SOFT
+            + "상황 문장의 값(동수 · 면적 · 시각 · 범위)을 되풀이했습니다. 「그 주택」 「그때」처럼 가리켜 할 일만 쓰십시오"
+        )
+    return errs
+
+
+def hard(errs: list[str]) -> list[str]:
+    """제안을 빼는 문제만(SOFT 제외)."""
+    return [e for e in errs if not e.startswith(SOFT)]
+
+
 def check(
     item_id: str,
     proposals: list[dict[str, Any]],
@@ -291,17 +369,24 @@ def check(
     texts: dict[str, str] | None = None,
     topics: list[str] | None = None,
     strict_quote: bool = False,
+    situations: dict[str, str] | None = None,
 ) -> dict[int, list[str]]:
-    """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다."""
+    """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다.
+    situations = {주제: 코드가 쓴 상황 문장}: 그 주제의 text(할 일 문장)는 상황 문장에 없는 숫자를 쓸 수 없다."""
     out: dict[int, list[str]] = {}
     seen: list[str] = []
     shapes: list[str] = []
     names = sorted(known_names, key=len, reverse=True)
+    situations = situations or {}
     for i, p in enumerate(proposals):
         errs = check_one(
             item_id, p, evidence_ids, allowed, judged_text, known_names, reader, texts, strict_quote
         )
         text = p.get("text") or ""
+        if (sit := situations.get(p.get("topic") or "")) is not None:
+            errs += check_action(text, sit)
+            # 반복 검사는 문단 전체(상황 문장 + 할 일)로: 할 일만 보면 주제가 달라도 「…협의하십시오」로 같아진다(tune12)
+            text = f"{sit} {text}"
         key = re.sub(r"[^가-힣0-9]", "", text)[:30]
         # 대상(마을 · 시설 이름 · 숫자 · 시각)만 다른 같은 조치: 이름을 지운 꼴이 같으면 나눠 쓴 것
         shape = text

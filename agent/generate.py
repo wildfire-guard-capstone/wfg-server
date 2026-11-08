@@ -16,7 +16,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent import check, cite, guides, judgment, prompt, retrieve, situation
+from agent import check, cite, guides, judgment, prompt, retrieve, situate, situation
 from agent.clients import LLM, Evidence
 
 FAILED_TEXT = (
@@ -49,20 +49,22 @@ def _para(
 ) -> dict[str, Any]:
     chunks = [by_id[e] for e in p["evidence"] if e in by_id]
     see = (tp or {}).get("see")
+    sit = p.get("situation") or ""  # 코드가 판정으로 쓴 상황 문장(situate.py) + LLM 할 일 문장
+    full = f"{sit} {p['text']}".strip() if sit else p["text"]
     return {
         "type": "paragraph",
         "category": p["category"],
-        "text": with_citation(p["text"], chunks, see),
-        "body": with_citation(
-            p["text"], [], see
-        ),  # 화면 본문(근거 표기 없음) — 근거는 마우스를 올리면
+        "text": with_citation(full, chunks, see),
+        "body": with_citation(full, [], see),  # 화면 본문(근거 표기 없음) — 근거는 마우스를 올리면
         "cite": cite.render(chunks),
+        "situation": sit,
+        "action_text": p["text"],
         "evidence": p["evidence"],
         "quote": p.get("quote", ""),
         "quote_ok": p.get("quote_ok"),
         "topic": p.get("topic"),
         "action": (tp or {}).get("action"),
-        "source": "llm",
+        "source": "rule+llm" if sit else "llm",
     }
 
 
@@ -209,7 +211,14 @@ class Agent:
         allowed = check.allowed_from(common, judg, *[c["text"] for c in chunks])
         judged_text = judgment.text_of(judg, common)
         texts = {c["chunk_id"]: c["text"] for c in chunks} | {"_data": " / ".join(judg["data"])}
-        msgs = prompt.messages(common, judg, chunks, self.known_names, guide, sit_line)
+        sits = situate.sentences(
+            item, topics
+        )  # 판정 값 상황 문장(코드) — 그 주제는 LLM이 할 일 문장만
+        action_only = {tp["action"] for tp in judgment.topics_of(item) if tp["topic"] in sits}
+        log["situations"] = sits
+        msgs = prompt.messages(
+            common, judg, chunks, self.known_names, guide, sit_line, sits, action_only
+        )
         log["messages"] = msgs
         best: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
@@ -232,6 +241,9 @@ class Agent:
                 p["text"] = check.strip_subject(
                     check.tidy(p.get("text") or ""), common.get("reader", "")
                 )
+                if (sit := sits.get(p.get("topic") or "")) is not None:
+                    p["text"] = check.drop_restated(p["text"], sit)
+                    p["situation"] = sit
                 p["category"] = check.fix_category(p["text"], p.get("category"))
                 p["evidence"] = list(
                     dict.fromkeys(e for e in p.get("evidence") or [] if e in by_id)
@@ -252,15 +264,19 @@ class Agent:
                 common.get("reader", ""),
                 texts,
                 topics,
+                situations=sits,
             )
-            good = [p for i, p in enumerate(props) if i not in bad]
+            # 문체 문제(check.SOFT, 상황 값 되풀이)는 다시 쓰게만 하고 제안을 빼지 않는다
+            good = [p for i, p in enumerate(props) if not check.hard(bad.get(i, []))]
             log["attempts"].append(
                 {"raw": raw[-5000:], "errors": {str(i): e for i, e in bad.items()}}
             )
             if len(good) >= len(best):
                 best = good
                 dropped = [
-                    {"text": props[i].get("text"), "errors": e} for i, e in bad.items() if i >= 0
+                    {"text": props[i].get("text"), "errors": e}
+                    for i, e in bad.items()
+                    if i >= 0 and check.hard(e)
                 ]
             if not bad:
                 break

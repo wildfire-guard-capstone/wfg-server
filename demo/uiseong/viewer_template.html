@@ -73,6 +73,7 @@ th{background:#f9fafb}
 #tip .qt.no{border-left-color:#fca5a5}
 #tip .evc pre{max-height:none}
 #tip mark{background:#fef08a;padding:0 1px}
+#tip .sit{background:#f0f9ff;border-left:3px solid #38bdf8;padding:4px 8px;margin:4px 0 8px}
 .collapsed .body{display:none}
 .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--sub);align-items:center}
 .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:4px;vertical-align:-2px}
@@ -234,6 +235,7 @@ let pinned = null, hideTimer = null;
 function tipHtml(t) {
   const b = t.b, cite = citeOf(b);
   let h = `<div class="th"><span class="cat c-${esc(b.category)}">${esc(CATNAME[b.category] || b.category || "")}</span>${cite ? `<span class="cite">${esc(cite)}</span>` : ""}</div>`;
+  if (b.situation) h += `<div class="sit"><span class="small">판정 값 문장(규칙 엔진 판정으로 코드가 씀)</span><br>${esc(b.situation)}<br><span class="small">할 일 문장(LLM이 아래 근거로 씀)</span><br>${esc(b.action_text || "")}</div>`;
   if (b.quote) h += `<div class="qt ${b.quote_ok === false ? "no" : ""}"><span class="small">근거 문장${b.quote_ok === false ? " (원문과 70% 미만 일치 — 확인 필요)" : ""}</span><br>「${esc(b.quote)}」</div>`;
   h += t.ev.map(e => `<div class="evc"><b>${esc(e.label)}</b> <span class="small">${esc(e.doc_name)} ${esc(e.section || "")} · ${esc(e.origin)}</span><pre>${excerpt(e.text, b.quote)}</pre></div>`).join("");
   if (!t.ev.length) h += `<p class="small">근거 원문 없음</p>`;

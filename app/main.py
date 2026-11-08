@@ -6,12 +6,15 @@ from app.api.envelope import add_request_id
 from app.api.errors import install_error_handlers
 from app.core.config import get_settings
 from app.demo_results.api import router as demo_results_router  # 김지오 전용 · 임시(지울 때 이 줄)
-from app.routers import health
+from app.routers import auth, health
+
+API = "/api/v1"
 
 app = FastAPI(title="Wildfire Guard API", version=__version__)
 add_request_id(app)
-install_error_handlers(app)
+install_error_handlers(app, prefix=API)
 app.include_router(health.router)
+app.include_router(auth.router, prefix=API)
 
 # 김지오 전용 · 임시 결과 조회 API — 지울 때 이 줄 · 위 import 줄과 app/demo_results를 지운다
 app.include_router(demo_results_router)

@@ -1,4 +1,4 @@
-"""비밀번호 해시와 로그인 토큰. 표준 라이브러리만 쓴다(새 의존성 없음).
+"""(김지오 전용 · 임시) 비밀번호 해시와 로그인 토큰. 표준 라이브러리만 쓴다(새 의존성 없음).
 
 - 비밀번호: PBKDF2-HMAC-SHA256, ``pbkdf2_sha256$<반복>$<salt>$<hash>`` (base64url).
 - 토큰: ``<payload>.<서명>`` — payload = base64url(JSON {sub, role, iat, exp}),

@@ -1,4 +1,4 @@
-"""로그인 계정 — DB(users 표)를 쓰기 전까지 JSON 파일 하나로 둔다.
+"""(김지오 전용 · 임시) 로그인 계정 — DB(users 표)를 쓰기 전까지 JSON 파일 하나로 둔다.
 
 파일 형식::
 
@@ -7,10 +7,10 @@
 
 ``role``은 ``app.db.models.enums.UserRole`` 멤버 이름. 계정 관리(비밀번호는 화면에 묻는다)::
 
-    python -m app.services.accounts add  --file accounts.json --login cmd01 --role COMMANDER \
+    python -m app.demo_results.accounts add  --file accounts.json --login cmd01 --role COMMANDER \
         --name 홍길동 --org 의성군
-    python -m app.services.accounts list --file accounts.json
-    python -m app.services.accounts remove --file accounts.json --login cmd01
+    python -m app.demo_results.accounts list --file accounts.json
+    python -m app.demo_results.accounts remove --file accounts.json --login cmd01
 
 로그인 실패 5회면 그 아이디를 잠근다(DB 설계 ``users.failed_login_count``와 같은 기준).
 잠금은 서버 메모리에만 있어 재시작하면 풀린다.
@@ -24,8 +24,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.security import hash_password, verify_password
 from app.db.models.enums import UserRole
+from app.demo_results.security import hash_password, verify_password
 
 MAX_FAILED_LOGINS = 5
 
@@ -117,7 +117,7 @@ def remove_account(path: Path, login_id: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m app.services.accounts")
+    ap = argparse.ArgumentParser(prog="python -m app.demo_results.accounts")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_add = sub.add_parser("add", help="계정 추가(같은 아이디가 있으면 바꿈)")
     p_add.add_argument("--file", type=Path, required=True)

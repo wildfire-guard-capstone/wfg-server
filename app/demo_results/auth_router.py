@@ -3,10 +3,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.security import issue_token
-from app.deps import CurrentUser, SettingsDep, account_store, auth_secret
-from app.schemas.auth import LoginRequest, LoginResponse, UserOut
-from app.services.accounts import Account, AccountLocked, AccountStore
+from app.demo_results.accounts import Account, AccountLocked, AccountStore
+from app.demo_results.auth_schemas import LoginRequest, LoginResponse, UserOut
+from app.demo_results.deps import CurrentUser, SettingsDep, account_store, auth_secret
+from app.demo_results.security import issue_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 

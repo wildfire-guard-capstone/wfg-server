@@ -1,4 +1,7 @@
-"""결과 조회 API 테스트용 — 작은 가짜 데모 결과(2회차). 묶음 폴더 fixture는 conftest.py."""
+"""(김지오 전용 · 임시) 결과 조회 API 테스트용 — 작은 가짜 데모 결과(2회차).
+
+묶음 폴더 fixture는 conftest.py.
+"""
 
 import json
 from pathlib import Path

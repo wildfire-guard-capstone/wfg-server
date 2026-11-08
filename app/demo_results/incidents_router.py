@@ -1,4 +1,6 @@
-"""결과 조회 — 산불 · 실측 화선 · 확산 예측(P1~P8) · 대응 제안서. 모두 읽기 전용, 로그인 필요.
+"""(김지오 전용 · 임시) 결과 조회 — 산불 · 실측 화선 · 확산 예측(P1~P8) · 대응 제안서.
+
+모두 읽기 전용, 로그인 필요.
 
 권한(화면 목업과 같게): 산불 · 화선 = 통합지휘권자 · 열람자 · 상황 보고자,
 예측 = 통합지휘권자 · 열람자, 제안서(근거 원문 포함) = 통합지휘권자만.
@@ -9,8 +11,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.db.models.enums import UserRole
-from app.deps import require_roles, results_store
-from app.schemas.results import (
+from app.demo_results.deps import require_roles, results_store
+from app.demo_results.result_schemas import (
     Incident,
     IncidentSummary,
     Perimeter,
@@ -19,7 +21,7 @@ from app.schemas.results import (
     Proposal,
     ProposalSummary,
 )
-from app.services.results import FileResultsStore
+from app.demo_results.results import FileResultsStore
 
 READ_INCIDENT = (UserRole.COMMANDER, UserRole.VIEWER, UserRole.REPORTER)
 READ_PREDICTION = (UserRole.COMMANDER, UserRole.VIEWER)

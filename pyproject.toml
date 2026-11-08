@@ -25,6 +25,10 @@ spread = [
     "numpy>=1.26",
     "pyproj>=3.6",
 ]
+# 의성 데모(demo/uiseong): 데이터 준비(SGIS shapefile)만 로컬에서 쓴다
+demo = [
+    "pyshp>=2.3",
+]
 
 [dependency-groups]
 dev = [
@@ -38,7 +42,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app", "spread", "evaluation", "rules"]
+packages = ["app", "spread", "evaluation", "rules", "agent"]
 
 [tool.ruff]
 line-length = 100

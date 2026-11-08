@@ -11,6 +11,9 @@ Wildfire Guard 백엔드 — API 서버, 확산 예측(ELMFIRE), 평가 하네�
 | `app/` | FastAPI (Router / Service / Adapter). 웹 요청 처리 |
 | `spread/` | 확산 예측 패키지. **FastAPI에 의존하지 않음** — 서버와 평가가 같은 코드를 호출 |
 | `rules/` | 규칙 엔진(대응단계 · 지휘권자 등 판정). 순수 함수만, **FastAPI · DB · `spread`에 의존하지 않음** |
+| `agent/` | 대응 제안 생성: 규칙 엔진 판정 → 근거 검색(RAG) → EXAONE → 검사 → 근거 표기 · 조립 |
+| `demo/uiseong/` | 의성 산불(2025-03-22) 데모: 입력 → 확산 예측 → 규칙 판정 → LLM 대응 생성 → 출력, 뷰어 · 검증 |
+| `docs/` | 구조서(`의성-데모-구조서.md`: 단계별 파일 · 함수 · 출력 · 디버깅 안내) |
 | `evaluation/` | 평가 하네스 (시나리오 S0~S6, 지표, 데이터셋 리더) |
 | `migrations/` | Alembic DB 마이그레이션 |
 | `docker/worker/` | ELMFIRE + `spread` 워커 이미지 |
@@ -30,6 +33,52 @@ uv run uvicorn app.main:app --reload   # http://localhost:8000/health
 docker compose up -d db       # PostGIS
 uv run alembic upgrade head
 ```
+
+## 대응 제안 생성(`agent/`)과 의성 데모(`demo/uiseong/`)
+
+규칙 엔진은 규칙으로 판단할 수 있는 것(대응단계 · 지휘권자 · 위험구역 마을 · 도달 시각 · 면적 · 자원 · 바람 · 일몰)만 판정해 넘기고,
+**무엇을 할지(대응 제안)는 LLM(EXAONE 4.5 33B)이 표준매뉴얼 · 법령을 검색해 그 근거로 쓴다.** 코드가 문장을 미리 정해 두지 않는다.
+
+```
+입력(scenario.json · 상황도 화선 · 지도 · ELMFIRE 입력)
+  → 1 확산 예측   demo/uiseong/step1_spread.py → spread/perimeter_run.py   회차 화선에서 배율 보정 · 8시간 예측 → P0~P8
+  → 2 규칙 판정   demo/uiseong/step2_rules.py  → rules/                    판정 16묶음 + 항목 12개(S1~S6 · E1~E6)
+  → 3 LLM 대응 생성 demo/uiseong/step3_agent.py → agent/                  항목마다 아래 순서
+       situation.py · guides.py  상황 깃발(불이 큼 · 작음 · 단계 오름 · 밤 · 도지사 …) → 항목별 작성 지침(쓸 것 · 덧붙일 제안 · 쓰지 않을 것)
+       judgment.py  판정만 고름(문단 자리 · 고정 문장 없음)
+       situate.py   판정 값 상황 문장(S1 · S2 · S3)은 코드가 facts로 조립 — LLM은 그 뒤의 할 일 문장만
+       retrieve.py  질의 3개로 근거 검색 + 규칙 엔진이 판정에 쓴 근거
+       prompt.py    지시문 · 항목 범위 · 읽는 사람의 권한 · 판정 · 근거 발췌 → json_schema(evidence는 준 청크 ID만, quote = 근거 문장)
+       check.py     quote가 단 근거에서 왔는지 · 판정 값 · 권한 · 형식 검사 → 1회 다시 → 걸린 제안만 뺌
+       cite.py      청크 ID → 근거 표기 [p.79, 시행령 제21조①·②]
+  → 출력          runs/<이름>/round_k/01_spread · 02_rules · 03_rag · 04_llm(프롬프트 전문 · 답 원문) · 05_output, viewer.html
+```
+
+실행에는 GPU 서버의 세 서비스가 필요하다: ELMFIRE 1.1(CPU), 근거 검색 서버(`127.0.0.1:8032`, KURE-v1 + FAISS + PostgreSQL —
+`rag-pipeline`, 이 저장소 밖), vLLM(`127.0.0.1:8031`, EXAONE 4.5 33B AWQ). 입력 데이터(지도 자료 · ELMFIRE 입력)와 근거 코퍼스는
+공개 저장소에 넣지 않는다.
+
+```bash
+# 서버에서(입력 = $DEMO_HOME/input)
+OUT=~/wfg/demo/runs/<이름> bash demo/uiseong/run_demo.sh                                   # 전부
+OUT=~/wfg/demo/runs/<이름> bash demo/uiseong/run_demo.sh --reuse-spread <앞 결과> --items S1,E2   # 규칙 · 제안만, 항목 몇 개만
+python -m demo.uiseong.verify --runs <결과> --ref <reference>                              # 근거 뒷받침 · 시나리오 목표 · 실제 기록 대비
+# 로컬
+uv run python -m demo.uiseong.build_viewer --runs <결과> --data <input> --out viewer.html
+uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.py tests/unit/test_demo_calibration.py
+```
+
+2026-11-08 결과(4회차: 12:50 · 13:10 · 13:45 · 14:20, `runs/tune10`): 46개 항목 모두 제안을 냈고 다룰 주제 101개 중 99개에 문단이 붙었다(문단 평균 61 ~ 74자).
+시나리오 v3 회차 1 목표 대비 0.759(같은 주제 문단 0.774 · 분량 1.0), 제안의 조치가 단 근거 원문에 있는 비율 0.79 ~ 0.94, 회차 뒤 실제 조치(백서)를
+미리 권한 비율 0.594(판정은 같은 EXAONE이라 후할 수 있음). 남은 약점: 도지사 회차에서 지시를 모두 군수에게 돌리고, 일부 문단에 근거에 없는 세부가 섞인다.
+같은 날 밤 항목별 작성 지침을 넣은 `runs/tune11`: 근거 뒷받침 0.90 ~ 0.93(도지사 회차 0.79 → 0.93), 목표 대비 0.778, 다룰 주제 101개 중 100개.
+대신 판정 값을 근거의 기준값으로 바꿔 쓰는 오류(1단계 지상 범위 「경상북도 100%」 · 「최소 20동」)가 남아, S1 · S2 · S3의 상황 문장을 코드가
+판정으로 조립하고 LLM은 할 일 문장만 쓰게 했다(`agent/situate.py`). 최종 `runs/tune15`: 근거 뒷받침 0.95 · 0.90 · 0.90 · 0.90, 목표 대비 0.815,
+백서 실제 기록 0.625, 실패 항목 0, S1~S3 판정 값 오류 0(tune11은 6건).
+화면(뷰어)은 제안 문장만 보이고 근거는 마우스를 올리면 보인다.
+
+자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
+[`demo/uiseong/README.md`](demo/uiseong/README.md).
 
 ## AI Hub 데이터
 
@@ -57,7 +106,9 @@ Apple Silicon에서는 `--platform linux/amd64`가 필요하며 에뮬레이션�
 ## 커밋하면 안 되는 것 (public 저장소)
 
 - **AI Hub 원천·라벨 데이터** (재배포 제한) — 로컬 경로(`AIHUB_ROOT`)에서만 읽는다
-- 표준매뉴얼 등 정부 내부 열람 자료
+- 표준매뉴얼 등 정부 내부 열람 자료(근거 코퍼스 · 교정본 · 청크)
+- 의성 데모 입력(지도 자료 · ELMFIRE 입력)과 실행 결과(`runs/` — 프롬프트에 매뉴얼 원문이 들어 있음)
+- 서버 주소 · 계정 · 접속 키
 - API 키 등 비밀값 (`.env`)
 - DEM·임상도·실행 출력 래스터 (`data/`, `runs/`, `results/`, `cases/`는 `.gitignore`)
 

@@ -1,0 +1,13 @@
+# Never send secrets, local data or run outputs to an image build.
+.env
+.env.*
+!.env.example
+.git
+.venv
+.pytest_cache
+.ruff_cache
+**/__pycache__
+data
+runs
+results
+cases

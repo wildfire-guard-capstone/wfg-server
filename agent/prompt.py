@@ -1,14 +1,18 @@
 # ruff: noqa: E501  (지시문은 문장 단위로 둔다)
 """LLM 입력(11/8 재설계): 호출 1회 = 항목 하나 = 지시문 + 읽는 사람 · 상황 + 규칙 엔진 판정 + 근거 발췌.
 
-- 규칙 엔진은 판정만 넘긴다(judgment.py). 문단 자리 · 주제 · 근거 쪽을 미리 정하지 않는다.
-- 무엇을 제안할지는 LLM이 근거 발췌(retrieve.py)에서 고르고, 제안마다 근거 청크 ID(evidence)를 단다.
-  근거 표기([p.79])는 cite.py가 evidence로 만든다.
-- 출력 형식은 vLLM json_schema로 묶는다: evidence는 이번에 준 청크 ID 중에서만 고를 수 있다.
-- 시나리오 목표 문단(LLM-출력-예시)은 예시로 넣지 않는다. 어떤 조치를 쓸지 알려 주게 되고, 회차 1 검증이 무의미해진다.
+- 규칙 엔진은 판정과 다룰 주제만 넘긴다(judgment.py). 문장 · 주제별 근거 쪽은 정하지 않는다.
+- 무엇을 제안할지는 LLM이 근거 발췌(retrieve.py)에서 고르고, 제안마다 주제(topic) · 근거 청크 ID(evidence) ·
+  근거 문장(quote)을 단다. 근거 표기([p.79])는 cite.py가 evidence로 만든다.
+- 출력 형식은 vLLM json_schema로 묶는다: topic은 다룰 주제 중에서, evidence는 이번에 준 청크 ID 중에서만 고를 수 있다.
+- 문단 꼴 예시(11/8 저녁 사용자 결정): 시나리오 v3 회차 1 목표 문단(style_examples.json = wfg-docs LLM-출력-예시)을
+  같은 항목에 한해 값(숫자 · 시각 · 이름)을 가려 보여 준다. 문단의 밀도 · 구조를 맞추려는 것이다. 회차 1과 겹치므로
+  회차 1 검증은 참고로만 보고 회차 2 ~ 4를 주 검증으로 쓴다.
 """
 
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 CATEGORIES = ["즉시", "대기", "협의", "요청"]
@@ -22,7 +26,8 @@ SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대�
 
 [할 일]
 이번 판정 상황에서 읽는 사람이 지금 또는 곧 해야 할 조치를 근거 발췌에서 골라 이 항목의 대응 제안으로 씁니다.
-1. 조치는 근거 발췌에 적힌 것만 제안합니다. 제안마다 그 조치가 적힌 발췌 ID를 evidence에 넣고, 그 발췌에서 조치를 적은 문장을 글자 그대로 옮긴 부분(20~80자)을 quote에 넣습니다. 발췌에 없는 조치 · 기관 · 수치는 쓰지 않습니다. 먼저 근거 발췌 전체를 훑어 이번 판정 상황(시각 · 바람 · 대상)에 맞는 문장을 고르십시오.
+1. [다룰 주제]마다 제안을 하나씩 씁니다(topic에 주제 이름). 주제의 소제목과 use(쓸 판정 값)를 보고, 그 주제에 맞는 조치를 근거 발췌에서 찾습니다. 먼저 근거 발췌 전체를 훑어 이번 판정 상황(시각 · 바람 · 대상)에 맞는 문장을 고르십시오.
+   조치는 근거 발췌에 적힌 것만 제안합니다. 제안마다 그 조치가 적힌 발췌 ID를 evidence에 넣고, 그 발췌에서 조치를 적은 문장을 옮긴 부분(20~80자)을 quote에 넣습니다. 발췌에 없는 조치 · 기관 · 수치는 쓰지 않습니다.
 2. 판정 상황에 맞는 조치만 고릅니다. 판정에 없는 상황(강풍 · 야간 · 피해 발생 · 통신 두절)이나 판정에 없는 대상(도로 · 시설 · 마을)을 가정해 「…할 경우」로 제안하지 않습니다. 이 항목 범위 밖의 일은 [다른 항목]이 다루므로 쓰지 않습니다.
    지금 할 일과 앞으로의 일을 구분합니다. 판정이 「5시간 뒤 2단계」 「지휘권자 의성군수 → 경상북도지사」 「19:20 ~ 20:20 닿을 수 있음」처럼 앞으로의 일이면, 그 시각 · 조건을 밝히고 「…까지(…되면) …하십시오」로 씁니다(구분 대기). 아직 일어나지 않은 일을 지금 하라고 쓰지 않습니다.
 3. 판정 값은 바꾸지 않습니다. 단계 · 시각 · 면적 · 인원 · 이름은 판정에 적힌 그대로 쓰고, 더하기 · 빼기 · 반올림으로 새 숫자를 만들지 않습니다. 숫자 · 시각 · 마을 · 시설 · 기관 이름은 판정과 발췌에 있는 것만 씁니다.
@@ -35,12 +40,42 @@ SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대�
    - 다른 기관에 맡길 일: 「○○에 …을 요청하십시오」
    틀림: 「○○과장은 …하라」 「○○군수는 …해야 합니다」 「…조치를 취해야 합니다」(제삼자에게 시키거나 서술로 끝냄)
    읽는 사람을 주어로 쓰지 않습니다(틀림: 「의성군수는 …하십시오」 → 맞음: 「…하십시오」).
-   제안 하나는 1~3문장, 합쇼체입니다. 근거가 되는 상황을 한 문장으로 먼저 밝힐 수 있습니다. 할 일을 부정하는 문장(「~하지 않습니다」)과 「등」은 쓰지 않습니다. 근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).
+   제안 하나는 2~4문장, 합쇼체입니다. [문단 꼴 예시]처럼 먼저 판정의 상황(시각 · 면적 · 풍속 · 대상 이름 · 인원 · 동수)을 밝히고, 이어서 할 일을 구체적으로 씁니다. 할 일을 부정하는 문장(「~하지 않습니다」)과 「등」은 쓰지 않습니다. 근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).
    「보호 조치를 취하십시오」 「철저히 하십시오」처럼 방법이 빠진 말은 쓰지 말고, 근거 발췌에 적힌 구체적인 방법(무엇을 · 어떻게)을 씁니다. 발췌의 제목 · 일반 문구를 그대로 옮기지 말고 이번 상황(대상 · 시각)에 맞게 씁니다.
-8. 제안은 인명 보호와 급한 일부터 2~4개 씁니다. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「괴산리 · 석탑리 주민을 …」).
+8. 다룰 주제가 없으면 인명 보호와 급한 일부터 2~3개 씁니다. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「괴산리 · 석탑리 주민을 …」).
 9. category: 즉시(지금 할 일) · 대기(조건이 되면 할 일, 미리 준비할 일) · 협의(산림청장 등 발령권자와 협의) · 요청(다른 기관에 요청). 잠재 위험구역(5~8시간) 조치는 대기입니다.
 
-[출력] JSON 하나만: {"proposals": [{"category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문 그대로>"}]}"""
+[출력] JSON 하나만: {"proposals": [{"topic": "<다룰 주제>", "category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문>"}]}"""
+
+STYLE = json.loads((Path(__file__).parent / "style_examples.json").read_text(encoding="utf-8"))[
+    "items"
+]
+# 예시에만 나오는 고유 이름(지도 자료 이름과 함께 가린다)
+STYLE_NAMES = {
+    "운람사",
+    "서산영덕고속도로",
+    "서의성IC",
+    "안동분기점",
+    "한국도로공사",
+    "기쁨의집",
+    "의성자혜원",
+}
+_CITE = re.compile(r"\s*\[[^\[\]]+\]")
+
+
+def mask_example(text: str, names: set[str] = frozenset()) -> str:
+    """예시 문단의 값을 가린다: 근거 표기 지움, 시각 → HH:MM, 숫자 → N, 지명 · 시설명 → ○○."""
+    text = _CITE.sub("", text)
+    text = re.sub(r"\d{1,2}:\d{2}", "HH:MM", text)
+    text = re.sub(r"(?<![A-Za-z\d])\d+(?:[.,]\d+)?", "N", text)
+    for name in sorted(set(names) | STYLE_NAMES, key=len, reverse=True):
+        text = text.replace(name, "○○")
+    return text
+
+
+def examples_of(item_id: str, names: set[str] = frozenset()) -> list[str]:
+    return [mask_example(p["text"], names) for p in STYLE.get(item_id, [])]
+
 
 # 항목 범위: 이 항목이 다루는 것(검색 질의로도 쓴다)과 지킬 것(11/7 결정 · 근거 부족 규칙). 할 일을 정하지는 않는다
 ITEM_SCOPE = {
@@ -122,7 +157,9 @@ def authority(common: dict) -> str:
     )
 
 
-def messages(common: dict, judgment: dict, chunks: list[dict]) -> list[dict[str, str]]:
+def messages(
+    common: dict, judgment: dict, chunks: list[dict], names: set[str] = frozenset()
+) -> list[dict[str, str]]:
     scope, rule = ITEM_SCOPE.get(judgment["id"], ("", ""))
     head = f"이번 항목: {judgment['id']} {judgment.get('name', '')}"
     if scope:
@@ -135,6 +172,7 @@ def messages(common: dict, judgment: dict, chunks: list[dict]) -> list[dict[str,
         if k in common
     }
     judged = {k: judgment.get(k) for k in ("finding", "facts", "withheld", "do_not_state")}
+    topics = judgment.get("topics") or []
     others = " · ".join(
         f"{k} {v[0].split(',')[0]}" for k, v in ITEM_SCOPE.items() if k != judgment["id"]
     )
@@ -145,6 +183,21 @@ def messages(common: dict, judgment: dict, chunks: list[dict]) -> list[dict[str,
         "[읽는 사람 · 상황]\n" + json.dumps(situation, ensure_ascii=False),
         "[규칙 엔진 판정]\n" + json.dumps(judged, ensure_ascii=False),
     ]
+    if topics:
+        parts.append(
+            "[다룰 주제 — 주제마다 제안 하나]\n"
+            + "\n".join(
+                f"- {tp['topic']} (소제목 {tp['section'] or '없음'} · 쓸 판정 값 {', '.join(tp['use']) or '—'})"
+                for tp in topics
+            )
+        )
+    ex = examples_of(judgment["id"], names)
+    if ex:
+        parts.append(
+            "[문단 꼴 예시] 같은 항목의 목표 문단입니다(다른 시각 · 상황, 값은 N · HH:MM · ○○로 가림). 문장 구조와 구체성(상황 → 할 일)만 따르고, "
+            "값 · 이름 · 조치는 반드시 이번 판정과 근거 발췌에서 가져오십시오. 예시에만 있는 대상은 쓰지 않습니다.\n"
+            + "\n".join(f"- {e}" for e in ex)
+        )
     if judgment.get("data"):
         parts.append(
             "[판정 자료 — 제안 아래에 목록 · 표로 함께 보입니다]\n" + "\n".join(judgment["data"])
@@ -154,17 +207,26 @@ def messages(common: dict, judgment: dict, chunks: list[dict]) -> list[dict[str,
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def schema(evidence_ids: list[str]) -> dict[str, Any]:
+def schema(evidence_ids: list[str], topics: list[str] | None = None) -> dict[str, Any]:
+    topics = [t for t in (topics or []) if t]
+    n_min, n_max = (len(topics), len(topics) + 1) if topics else (1, MAX_PROPOSALS)
+    item_props: dict[str, Any] = {}
+    if topics:
+        item_props["topic"] = {
+            "type": "string",
+            "enum": list(dict.fromkeys(topics)) + ["그 밖의 제안"],
+        }
     return {
         "type": "object",
         "properties": {
             "proposals": {
                 "type": "array",
-                "minItems": 1,
-                "maxItems": MAX_PROPOSALS,
+                "minItems": n_min,
+                "maxItems": n_max,
                 "items": {
                     "type": "object",
                     "properties": {
+                        **item_props,
                         "category": {"type": "string", "enum": CATEGORIES},
                         "text": {"type": "string"},
                         "quote": {"type": "string"},
@@ -175,7 +237,8 @@ def schema(evidence_ids: list[str]) -> dict[str, Any]:
                             "items": {"type": "string", "enum": evidence_ids},
                         },
                     },
-                    "required": ["category", "text", "evidence", "quote"],
+                    "required": (["topic"] if topics else [])
+                    + ["category", "text", "evidence", "quote"],
                 },
             }
         },

@@ -180,7 +180,97 @@ def automatic(rounds: list[dict], gold: dict) -> dict:
         "retrieved": round(sum(len(r["retrieved"]) for r in rows) / tot, 3) if tot else None,
         "cited": round(sum(len(r["cited"]) for r in rows) / tot, 3) if tot else None,
     }
+    out["v3_match"] = v3_match(r1, gold)
+    out["topics"] = [topic_cover(rd) for rd in rounds]
     return out
+
+
+def _pages(text: str) -> set[str]:
+    out = set()
+    for m in re.finditer(r"\[([^\[\]]+)\]", text):
+        for part in m.group(1).split(","):
+            mm = re.fullmatch(r"\s*p\.(\d+(?:·\d+)*)\s*", part)
+            if mm:
+                out |= {f"p.{n}" for n in mm.group(1).split("·")}
+    return out
+
+
+def v3_match(r1: dict, gold: dict) -> dict:
+    """회차 1: 시나리오 v3 목표 문단(action ID)마다 같은 주제의 생성 문단이 있는지 · 길이 · 인용 쪽 · 구체성.
+
+    목표 문단은 상황도 대리 면적으로, 생성은 ELMFIRE 예측으로 만들어 숫자 · 마을은 다르다. 그래서 값이 아니라
+    「같은 주제 문단이 있나 · 비슷한 분량인가 · 같은 매뉴얼 쪽을 근거로 댔나 · 판정 값(숫자 · 시각)을 넣었나」를 본다.
+    """
+    gen: dict[str, list[str]] = {}
+    for it in r1.get("proposal") or []:
+        for s in it.get("sections", []):
+            for b in s.get("blocks", []):
+                if b.get("type") == "paragraph" and b.get("action"):
+                    gen.setdefault(b["action"], []).append(b["text"])
+    rows = []
+    for g in gold["items"]:
+        for gp in g.get("paragraphs", []):
+            texts = gen.get(gp["action"], [])
+            txt = " ".join(texts)
+            gpages = _pages(gp["text"])
+            rows.append(
+                {
+                    "action": gp["action"],
+                    "covered": bool(texts),
+                    "len_ratio": round(
+                        len(re.sub(r"\s*\[[^\]]*\]", "", txt))
+                        / max(1, len(re.sub(r"\s*\[[^\]]*\]", "", gp["text"]))),
+                        2,
+                    ),
+                    "page_hit": sorted(gpages & _pages(txt)),
+                    "gold_pages": sorted(gpages),
+                    "concrete": bool(re.search(r"\d", re.sub(r"\[[^\]]*\]", "", txt))),
+                    "gold": gp["text"],
+                    "gen": txt,
+                }
+            )
+    n = len(rows) or 1
+    pages = sum(len(r["gold_pages"]) for r in rows) or 1
+    return {
+        "rows": rows,
+        "covered": round(sum(r["covered"] for r in rows) / n, 3),
+        "len_ratio": round(
+            sum(min(r["len_ratio"], 2.0) for r in rows if r["covered"])
+            / max(1, sum(r["covered"] for r in rows)),
+            2,
+        ),
+        "page_recall": round(sum(len(r["page_hit"]) for r in rows) / pages, 3),
+        "concrete": round(
+            sum(r["concrete"] for r in rows if r["covered"])
+            / max(1, sum(r["covered"] for r in rows)),
+            3,
+        ),
+    }
+
+
+def topic_cover(rd: dict) -> dict:
+    """회차마다: 규칙 엔진이 정한 다룰 주제 가운데 제안 문단이 붙은 비율 · 문단 평균 글자 수."""
+    want = {
+        b["id"]
+        for it in rd["llm_input"]["items"]
+        for s in it["sections"]
+        for b in s["blocks"]
+        if b["type"] == "action"
+    }
+    got, lens = set(), []
+    for it in rd.get("proposal") or []:
+        for s in it.get("sections", []):
+            for b in s.get("blocks", []):
+                if b.get("type") == "paragraph":
+                    lens.append(len(re.sub(r"\s*\[[^\]]*\]", "", b["text"])))
+                    if b.get("action"):
+                        got.add(b["action"])
+    return {
+        "at": rd["round"]["at"],
+        "topics": len(want),
+        "covered": len(want & got),
+        "mean_len": round(sum(lens) / max(1, len(lens))),
+    }
 
 
 def score(vals: list[str]) -> dict:
@@ -218,6 +308,25 @@ def report(v: dict) -> str:
         L.append(
             f"| {r['item']} | {', '.join(r['gold_pages'])} | {', '.join(r['retrieved']) or '—'} | {', '.join(r['cited']) or '—'} |"
         )
+    m = v["auto"].get("v3_match")
+    if m:
+        L += [
+            "",
+            "## 1-2. 회차 1 문단 대조(시나리오 v3 목표 문단과 같은 주제끼리, 자동)",
+            "",
+            f"목표 문단 {len(m['rows'])}개 · 같은 주제 문단 있음 **{m['covered']}** · 분량(목표 대비) **{m['len_ratio']}** · "
+            f"목표 근거 쪽을 같이 인용 **{m['page_recall']}** · 판정 값(숫자 · 시각)을 넣음 **{m['concrete']}**",
+            "",
+            "| 주제(action) | 있음 | 분량 | 같이 인용한 쪽 / 목표 쪽 |",
+            "|---|---|---|---|",
+        ]
+        for r in m["rows"]:
+            L.append(
+                f"| {r['action']} | {'예' if r['covered'] else '아니오'} | {r['len_ratio']} | {', '.join(r['page_hit']) or '—'} / {', '.join(r['gold_pages']) or '—'} |"
+            )
+        L += ["", "| 회차 | 다룰 주제 | 제안 붙음 | 문단 평균 글자 |", "|---|---|---|---|"]
+        for c in v["auto"]["topics"]:
+            L.append(f"| {c['at']} | {c['topics']} | {c['covered']} | {c['mean_len']} |")
     if "grounded" in v:
         L += [
             "",

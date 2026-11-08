@@ -89,7 +89,15 @@ def test_quote_must_be_in_cited_text():
         texts,
     )
     bad = check.check_one(
-        "S2", p | {"quote": "헬기 3대를 띄운다"}, EV, ALLOWED, JUDGED, NAMES, "의성군수", texts
+        "S2",
+        p | {"quote": "헬기 3대를 띄운다"},
+        EV,
+        ALLOWED,
+        JUDGED,
+        NAMES,
+        "의성군수",
+        texts,
+        True,
     )
     assert ok == [] and any("quote" in e for e in bad)
 
@@ -111,3 +119,21 @@ def test_self_address_and_split_targets():
     ]
     bad = check.check("E2", props, EV, ALLOWED, JUDGED + " 석탑리", NAMES)
     assert 1 in bad and any("모아" in e for e in bad[1])
+
+
+def test_stage_compared_by_number():
+    assert _c("신월리 주택 최소 2동 주변에 확산대응 1단계에 맞춰 소방차를 배치하십시오.") == []
+    assert any("단계" in e for e in _c("확산대응 3단계 발령을 준비하십시오."))
+
+
+def test_placeholder_vocative_and_repeat():
+    assert any(
+        "가린 값" in e for e in _c("서풍이 N m/s로 강해지는 N~N시에 지상 진화로 바꾸십시오.")
+    )
+    assert (
+        check.strip_subject("의성군수님, 소방차를 배치하십시오.", "의성군수")
+        == "소방차를 배치하십시오."
+    )
+    assert (
+        check.tidy("신월리 신월리 주택 주변에 배치하십시오") == "신월리 주택 주변에 배치하십시오."
+    )

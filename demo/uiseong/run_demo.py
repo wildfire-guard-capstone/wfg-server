@@ -55,7 +55,7 @@ def main() -> None:
     ap.add_argument("--llm", default="http://127.0.0.1:8031")
     ap.add_argument("--evidence", default="http://127.0.0.1:8032")
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--k", type=int, default=8, help="항목마다 검색 근거 수")
+    ap.add_argument("--k", type=int, default=10, help="항목마다 검색 근거 수")
     ap.add_argument("--thinking", action="store_true", help="EXAONE 추론 모드(기본 끔)")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)

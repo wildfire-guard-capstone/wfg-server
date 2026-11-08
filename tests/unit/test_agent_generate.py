@@ -80,12 +80,14 @@ class FakeLLM:
 
 
 GOOD = {
+    "topic": "위험구역 마을 대피",
     "category": "즉시",
     "text": "신월리 주민 128명을 즉시 대피시키십시오.",
     "evidence": ["SM-p075-s01"],
     "quote": "위험구역 주민은 바로 대피",
 }
 BAD = {
+    "topic": "위험구역 마을 대피",
     "category": "즉시",
     "text": "석탑리 주민을 대피시키십시오.",
     "evidence": ["SM-p079-s01"],
@@ -97,18 +99,22 @@ def test_judgment_drops_slots_and_fixed_sentence():
     j = judgment.judgment_of(ITEM)
     assert "sections" not in j and "anchor_basis" not in j and "status" not in j
     assert j["data"] == ["- 지금: 신월리(128명)"]  # 목록은 넘기고 고정 문장은 뺀다
+    assert j["topics"] == [{"topic": "위험구역 마을 대피", "section": "1. 대피", "use": []}]
     assert [b["type"] for b in judgment.data_blocks(ITEM)] == ["list"]
 
 
-def test_prompt_has_no_action_slots():
+def test_prompt_has_topics_not_slot_evidence():
     j = judgment.judgment_of(ITEM)
     user = prompt.messages(
         COMMON, j, [CHUNKS["SM-p075-s01"] | {"label": "p.75", "origin": "판정 근거"}]
     )[1]["content"]
-    assert "E2-a1" not in user and "위험구역 마을 대피" not in user and "■ SM-p075-s01" in user
-    assert prompt.schema(["SM-p075-s01"])["properties"]["proposals"]["items"]["properties"][
-        "evidence"
-    ]["items"]["enum"] == ["SM-p075-s01"]
+    # 다룰 주제는 넘기고(v3 꼴), action ID · 주제별 근거 쪽(anchors)은 넘기지 않는다
+    assert "위험구역 마을 대피" in user and "E2-a1" not in user and "anchors" not in user
+    assert "■ SM-p075-s01" in user and "[문단 꼴 예시]" in user
+    props = prompt.schema(["SM-p075-s01"], ["위험구역 마을 대피"])["properties"]["proposals"]
+    assert props["items"]["properties"]["evidence"]["items"]["enum"] == ["SM-p075-s01"]
+    assert props["items"]["properties"]["topic"]["enum"] == ["위험구역 마을 대피", "그 밖의 제안"]
+    assert props["minItems"] == 1 and props["maxItems"] == 2
 
 
 def test_cite_labels():
@@ -126,14 +132,17 @@ def test_cite_labels():
 
 
 def test_run_retry_then_drop():
-    llm = FakeLLM([[GOOD, BAD], [GOOD, BAD]])  # 다시 써도 BAD는 그대로 → BAD만 뺀다
+    llm = FakeLLM(
+        [[GOOD, BAD], [GOOD, BAD], [GOOD, BAD]]
+    )  # 두 번 다시 써도 BAD는 그대로 → BAD만 뺀다
     agent = Agent(llm, FakeEvidence(), {"신월리", "석탑리"}, workers=1)
     items, logs = agent.run(COMMON, [ITEM])
     it, lg = items[0], logs[0]
-    assert len(llm.calls) == 2 and it["state"] == "partial"
-    paras = [b for b in it["sections"][0]["blocks"] if b["type"] == "paragraph"]
-    assert [p["text"] for p in paras] == ["신월리 주민 128명을 즉시 대피시키십시오 [p.75]."]
-    assert it["sections"][1]["title"].startswith("판정 자료")
+    assert len(llm.calls) == 3 and it["state"] == "partial"
+    sec = it["sections"][0]  # v3 배치: 소제목 → 그 주제의 제안 → 그 섹션의 목록
+    assert sec["title"] == "1. 대피" and [b["type"] for b in sec["blocks"]] == ["paragraph", "list"]
+    assert sec["blocks"][0]["text"] == "신월리 주민 128명을 즉시 대피시키십시오 [p.75]."
+    assert sec["blocks"][0]["action"] == "E2-a1" and sec["blocks"][0]["quote_ok"]
     assert lg["dropped"][0]["text"].startswith("석탑리") and lg["messages"][0]["role"] == "system"
     assert "석탑리" in llm.seen[1][0][-1]["content"]  # 다시 쓰기 메시지에 문제가 적힌다
 

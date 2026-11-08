@@ -39,6 +39,10 @@ STAGE = re.compile(r"초기대응|확산대응\s?[12]단계|(?<![가-힣\d])[123
 NEG = re.compile(
     r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않|마)[가-힣]*"
 )
+# 문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 옮긴 것
+PLACEHOLDER = re.compile(
+    r"HH:MM|○○|(?<![A-Za-z가-힣])N(?=\s?(?:~|m/s|ha|시|분|명|동|km|대|곳|%|개|가구))|N~N"
+)
 META = re.compile(
     r"판정 자료|근거 발췌|규칙 엔진|evidence|withheld|do_not_state|finding|facts|JSON|입력에|○○"
 )
@@ -63,7 +67,8 @@ FORBID = {
 }
 UPPER = re.compile(r"도지사|특별시장|광역시장|특별자치|산림청장")
 VAGUE = re.compile(r"(?:보호|대응|필요한|적절한|관련)\s?조치를\s?취하|철저히\s?하|만전을\s?기하")
-MAX_LEN = 320
+MAX_LEN = 450
+MAX_SENTENCES = 4
 
 
 def parse(text: str) -> list[dict[str, Any]]:
@@ -92,6 +97,9 @@ def tidy(text: str) -> str:
     text = BRACKET.sub("", (text or "").strip())
     text = re.sub(r"\s+([.,])", r"\1", text)
     text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(
+        r"(?<![가-힣])([가-힣]{2,})\s+\1(?![가-힣])", r"\1", text
+    )  # 「신월리 신월리」 → 「신월리」
     if text and text[-1] not in ".?!":
         text += "."
     return text
@@ -101,6 +109,7 @@ def strip_subject(text: str, reader: str) -> str:
     """읽는 사람을 주어로 쓴 것만 지운다: 「의성군수는 …하십시오」 → 「…하십시오」(문장마다, 표기만)."""
     if not reader:
         return text
+    text = re.sub(rf"(^|[.!?]\s+){re.escape(reader)}님\s*,\s*", r"\1", text)  # 「의성군수님, …」
     return re.sub(rf"(^|[.!?]\s+){re.escape(reader)}(?:는|은|께서는)\s+", r"\1", text)
 
 
@@ -167,6 +176,7 @@ def check_one(
     known_names: set[str],
     reader: str,
     texts: dict[str, str] | None = None,
+    strict_quote: bool = False,
 ) -> list[str]:
     """제안 하나의 문제 목록(빈 목록 = 통과). judged_text = 판정 · 상황 글(이름 · 단계 출처),
     texts = 근거 청크 ID → 원문(있으면 quote가 단 근거에서 왔는지 본다). 「_data」 = 규칙 엔진 판정 자료(목록 · 표):
@@ -182,9 +192,15 @@ def check_one(
         errs.append(
             "근거 발췌 ID(evidence)가 없습니다. 근거 발췌에 적힌 조치만 쓰고 그 ID를 다십시오"
         )
-    elif texts is not None and not quote_ok(
-        p.get("quote", ""), [texts.get(e, "") for e in ev] + [texts.get("_data", "")]
+    elif (
+        texts is not None
+        and strict_quote
+        and not quote_ok(
+            p.get("quote", ""), [texts.get(e, "") for e in ev] + [texts.get("_data", "")]
+        )
     ):
+        # 11/8 저녁: quote는 기본으로 기록만 한다(근거 뒷받침은 verify.py가 잰다). 제안을 빼는 조건으로 쓰면
+        # 숫자 · 이름을 많이 쓴 풍부한 문단일수록 걸려 짧은 문장만 남았다(tune4 ~ 7)
         errs.append(
             "quote가 단 근거 원문에 없습니다. evidence로 단 발췌에서 조치를 적은 문장을 글자 그대로 옮기십시오"
         )
@@ -199,15 +215,22 @@ def check_one(
     for word, cnt in KOR_COUNT.findall(text):
         if str(KOR_NUM[word]) not in nums_ok:
             errs.append(f"판정 · 근거에 없는 수 「{word} {cnt}」")
-    judged_stages = {re.sub(r"\s", "", s) for s in STAGE.findall(judged_text)}
+
+    # 단계는 번호(초기대응 · 1 · 2 · 3)로 비교한다: 판정 「2단계」와 제안 「확산대응 2단계」는 같은 단계
+    def _stage_key(s: str) -> str:
+        return "초기대응" if "초기대응" in s else re.sub(r"\D", "", s)
+
+    judged_stages = {_stage_key(s) for s in STAGE.findall(judged_text)}
     for s in STAGE.findall(text):
-        if re.sub(r"\s", "", s) not in judged_stages and not any(
-            re.sub(r"\s", "", s) in j for j in judged_stages
-        ):
+        if _stage_key(s) not in judged_stages:
             errs.append(f"판정에 없는 단계 「{s}」")
     for name in known_names:
         if name in text and name not in blob and re.search(rf"(?<![가-힣]){re.escape(name)}", text):
             errs.append(f"판정 · 근거에 없는 이름 「{name}」")
+    if PLACEHOLDER.search(text):
+        errs.append(
+            "문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 쓰지 말고 이번 판정의 값으로 쓰십시오"
+        )
     if META.search(text):
         errs.append("입력 설명(판정 자료 · 근거 발췌 · evidence)을 문장에 옮기지 마십시오")
     if neg := NEG.search(text):
@@ -216,10 +239,10 @@ def check_one(
         errs.append(f"읽는 사람({reader}) 자신에게 지시하지 말고 직접 「…하십시오」로 쓰십시오")
     if "십시오" not in text:
         errs.append(
-            "읽는 사람에게 직접 「~하십시오」로 쓰십시오. 「○○은 …하라」 · 「…해야 합니다」 대신 「…하십시오」 또는 「○○에게 …하도록 지시하십시오」"
+            "할 일 문장이 없습니다. 상황 문장 뒤에 읽는 사람이 할 일을 「…하십시오」로 이어 쓰십시오(「○○은 …하라」 · 「…해야 합니다」 · 「…에 해당합니다」로 끝내지 말고 「…하십시오」 또는 「○○에게 …하도록 지시하십시오」)"
         )
-    if (n := len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", text))) > 3:
-        errs.append(f"3문장 이하로 쓰십시오({n}문장)")
+    if (n := len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", text))) > MAX_SENTENCES:
+        errs.append(f"{MAX_SENTENCES}문장 이하로 쓰십시오({n}문장)")
     if m := VAGUE.search(text):
         errs.append(
             f"「{m.group(0)}」처럼 방법이 빠진 말 대신 근거 발췌의 구체적인 방법을 쓰십시오"
@@ -254,6 +277,8 @@ def check(
     known_names: set[str],
     reader: str = "",
     texts: dict[str, str] | None = None,
+    topics: list[str] | None = None,
+    strict_quote: bool = False,
 ) -> dict[int, list[str]]:
     """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다."""
     out: dict[int, list[str]] = {}
@@ -261,7 +286,9 @@ def check(
     shapes: list[str] = []
     names = sorted(known_names, key=len, reverse=True)
     for i, p in enumerate(proposals):
-        errs = check_one(item_id, p, evidence_ids, allowed, judged_text, known_names, reader, texts)
+        errs = check_one(
+            item_id, p, evidence_ids, allowed, judged_text, known_names, reader, texts, strict_quote
+        )
         text = p.get("text") or ""
         key = re.sub(r"[^가-힣0-9]", "", text)[:30]
         # 대상(마을 · 시설 이름 · 숫자 · 시각)만 다른 같은 조치: 이름을 지운 꼴이 같으면 나눠 쓴 것
@@ -277,4 +304,11 @@ def check(
         shapes.append(shape)
         if errs:
             out[i] = errs
+    # 다룰 주제마다 제안이 있어야 한다(없으면 항목 전체를 다시 쓰게 한다)
+    missing = [tp for tp in (topics or []) if not any(p.get("topic") == tp for p in proposals)]
+    if missing:
+        out[-1] = [
+            f"다룰 주제 「{tp}」의 제안이 없습니다. 주제마다 제안을 하나씩 쓰십시오"
+            for tp in missing
+        ]
     return out

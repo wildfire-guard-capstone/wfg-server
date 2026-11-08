@@ -3,7 +3,8 @@
 
 - 판정 근거: 규칙 엔진 rule_basis = 그 판정(단계 · 구역 · 동원 범위 …)에 쓴 법령 · 매뉴얼. 판정을 설명하는 근거라
   그대로 가져온다(origin = 판정 근거).
-- 검색: 질의 = ① 항목 범위(prompt.ITEM_SCOPE) ② 항목 이름 + 판정 요약 ③ 항목 범위 + 상황(밤 · 단계 · 읽는 사람).
+- 검색: 질의 = ① 항목 범위(prompt.ITEM_SCOPE) ② 항목 이름 + 판정 요약 ③ 항목 범위 + 상황(밤 · 단계 · 읽는 사람)
+  ④ 다룰 주제마다 「항목 이름 + 소제목 + 주제」.
   질의마다 상위 k개를 받아 점수가 높은 순으로 합치고 판정 근거와 겹치는 것은 뺀다(origin = 검색).
 - 어떤 조치를 제안할지는 LLM이 이 근거에서 고른다(규칙 엔진은 정하지 않음).
 """
@@ -36,6 +37,10 @@ def queries(judgment: dict[str, Any], common: dict[str, Any], scope: str) -> lis
     sit = situation(judgment, common)
     if sit:
         out.append(f"{scope or name} {sit}")
+    for tp in (
+        judgment.get("topics") or []
+    ):  # 주제별 질의: 「헬기 재투입」 → p.78 같은 쪽이 그 주제에 붙게
+        out.append(f"{name} {tp.get('section', '')} {tp.get('topic', '')}")
     return list(dict.fromkeys(q.strip() for q in out if q.strip()))
 
 
@@ -50,8 +55,8 @@ def retrieve(
     judgment: dict[str, Any],
     common: dict[str, Any],
     scope: str,
-    k: int = 8,
-    k_each: int = 6,
+    k: int = 10,
+    k_each: int = 5,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """→ (근거 청크 목록, 기록). 청크에는 label · origin · score를 붙인다."""
     basis_ids = list(dict.fromkeys((item.get("rule_basis") or []) + basis_from_data(item)))

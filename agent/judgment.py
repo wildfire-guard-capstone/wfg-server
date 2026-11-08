@@ -5,9 +5,11 @@
 LLM이 근거 검색(RAG) 결과를 참고해 쓴다. 그래서 규칙 엔진 항목에서
 
 - 넘기는 것: finding(판정 요약) · facts(판정 값) · withheld(판단하지 않은 것과 이유) · do_not_state ·
-  조립기가 만든 list · table · note(판정 결과를 사람이 읽게 편 것)
-- 넘기지 않는 것: action 자리(topic · use · anchors · see — 문단을 미리 정해 두는 설계) · anchor_basis ·
-  조립기의 fixed 문장(정해진 할 일 문장) · targets(내부 ID) · status(영문 코드, facts에 같은 내용이 있음)
+  조립기가 만든 list · table · note(판정 결과를 사람이 읽게 편 것) ·
+  다룰 주제(topics = action의 소제목 · 주제 · 쓸 판정 값 이름). 11/8 저녁 사용자 결정: 시나리오 v3처럼 항목마다
+  다룰 주제를 알려 준다. 주제는 판정에 따라 달라진다(예: 밤에 닿는 마을이 있을 때만 사전대피 주제)
+- 넘기지 않는 것: action의 anchors(주제마다 미리 정한 근거 쪽) · anchor_basis · 조립기의 fixed 문장(정해진 할 일 문장) ·
+  targets(내부 ID) · status(영문 코드, facts에 같은 내용이 있음). 문장 내용과 근거는 LLM이 근거 검색으로 정한다
 
 rule_basis(규칙 엔진이 판정에 쓴 근거)는 retrieve.py가 「판정 근거」로 가져온다.
 """
@@ -53,6 +55,24 @@ def block_lines(block: dict[str, Any]) -> list[str]:
     return []
 
 
+def topics_of(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """다룰 주제: 규칙 엔진 action 자리의 소제목 · 주제 · 쓸 판정 값(use) · 참조 항목(see). 문장 · 근거 쪽은 뺀다."""
+    out = []
+    for s in item.get("sections", []):
+        for b in s.get("blocks", []):
+            if b.get("type") == "action":
+                out.append(
+                    {
+                        "action": b["id"],
+                        "section": s.get("title", ""),
+                        "topic": b.get("topic", ""),
+                        "use": b.get("use", []) or [],
+                        "see": b.get("see"),
+                    }
+                )
+    return out
+
+
 def judgment_of(item: dict[str, Any]) -> dict[str, Any]:
     """LLM에 넘길 판정 정보(항목 하나)."""
     tables = [block_lines(b) for b in data_blocks(item)]
@@ -66,6 +86,10 @@ def judgment_of(item: dict[str, Any]) -> dict[str, Any]:
         ],
         "do_not_state": item.get("do_not_state", []) or [],
         "data": [ln for t in tables for ln in t if ln],
+        "topics": [
+            {"topic": tp["topic"], "section": tp["section"], "use": tp["use"]}
+            for tp in topics_of(item)
+        ],
     }
 
 

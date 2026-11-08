@@ -161,8 +161,9 @@ function proposal(r) {
 }
 function spreadTab(r) {
   const cal = r.calibration, a = r.spread.areas_ha, mx = Math.max(...a);
-  let h = `<h4>확산속도 보정(그 시각까지 알 수 있는 정보만)</h4><p>${esc(cal.from)}: 목표 ${cal.target_ha} ha, 결과 ${cal.got_ha} ha · <b>배율 ${cal.adj.toFixed(2)}</b>${cal.clipped?` (탐색 범위 끝: ${cal.clipped})`:""}</p>
-    <p class="small">시도: ${cal.tries.map(t => `${t[0]}→${t[1]} ha`).join(" · ")}</p>
+  const parts = cal.parts || [cal];
+  let h = `<h4>확산속도 보정(그 시각까지 알 수 있는 정보만)</h4><p>${esc(cal.from)} → <b>배율 ${cal.adj.toFixed(2)}</b></p>` +
+    parts.map(p => `<p>· ${esc(p.from)}: 목표 ${p.target_ha} ha, 결과 ${p.got_ha} ha · 배율 ${p.adj.toFixed(2)}${p.clipped?` (탐색 범위 끝: ${p.clipped})`:""}<br><span class="small">시도: ${p.tries.map(t => `${t[0]}→${t[1]} ha`).join(" · ")}</span></p>`).join("") + `
     <h4>예측 범위(${esc(r.round.at)} 기준, ELMFIRE ${r.spread.wall_s}초)</h4><table><tr><th>범위</th><th>~까지</th><th>면적(ha)</th><th></th></tr>`;
   a.forEach((v,i) => h += `<tr><td>${i?`P${i}`:"P0 관측"}</td><td>${esc(r.round.slices_until[i])}</td><td>${v}</td><td style="width:45%"><div class="bar" style="width:${(v/mx*100).toFixed(1)}%;background:${PCOL[i]}"></div></td></tr>`);
   h += `</table><h4>검증: 뒤 상황도 화선과 비교</h4>`;

@@ -39,7 +39,13 @@ def main() -> None:
             f"{len(calls)}회 · {tok}토큰 · {r['timing']['llm_s']:.0f}초 |"
         )
         detail.append(f"\n## {rd['at']} {rd['version']} ({rd['report']}, {rd['reader']})\n")
-        detail.append(f"- 보정: {cal['from']} · 목표 {cal['target_ha']} ha → {cal['got_ha']} ha")
+        ps = cal.get("parts", [cal])
+        parts = "; ".join(
+            (f"{p['from']} " if len(ps) > 1 else "")
+            + f"목표 {p['target_ha']} ha → {p['got_ha']} ha · 배율 {p['adj']:.2f}"
+            for p in ps
+        )
+        detail.append(f"- 보정: {cal['from']} → 배율 {cal['adj']:.2f} ({parts})")
         v = "; ".join(
             f"{c['at']} 예측 {c['pred_ha']} / 상황도 {c['obs_ha']} ha (IoU {c['iou']})"
             for c in sp["validation"]

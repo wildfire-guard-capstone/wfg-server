@@ -3,10 +3,12 @@
     python -m demo.uiseong.run_demo --data <데모 데이터> --deck <ELMFIRE 입력>
         --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--skip-llm] [--llm http://127.0.0.1:8031] [--evidence http://127.0.0.1:8032]
+        [--calibration blend|interval|rate|from_first]
 
-회차 k(11/7 사용자 결정):
-  1. 보정: 직전 상태 → 이번 화선의 면적이 맞게 확산속도 배율(adj) 하나를 찾는다
-     (1회차 = 11:24 발화점 → 12:50 1보, k회차 = k−1보 화선 → k보 화선)
+회차 k(11/7 · 11/8 사용자 결정):
+  1. 보정: 확산속도 배율(adj) 하나. 기본 blend = 두 배율의 기하평균
+     (k−1보 화선 → k보 화선 면적 맞춤 배율, k보 화선에서 발화 뒤 평균 성장 속도를 1시간 잇는 배율).
+     1회차는 발화 뒤 평균 성장 속도만(12:50 1보 화선 + 1시간)
   2. 예측: k보 화선에서 그 배율로 8시간 → P0(관측 화선) ~ P8
   3. 검증: 8시간 안에 들어오는 뒤 상황도 화선과 면적 · 겹침(IoU) 비교(제안에는 쓰지 않음)
   4. 규칙 엔진: build_llm_input(Inputs) — 직전 회차의 현재 단계 · 읍면 Set/Go를 이어 받는다
@@ -62,6 +64,103 @@ def wind_series(deck: Path, at_xy, t0_s: float, hours: int = 8) -> list[tuple[fl
     return out
 
 
+CAL_METHODS = {
+    "blend": "직전 구간 배율과 발화 뒤 평균 속도 배율의 기하평균(11/8 사용자 결정, 기본)",
+    "interval": "직전 구간(k−1보 화선 → k보 화선) 면적 맞춤(11/7)",
+    "rate": "발화 뒤 평균 성장 속도 유지(k보 화선 + 1시간 = 면적 ÷ 발화 뒤 시간)",
+    "from_first": "1보 화선 → k보 화선 면적 맞춤",
+}
+
+
+def _part(cal: pr.Calibration, how: str) -> dict:
+    return {
+        "from": how,
+        "adj": cal.adj,
+        "target_ha": round(cal.target_ha, 1),
+        "got_ha": round(cal.got_ha, 1),
+        "tries": [(round(k, 3), round(v, 1)) for k, v in cal.tries],
+        "clipped": cal.clipped,
+    }
+
+
+def calibrate_round(deck: pr.Deck, work: Path, md: MapData, rd, method: str = "blend") -> dict:
+    """회차 rd의 확산속도 배율과 그 근거(round_k.json의 calibration).
+
+    1회차는 어느 방법이든 rate(11/7 사용자 결정 — 발화점에서 출발하면 점 출발 가속 구간 때문에
+    배율이 폭주한다). blend = interval과 rate의 기하평균(11/8): 직전 구간 하나로 맞춘 배율은
+    손으로 그린 화선 차이와 급성장 구간에 따라 2.75 ~ 7.0으로 흔들렸고(14:20 예측이 22:00에
+    실측의 3.6배), 발화 뒤 평균만 쓰면 13:10 · 13:45 예측이 실측의 0.6배로 작았다(backtest.py).
+    """
+    if method not in CAL_METHODS:
+        raise ValueError(f"보정 방법 {method}: {list(CAL_METHODS)} 중 하나")
+    observed = md.report(rd.at)
+
+    def rate_part() -> dict:
+        # k보 화선에서 1시간 동안 늘어나는 면적 = 발화(11:24) ~ k보 평균 속도. 그 시각에 아는 정보만
+        rate = observed.area / 1e4 / ((rd.t_s - IGNITION_T_S) / 3600)
+        target = observed.area / 1e4 + rate
+        cal = pr.calibrate(
+            deck,
+            work / f"cal_{rd.no}_rate",
+            observed,
+            rd.t_s,
+            rd.t_s + 3600,
+            None,
+            target_ha=target,
+        )
+        return _part(
+            cal, f"발화 뒤 평균 성장 속도 유지(시간당 {rate:.1f} ha, {rd.report} 화선 + 1시간)"
+        )
+
+    def span_part(before) -> dict:
+        cal = pr.calibrate(
+            deck,
+            work / f"cal_{rd.no}_from{before.no}",
+            md.report(before.at),
+            before.t_s,
+            rd.t_s,
+            observed,
+        )
+        return _part(cal, f"{before.report} {before.at} → {rd.report} {rd.at} 화선")
+
+    if rd.no == 1 or method == "rate":
+        method, parts = "rate", [rate_part()]
+    elif method == "interval":
+        parts = [span_part(ROUNDS[rd.no - 2])]
+    elif method == "from_first":
+        parts = [span_part(ROUNDS[0])]
+    else:
+        parts = [span_part(ROUNDS[rd.no - 2]), rate_part()]
+    adj = math.exp(sum(math.log(p["adj"]) for p in parts) / len(parts))
+    how = (
+        parts[0]["from"] if len(parts) == 1 else "두 배율의 기하평균(직전 구간 · 발화 뒤 평균 속도)"
+    )
+    return {"method": method, "adj": adj, "from": how, "parts": parts}
+
+
+def validate(md: MapData, rd, observed, res: pr.RunResult, hours: float = 8) -> list[dict]:
+    """예측을 뒤 상황도 화선과 비교(면적 · IoU). 둘 다 기준 화선과 합친 범위로 잰다."""
+    checks = []
+    for later in md.perimeters["reports"] + md.perimeters["later"]:
+        h, m = map(int, later["at"].split(":"))
+        dt_h = (h * 60 + m - (rd.base_at.hour * 60 + rd.base_at.minute)) / 60
+        if 0 < dt_h <= hours:
+            pred = pr.polygonize(res.burned_by(rd.t_s + dt_h * 3600), res.transform)
+            pred = unary_union([pred, observed])
+            obs = unary_union([md.report(later["at"]), observed])
+            inter = pred.intersection(obs).area
+            checks.append(
+                {
+                    "at": later["at"],
+                    "hours": round(dt_h, 2),
+                    "pred_ha": round(pred.area / 1e4, 1),
+                    "obs_ha": round(obs.area / 1e4, 1),
+                    "iou": round(inter / pred.union(obs).area, 3) if pred.area else 0,
+                }
+            )
+    return checks
+
+
 def geo4326(g) -> dict:
     return mapping(to4326(g))
 
@@ -105,6 +204,7 @@ def main() -> None:
     ap.add_argument("--evidence", default="http://127.0.0.1:8032")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--thinking", default="", help="추론 모드로 쓸 항목(예: S2,S4,S5). 기본 끔")
+    ap.add_argument("--calibration", default="blend", choices=list(CAL_METHODS))
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     work = a.out / "_elmfire"
@@ -137,49 +237,22 @@ def main() -> None:
         print(f"\n=== 회차 {rd.no} {rd.version} {rd.at} ({rd.report}, {rd.reader}) ===", flush=True)
         observed = md.report(rd.at)
         # 1. 보정
-        if rd.no == 1:
-            # 발화 뒤 성장 속도 유지(11/7 사용자 결정): 1보 화선에서 1시간 동안 늘어나는 면적
-            # = 발화(11:24) ~ 1보(12:50) 평균 속도. 12:50에 아는 정보만 쓴다
-            rate = observed.area / 1e4 / ((rd.t_s - IGNITION_T_S) / 3600)
-            target = observed.area / 1e4 + rate
-            cal = pr.calibrate(
-                deck, work / f"cal_{rd.no}", observed, rd.t_s, rd.t_s + 3600, None, target_ha=target
+        cal = calibrate_round(deck, work, md, rd, a.calibration)
+        for p in cal["parts"]:
+            print(
+                f"  보정 {p['from']}: adj {p['adj']:.3f} · 목표 {p['target_ha']} ha · "
+                f"결과 {p['got_ha']} ha · 시도 {len(p['tries'])}회"
+                f"{' · 범위 끝(' + p['clipped'] + ')' if p['clipped'] else ''}",
+                flush=True,
             )
-            cal_from = f"발화 뒤 평균 성장 속도 유지(시간당 {rate:.1f} ha, 1보 화선 + 1시간)"
-        else:
-            before = ROUNDS[rd.no - 2]
-            start, t_from = md.report(before.at), before.t_s
-            cal = pr.calibrate(deck, work / f"cal_{rd.no}", start, t_from, rd.t_s, observed)
-            cal_from = f"{before.report} {before.at} → {rd.report} {rd.at} 화선"
-        print(
-            f"  보정 adj {cal.adj:.3f} · 목표 {cal.target_ha:.1f} ha · 결과 {cal.got_ha:.1f} ha · "
-            f"시도 {len(cal.tries)}회{' · 범위 끝(' + cal.clipped + ')' if cal.clipped else ''}",
-            flush=True,
-        )
+        print(f"  배율 {cal['adj']:.3f} ({cal['method']})", flush=True)
         # 2. 예측
-        res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal.adj)
+        res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"])
         rngs = pr.ranges(res, observed)
         areas = [round(g.area / 1e4, 1) for g in rngs]
         print(f"  예측 {res.wall_s:.1f}초 · P0~P8 {areas} ha", flush=True)
         # 3. 검증(뒤 상황도)
-        checks = []
-        for later in md.perimeters["reports"] + md.perimeters["later"]:
-            h, m = map(int, later["at"].split(":"))
-            dt_h = (h * 60 + m - (rd.base_at.hour * 60 + rd.base_at.minute)) / 60
-            if 0 < dt_h <= 8:
-                pred = pr.polygonize(res.burned_by(rd.t_s + dt_h * 3600), res.transform)
-                pred = unary_union([pred, observed])
-                obs = unary_union([md.report(later["at"]), observed])
-                inter = pred.intersection(obs).area
-                checks.append(
-                    {
-                        "at": later["at"],
-                        "hours": round(dt_h, 2),
-                        "pred_ha": round(pred.area / 1e4, 1),
-                        "obs_ha": round(obs.area / 1e4, 1),
-                        "iou": round(inter / pred.union(obs).area, 3) if pred.area else 0,
-                    }
-                )
+        checks = validate(md, rd, observed, res)
         print(
             f"  검증 {[(c['at'], c['pred_ha'], c['obs_ha'], c['iou']) for c in checks]}", flush=True
         )
@@ -188,7 +261,7 @@ def main() -> None:
                 {
                     "round": rd.no,
                     "at": rd.at,
-                    "adj": cal.adj,
+                    "adj": cal["adj"],
                     "areas_ha": areas,
                     "validation": checks,
                 }
@@ -290,14 +363,7 @@ def main() -> None:
                     (rd.base_at + timedelta(hours=h)).strftime("%H:%M") for h in range(9)
                 ],
             },
-            "calibration": {
-                "adj": cal.adj,
-                "target_ha": round(cal.target_ha, 1),
-                "got_ha": round(cal.got_ha, 1),
-                "from": cal_from,
-                "tries": [(round(k, 3), round(v, 1)) for k, v in cal.tries],
-                "clipped": cal.clipped,
-            },
+            "calibration": cal,
             "spread": {
                 "areas_ha": areas,
                 "wall_s": round(res.wall_s, 1),
@@ -323,7 +389,7 @@ def main() -> None:
             {
                 "round": rd.no,
                 "at": rd.at,
-                "adj": cal.adj,
+                "adj": cal["adj"],
                 "areas_ha": areas,
                 "validation": checks,
                 "stage_now": b["stage"]["now"]["stage"],

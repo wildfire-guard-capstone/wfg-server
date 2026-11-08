@@ -1,16 +1,19 @@
 # ruff: noqa: E501
-"""의성 데모 실행(GPU 서버): 입력 → 1 확산 예측 → 2 규칙 판정 → 3 LLM 대응 생성 → 출력.
+"""의성 데모 실행(GPU 서버): 입력 → 1 확산 예측 → 1b 위험도 → 2 규칙 판정 → 3 LLM 대응 생성 → 출력.
 
     python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
         [--calibration blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
+        [--risk-mode mean_0_5|at_p5] [--no-risk]
 
 입력 폴더(input/): scenario.json(사고 · 회차 · 현장 보고) · perimeters.json(상황도 화선) · regions.json ·
 map/(지도 레이어) · elmfire_deck/(ELMFIRE 입력). 자세한 것은 input/README.md.
 
 결과 폴더(--out):
   round_k/01_spread/   spread.json(보정 · P0~P8 · 검증, 다시 쓰기용 WKT) · ranges_4326.geojson
-  round_k/02_rules/    inputs.json(규칙 엔진에 넣은 값) · llm_input.json(규칙 엔진 출력: bundles · common · items)
+  round_k/01b_risk/    risk.json(R · 23개 변수 값 · 등급 · 가중치 · 기여) · risk.md(사람이 읽는 표)
+                       — <input>/risk/(prepare_risk_data.py)가 있어야 돈다. 지역 격자는 처음 한 번 만든다
+  round_k/02_rules/   inputs.json(규칙 엔진에 넣은 값) · llm_input.json(규칙 엔진 출력: bundles · common · items)
   round_k/03_rag/      <항목>.json(질의 · 찾은 근거)
   round_k/04_llm/      <항목>.json(보낸 메시지 · 답 원문 · 검사) · <항목>_prompt.txt(사람이 읽는 판)
   round_k/05_output/   proposal.json(화면용 제안서)
@@ -29,7 +32,7 @@ from pathlib import Path
 from agent.clients import LLM, Evidence
 from agent.generate import Agent
 from demo.uiseong import rounds as rounds_mod
-from demo.uiseong import step1_spread, step2_rules, step3_agent
+from demo.uiseong import step1_spread, step1b_risk, step2_rules, step3_agent
 from demo.uiseong.data import MapData, to4326
 from spread import perimeter_run as pr
 
@@ -57,6 +60,10 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--k", type=int, default=10, help="항목마다 검색 근거 수")
     ap.add_argument("--thinking", action="store_true", help="EXAONE 추론 모드(기본 끔)")
+    ap.add_argument(
+        "--risk-mode", default="mean_0_5", choices=["mean_0_5", "at_p5"], help="위험도 기상 시각"
+    )
+    ap.add_argument("--no-risk", action="store_true", help="1b 위험도를 건너뜀")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     deck_dir = a.deck or a.input / "elmfire_deck"
@@ -82,6 +89,12 @@ def main() -> None:
         f"취약시설 {len(md.vulnerable)} · 인접 시군 {md.neighbors['의성군']}",
         flush=True,
     )
+    risk_data = None
+    if not a.no_risk:
+        if (a.input / "risk" / "weather_hourly.csv").exists():
+            risk_data = step1b_risk.RiskData.load(a.input, deck_dir)
+        else:
+            print("위험도: <input>/risk/가 없어 건너뜀(prepare_risk_data.py로 만든다)", flush=True)
     wanted = {int(x) for x in a.rounds.split(",") if x.strip()} or {r.no for r in sc.rounds}
     prev_stage, prev_alerts, prev, summary = None, (), {}, []
     for rd in sc.rounds:
@@ -114,6 +127,17 @@ def main() -> None:
             f"    검증 {[(c['at'], c['pred_ha'], c['obs_ha'], c['iou']) for c in sp.validation]}",
             flush=True,
         )
+        # 1b. 위험도
+        rk = None
+        if risk_data is not None:
+            rk = step1b_risk.run_risk(risk_data, md, rd, sp, a.risk_mode)
+            step1b_risk.save(rk, rdir / "01b_risk")
+            print(
+                f"  1b 위험도: R {rk['score']} · P5 {rk['p5_ha']:.0f} ha · "
+                f"뺀 변수 {rk['missing'] or '없음'}",
+                flush=True,
+            )
+        risk_score = None if rk is None else rk["score"]
         if a.spread_only:
             summary.append(
                 {
@@ -122,6 +146,7 @@ def main() -> None:
                     "adj": sp.calibration["adj"],
                     "areas_ha": sp.areas_ha,
                     "validation": sp.validation,
+                    "risk": risk_score,
                 }
             )
             continue
@@ -180,6 +205,7 @@ def main() -> None:
                 "validation": sp.validation,
             },
             "weather": ru["weather"],
+            "risk": rk,
             "llm_input": llm_in,
             "proposal": items,
             "agent_log": logs,
@@ -202,6 +228,7 @@ def main() -> None:
                 "validation": sp.validation,
                 "stage_now": ru["stage_now"],
                 "stage_p5": ru["stage_p5"],
+                "risk": risk_score,
                 "states": {i["id"]: i["state"] for i in items},
                 "n_proposals": {i["id"]: len(i.get("proposals", [])) for i in items},
                 "timing": out["timing"],

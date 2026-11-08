@@ -5,7 +5,8 @@
 
 지도(Leaflet · OpenStreetMap 타일): P1 ~ P8 예측 범위, P0(관측 화선),
 8시간 안 뒤 상황도 화선(검증, 점선),
-범위에 든 마을(구간 색), 취약시설. 오른쪽: 회차 제안서(12개 항목). 탭: 예측 · 검증, 실행 기록.
+범위에 든 마을(구간 색), 취약시설. 오른쪽: 회차 제안서(12개 항목). 탭: 위험도, 예측 · 검증, 실행 기록.
+위험도는 round_k.json의 risk, 없으면 round_k/01b_risk/risk.json(step1b_risk --runs로 따로 계산한 것).
 """
 
 import argparse
@@ -63,10 +64,15 @@ def _round(path: Path) -> dict:
                 "attempts": [{"errors": a["errors"]} for a in lg.get("attempts", [])],
             }
         )
+    risk = r.get("risk")
+    risk_file = path.parent / path.stem / "01b_risk" / "risk.json"
+    if risk is None and risk_file.exists():  # 위험도를 나중에 따로 계산한 결과(step1b_risk --runs)
+        risk = json.loads(risk_file.read_text(encoding="utf-8"))
     return {
         "round": r["round"],
         "calibration": r["calibration"],
         "spread": r["spread"],
+        "risk": risk,
         "weather": r["weather"],
         "common": r["llm_input"]["common"],
         "stage": b["stage"],

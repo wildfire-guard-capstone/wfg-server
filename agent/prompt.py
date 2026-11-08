@@ -44,6 +44,7 @@ SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대�
    「보호 조치를 취하십시오」 「철저히 하십시오」처럼 방법이 빠진 말은 쓰지 말고, 근거 발췌에 적힌 구체적인 방법(무엇을 · 어떻게)을 씁니다. 발췌의 제목 · 일반 문구를 그대로 옮기지 말고 이번 상황(대상 · 시각)에 맞게 씁니다.
 8. 다룰 주제가 없으면 인명 보호와 급한 일부터 2~3개 씁니다. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「괴산리 · 석탑리 주민을 …」).
 9. category: 즉시(지금 할 일) · 대기(조건이 되면 할 일, 미리 준비할 일) · 협의(산림청장 등 발령권자와 협의) · 요청(다른 기관에 요청). 잠재 위험구역(5~8시간) 조치는 대기입니다.
+10. [이 항목 작성 지침]은 이번 상황(규모 · 단계 · 시간대 · 읽는 사람)에서 이 항목에 무엇을 쓰고 무엇을 쓰지 않을지 알려 줍니다. 「쓸 것」은 주제별로 따르고, 「덧붙일 제안」은 근거 발췌에 그 조치가 있을 때만 그 주제로 하나 씁니다(없으면 쓰지 않음). 「쓰지 않을 것」은 쓰지 않습니다. 지침의 조치도 근거 발췌에 적힌 것만 씁니다.
 
 [출력] JSON 하나만: {"proposals": [{"topic": "<다룰 주제>", "category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문>"}]}"""
 
@@ -158,7 +159,12 @@ def authority(common: dict) -> str:
 
 
 def messages(
-    common: dict, judgment: dict, chunks: list[dict], names: set[str] = frozenset()
+    common: dict,
+    judgment: dict,
+    chunks: list[dict],
+    names: set[str] = frozenset(),
+    guide: str = "",
+    situation_line: str = "",
 ) -> list[dict[str, str]]:
     scope, rule = ITEM_SCOPE.get(judgment["id"], ("", ""))
     head = f"이번 항목: {judgment['id']} {judgment.get('name', '')}"
@@ -180,7 +186,9 @@ def messages(
         head,
         "[다른 항목 — 이 항목에 쓰지 않음]\n" + others,
         "[읽는 사람의 권한]\n" + authority(common),
-        "[읽는 사람 · 상황]\n" + json.dumps(situation, ensure_ascii=False),
+        "[읽는 사람 · 상황]\n"
+        + json.dumps(situation, ensure_ascii=False)
+        + (f"\n이번 상황: {situation_line}" if situation_line else ""),
         "[규칙 엔진 판정]\n" + json.dumps(judged, ensure_ascii=False),
     ]
     if topics:
@@ -191,6 +199,8 @@ def messages(
                 for tp in topics
             )
         )
+    if guide:
+        parts.append("[이 항목 작성 지침 — 이번 상황에 맞춘 것]\n" + guide)
     ex = examples_of(judgment["id"], names)
     if ex:
         parts.append(
@@ -207,15 +217,23 @@ def messages(
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
-def schema(evidence_ids: list[str], topics: list[str] | None = None) -> dict[str, Any]:
-    topics = [t for t in (topics or []) if t]
-    n_min, n_max = (len(topics), len(topics) + 1) if topics else (1, MAX_PROPOSALS)
+def schema(
+    evidence_ids: list[str],
+    topics: list[str] | None = None,
+    extras: list[str] | None = None,
+) -> dict[str, Any]:
+    """제안 목록 json_schema. extras = None이면 예전처럼 「그 밖의 제안」 한 칸을 더 열고,
+    리스트면(작성 지침 사용) 이번 상황에 켜진 덧붙일 주제만 연다(빈 리스트 = 다룰 주제만)."""
+    topics = list(dict.fromkeys(t for t in (topics or []) if t))
+    opt = (
+        ["그 밖의 제안"]
+        if extras is None
+        else list(dict.fromkeys(e for e in extras if e and e not in topics))
+    )
+    n_min, n_max = (len(topics), len(topics) + len(opt)) if topics else (1, MAX_PROPOSALS)
     item_props: dict[str, Any] = {}
     if topics:
-        item_props["topic"] = {
-            "type": "string",
-            "enum": list(dict.fromkeys(topics)) + ["그 밖의 제안"],
-        }
+        item_props["topic"] = {"type": "string", "enum": topics + opt}
     return {
         "type": "object",
         "properties": {

@@ -137,3 +137,17 @@ def test_placeholder_vocative_and_repeat():
     assert (
         check.tidy("신월리 신월리 주택 주변에 배치하십시오") == "신월리 주택 주변에 배치하십시오."
     )
+
+
+def test_time_suffix_and_unknown_village():
+    assert check.tidy("서풍이 강해지는 15:10~16:10시에 지상 진화로 바꾸십시오") == (
+        "서풍이 강해지는 15:10~16:10에 지상 진화로 바꾸십시오."
+    )
+    # 지도 · 판정 · 근거 어디에도 없는 「○○리」(신안리를 신신리로 잘못 씀)
+    assert any(
+        "마을 이름 「신신리」" in e for e in _c("신월리~신신리 구간 주변에 소방차를 배치하십시오.")
+    )
+    assert not any(
+        "마을 이름" in e
+        for e in _c("신월리 주택 최소 2동 주변에 소방차를 배치하고 일자리 는 그대로 두십시오.")
+    )

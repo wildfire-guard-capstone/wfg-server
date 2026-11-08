@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from agent.generate import Agent
+from agent.situation import flags
 from demo.uiseong.data import MapData
 
 
@@ -35,7 +36,15 @@ def run_agent(
     agent: Agent, llm_input: dict, prev: dict, only: set[str] | None = None
 ) -> tuple[list, list]:
     items = [it for it in llm_input["items"] if not only or it["id"] in only]
-    return agent.run(llm_input["common"], items, prev)
+    common = with_situation(llm_input)
+    return agent.run(common, items, prev)
+
+
+def with_situation(llm_input: dict) -> dict:
+    """common + 상황 깃발(agent/situation.py): 항목별 작성 지침(agent/guides.py)을 고르는 데 쓴다.
+    깃발은 항목 전체(E2 대피 현황 · S6/E6 요청 건수)로 만든다(--items로 몇 항목만 돌려도 같은 깃발)."""
+    f = flags(llm_input["bundles"], llm_input["items"], llm_input["common"])
+    return llm_input["common"] | {"situation": f}
 
 
 def next_prev(items: list[dict], version: str) -> dict:
@@ -73,6 +82,8 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
             for k in (
                 "id",
                 "input_key",
+                "guide",
+                "extras",
                 "messages",
                 "attempts",
                 "dropped",

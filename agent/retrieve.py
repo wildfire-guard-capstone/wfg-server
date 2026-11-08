@@ -57,8 +57,13 @@ def retrieve(
     scope: str,
     k: int = 10,
     k_each: int = 5,
+    guide_queries: list[str] | None = None,
+    k_guide: int = 2,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """→ (근거 청크 목록, 기록). 청크에는 label · origin · score를 붙인다."""
+    """→ (근거 청크 목록, 기록). 청크에는 label · origin · score를 붙인다.
+
+    guide_queries = 이번 상황에 켜진 작성 지침의 질의(guides.queries). 일반 질의보다 점수가 낮아 상위 k에서 밀려도
+    질의마다 상위 k_guide개는 넣는다(그 지침의 조치가 근거 발췌에 들어오게)."""
     basis_ids = list(dict.fromkeys((item.get("rule_basis") or []) + basis_from_data(item)))
     want = expand_pages(basis_ids)
     basis, _ = evidence.fetch(want) if want else ([], [])
@@ -67,6 +72,7 @@ def retrieve(
         i for i in basis_ids if i not in got and not any(g.startswith(i + "-s") for g in got)
     ]
     qs = queries(judgment, common, scope)
+    gqs = [q for q in dict.fromkeys(guide_queries or []) if q not in qs]
     best: dict[str, dict[str, Any]] = {}
     for q in qs:
         for h in evidence.search(q, k=k_each, exclude=list(got)):
@@ -75,6 +81,14 @@ def retrieve(
             if h["chunk_id"] not in best or h["score"] > best[h["chunk_id"]]["score"]:
                 best[h["chunk_id"]] = h | {"query": q}
     found = sorted(best.values(), key=lambda h: -h["score"])[:k]
+    seen = got | {h["chunk_id"] for h in found}
+    for q in gqs:  # 지침 질의: 상위 k_guide개를 따로 넣는다
+        hits = [
+            h for h in evidence.search(q, k=k_each, exclude=list(got)) if h["chunk_id"] not in seen
+        ]
+        for h in hits[:k_guide]:
+            found.append(h | {"query": q, "guide": True})
+            seen.add(h["chunk_id"])
     out = [c | {"origin": "판정 근거", "score": None} for c in basis] + [
         h | {"origin": "검색"} for h in found
     ]
@@ -82,6 +96,7 @@ def retrieve(
         c["label"] = cite.label(c)
     log = {
         "queries": qs,
+        "guide_queries": gqs,
         "basis": basis_ids,
         "missing": missing,
         "found": [(h["chunk_id"], round(h["score"], 4), h["query"]) for h in found],

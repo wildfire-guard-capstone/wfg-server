@@ -92,6 +92,10 @@ def parse(text: str) -> list[dict[str, Any]]:
     return [p for p in props if isinstance(p, dict)]
 
 
+VILLAGE = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=[\s·,~)\]와과의에를은는도]|$)")
+NOT_VILLAGE = {"일자리", "마무리", "잠자리", "실마리", "갈무리", "앞머리", "뒷머리", "보따리"}
+
+
 def tidy(text: str) -> str:
     """표기만 고른다: LLM이 붙인 근거 괄호는 지우고(표기는 cite.py가 붙임) 끝 마침표를 채운다."""
     text = BRACKET.sub("", (text or "").strip())
@@ -100,6 +104,10 @@ def tidy(text: str) -> str:
     text = re.sub(
         r"(?<![가-힣])([가-힣]{2,})\s+\1(?![가-힣])", r"\1", text
     )  # 「신월리 신월리」 → 「신월리」
+    text = re.sub(
+        r"(\d{1,2}:\d{2})시(?![가-힣])", r"\1", text
+    )  # 「15:10~16:10시에」 → 「15:10~16:10에」
+    text = re.sub(r"(\d{1,2}:\d{2})시([에부까])", r"\1\2", text)
     if text and text[-1] not in ".?!":
         text += "."
     return text
@@ -227,6 +235,10 @@ def check_one(
     for name in known_names:
         if name in text and name not in blob and re.search(rf"(?<![가-힣]){re.escape(name)}", text):
             errs.append(f"판정 · 근거에 없는 이름 「{name}」")
+    # 지도 자료에도 없는 마을 이름(tune10: 「괴산리~신신리」 — 신안리를 잘못 씀). 「○○리」 꼴만 본다
+    for v in dict.fromkeys(VILLAGE.findall(text)):
+        if v not in blob and v not in NOT_VILLAGE and v not in known_names:
+            errs.append(f"판정 · 근거에 없는 마을 이름 「{v}」")
     if PLACEHOLDER.search(text):
         errs.append(
             "문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 쓰지 말고 이번 판정의 값으로 쓰십시오"

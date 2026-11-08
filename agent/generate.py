@@ -16,7 +16,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent import check, cite, judgment, prompt, retrieve
+from agent import check, cite, guides, judgment, prompt, retrieve, situation
 from agent.clients import LLM, Evidence
 
 FAILED_TEXT = (
@@ -26,9 +26,9 @@ ATTEMPTS = 3  # 처음 + 다시 쓰기 2회
 OTHER = "그 밖의 제안"
 
 
-def input_key(judg: dict[str, Any], common: dict[str, Any]) -> str:
+def input_key(judg: dict[str, Any], common: dict[str, Any], guide: str = "") -> str:
     keep = {k: common.get(k) for k in ("reader", "current_stage", "commander")}
-    raw = json.dumps({"j": judg, "c": keep}, ensure_ascii=False, sort_keys=True)
+    raw = json.dumps({"j": judg, "c": keep, "g": guide}, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -48,10 +48,15 @@ def _para(
     p: dict[str, Any], by_id: dict[str, dict[str, Any]], tp: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     chunks = [by_id[e] for e in p["evidence"] if e in by_id]
+    see = (tp or {}).get("see")
     return {
         "type": "paragraph",
         "category": p["category"],
-        "text": with_citation(p["text"], chunks, (tp or {}).get("see")),
+        "text": with_citation(p["text"], chunks, see),
+        "body": with_citation(
+            p["text"], [], see
+        ),  # 화면 본문(근거 표기 없음) — 근거는 마우스를 올리면
+        "cite": cite.render(chunks),
         "evidence": p["evidence"],
         "quote": p.get("quote", ""),
         "quote_ok": p.get("quote_ok"),
@@ -91,8 +96,11 @@ def assemble(
         if blocks:
             sections.append({"title": s.get("title", ""), "blocks": blocks})
     rest = [p for p in proposals if id(p) not in used]
-    if rest:
-        sections.append({"title": OTHER, "blocks": [_para(p, by_id) for p in rest]})
+    by_rest: dict[str, list[dict[str, Any]]] = {}
+    for p in rest:  # 작성 지침의 덧붙일 주제(「통합지휘본부 운영」)는 그 이름을 소제목으로
+        by_rest.setdefault(p.get("topic") or OTHER, []).append(p)
+    for title, ps in by_rest.items():
+        sections.append({"title": title, "blocks": [_para(p, by_id) for p in ps]})
     if not proposals:
         sections.insert(
             0, {"title": "대응 제안", "blocks": [{"type": "failed", "text": FAILED_TEXT}]}
@@ -147,10 +155,10 @@ class Agent:
         self.known_names = set(known_names)
         self.thinking = thinking
 
-    def _call(self, msgs, ids, topics, attempt, tag):
+    def _call(self, msgs, ids, topics, attempt, tag, extras=None):
         return self.llm.chat(
             msgs,
-            schema=prompt.schema(ids, topics),
+            schema=prompt.schema(ids, topics, extras),
             thinking=self.thinking,
             temperature=0.2 if attempt == 1 else 0.5,  # 다시 쓸 때 같은 답이 나오지 않게
             max_tokens=4096 if self.thinking else 3000,
@@ -160,8 +168,21 @@ class Agent:
     def _one(self, common: dict, item: dict, prev: dict | None) -> tuple[dict, dict]:
         judg = judgment.judgment_of(item)
         topics = [t["topic"] for t in judg["topics"] if t["topic"]]
-        key = input_key(judg, common)
-        log: dict[str, Any] = {"id": item["id"], "input_key": key, "attempts": []}
+        flags = common.get(
+            "situation"
+        )  # 상황 깃발(step3가 bundles로 만든다). 없으면 작성 지침 없이 예전대로
+        guide = guides.render(item["id"], flags) if flags else ""
+        extras = guides.extra_topics(item["id"], flags) if flags else None
+        gqs = guides.queries(item["id"], flags) if flags else []
+        sit_line = situation.summary(flags) if flags else ""
+        key = input_key(judg, common, guide)
+        log: dict[str, Any] = {
+            "id": item["id"],
+            "input_key": key,
+            "attempts": [],
+            "guide": guide,
+            "extras": extras,
+        }
         if (
             prev
             and prev.get("input_key") == key
@@ -171,7 +192,13 @@ class Agent:
             out = dict(prev["item"]) | {"state": "reused"}
             return out | {"input_key": key, "proposals": prev["proposals"]}, log
         chunks, rlog = retrieve.retrieve(
-            self.evidence, item, judg, common, prompt.scope_of(item["id"]), k=self.k
+            self.evidence,
+            item,
+            judg,
+            common,
+            prompt.scope_of(item["id"]),
+            k=self.k,
+            guide_queries=gqs,
         )
         by_id = {c["chunk_id"]: c for c in chunks}
         ids = list(by_id)
@@ -182,13 +209,13 @@ class Agent:
         allowed = check.allowed_from(common, judg, *[c["text"] for c in chunks])
         judged_text = judgment.text_of(judg, common)
         texts = {c["chunk_id"]: c["text"] for c in chunks} | {"_data": " / ".join(judg["data"])}
-        msgs = prompt.messages(common, judg, chunks, self.known_names)
+        msgs = prompt.messages(common, judg, chunks, self.known_names, guide, sit_line)
         log["messages"] = msgs
         best: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
         for attempt in range(1, ATTEMPTS + 1):
             try:
-                raw = self._call(msgs, ids, topics, attempt, f"{item['id']}#{attempt}")
+                raw = self._call(msgs, ids, topics, attempt, f"{item['id']}#{attempt}", extras)
             except Exception as e:  # 시간 초과 · 연결 끊김: 그 시도만 실패
                 log["attempts"].append(
                     {"raw": "", "errors": {"-": [f"LLM 호출 실패: {type(e).__name__}: {e}"]}}

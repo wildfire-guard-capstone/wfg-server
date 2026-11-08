@@ -44,6 +44,7 @@ uv run alembic upgrade head
   → 1 확산 예측   demo/uiseong/step1_spread.py → spread/perimeter_run.py   회차 화선에서 배율 보정 · 8시간 예측 → P0~P8
   → 2 규칙 판정   demo/uiseong/step2_rules.py  → rules/                    판정 16묶음 + 항목 12개(S1~S6 · E1~E6)
   → 3 LLM 대응 생성 demo/uiseong/step3_agent.py → agent/                  항목마다 아래 순서
+       situation.py · guides.py  상황 깃발(불이 큼 · 작음 · 단계 오름 · 밤 · 도지사 …) → 항목별 작성 지침(쓸 것 · 덧붙일 제안 · 쓰지 않을 것)
        judgment.py  판정만 고름(문단 자리 · 고정 문장 없음)
        retrieve.py  질의 3개로 근거 검색 + 규칙 엔진이 판정에 쓴 근거
        prompt.py    지시문 · 항목 범위 · 읽는 사람의 권한 · 판정 · 근거 발췌 → json_schema(evidence는 준 청크 ID만, quote = 근거 문장)
@@ -69,6 +70,9 @@ uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.p
 2026-11-08 결과(4회차: 12:50 · 13:10 · 13:45 · 14:20, `runs/tune10`): 46개 항목 모두 제안을 냈고 다룰 주제 101개 중 99개에 문단이 붙었다(문단 평균 61 ~ 74자).
 시나리오 v3 회차 1 목표 대비 0.759(같은 주제 문단 0.774 · 분량 1.0), 제안의 조치가 단 근거 원문에 있는 비율 0.79 ~ 0.94, 회차 뒤 실제 조치(백서)를
 미리 권한 비율 0.594(판정은 같은 EXAONE이라 후할 수 있음). 남은 약점: 도지사 회차에서 지시를 모두 군수에게 돌리고, 일부 문단에 근거에 없는 세부가 섞인다.
+같은 날 밤 항목별 작성 지침을 넣은 `runs/tune11`: 근거 뒷받침 0.90 ~ 0.93(도지사 회차 0.79 → 0.93), 목표 대비 0.778, 다룰 주제 101개 중 100개.
+대신 판정 값을 근거의 기준값으로 바꿔 쓰는 오류(1단계 지상 범위 「경상북도 100%」 · 「최소 20동」)가 남아 판정 값 문장 조립을 검토 중이다.
+화면(뷰어)은 제안 문장만 보이고 근거는 마우스를 올리면 보인다.
 
 자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
 [`demo/uiseong/README.md`](demo/uiseong/README.md).

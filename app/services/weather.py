@@ -17,12 +17,24 @@ from app.db.models import Incident, WeatherHour
 from app.db.models.enums import IncidentStatus
 from app.repositories import incidents, predictions, weather
 from app.repositories.engine_inputs import site_of
-from app.weather import WeatherUnavailable, get_weather
+from app.weather import WeatherProvider, WeatherUnavailable, get_weather
 from app.weather.kma import KmaForecast, latest_observed_hour
 from rules.core.direction import compass16
 
 log = logging.getLogger(__name__)
 REFRESH_DELAY = timedelta(hours=1, minutes=40)  # 다음 정시 자료가 나오는 때 = 정시 + 1시간 40분
+
+
+def provider_from_settings() -> WeatherProvider:
+    """예측에 쓸 기상 원천(설정 WEATHER) — fixed(기본) · file(WEATHER_PATH) ·
+    kma(DATA_GO_KR_API_KEY, 최근 하루) · asos(KMA_API_KEY · WEATHER_STATION, 과거 시연)."""
+    s = get_settings()
+    options = {
+        "file": {"path": s.weather_path},
+        "kma": {"service_key": s.data_go_kr_api_key},
+        "asos": {"auth_key": s.kma_api_key, "station": s.weather_station},
+    }.get(s.weather, {})
+    return get_weather(s.weather, **options)
 
 
 def observer_from_settings() -> KmaForecast | None:

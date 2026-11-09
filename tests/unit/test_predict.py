@@ -10,14 +10,16 @@ from app.predict import get_predictor
 from app.predict.base import HOURS, PredictionRequest, fixed_weather
 from app.predict.file import FilePredictor
 from app.predict.synthetic import SyntheticPredictor
+from app.weather import WeatherRequest
+from app.weather.fixed import FixedWeather
 
 BASE_AT = datetime(2025, 3, 22, 11, 25)
 # 의성 안평면 근처(EPSG:5179)
 START = Point(1_100_000, 1_800_000)
 
 
-def request(start=START) -> PredictionRequest:
-    return PredictionRequest(start=start, base_at=BASE_AT, site=(36.4, 128.6))
+def request(start=START, weather=None) -> PredictionRequest:
+    return PredictionRequest(start=start, base_at=BASE_AT, site=(36.4, 128.6), weather=weather)
 
 
 def test_fixed_weather_starts_at_floored_hour_and_has_nine_hours():
@@ -40,6 +42,25 @@ def test_synthetic_slices_are_nested_and_grow_downwind():
     minx, _, maxx, _ = result.slices[-1].bounds
     assert maxx - START.x > START.x - minx
     assert result.weather["source"] == "SYNTHETIC"
+
+
+def test_synthetic_uses_given_weather():
+    """서버가 받은 기상을 넘기면 그 풍향으로 퍼지고, 그 기상을 그대로 돌려준다."""
+    weather = FixedWeather(wind_deg=90.0).fetch(WeatherRequest((36.36, 128.60), BASE_AT))
+    result = SyntheticPredictor().predict(request(weather=weather))
+    minx, _, maxx, _ = result.slices[-1].bounds
+    assert START.x - minx > maxx - START.x  # 동풍(90) → 서쪽으로 더 퍼짐
+    assert result.weather is weather
+
+
+def test_file_prefers_its_own_weather_file(tmp_path):
+    path, wpath = tmp_path / "p.geojson", tmp_path / "w.json"
+    path.write_text(json.dumps(feature_collection(squares())), encoding="utf-8")
+    wpath.write_text(json.dumps({"source": "ELMFIRE_RUN", "hours": []}), encoding="utf-8")
+    given = FixedWeather().fetch(WeatherRequest((36.36, 128.60), BASE_AT))
+    assert FilePredictor(path, crs=5179).predict(request(weather=given)).weather is given
+    own = FilePredictor(path, crs=5179, weather_path=wpath).predict(request(weather=given))
+    assert own.weather["source"] == "ELMFIRE_RUN"  # 범위를 만들 때 쓴 기상이 우선
 
 
 def test_synthetic_covers_polygon_start():

@@ -19,15 +19,16 @@ class PredictionRequest:
     start: BaseGeometry  # P0 = 시작 형상: 현재 화선(없으면 발화점)
     base_at: datetime  # 0시 = 시작 형상의 관측 시각
     site: tuple[float, float]  # 기준점 위도 · 경도(WGS84) — 기상 지점 · 일출 · 일몰
-    # TODO(기상 연결, 4-2): weather 칸 — 서버가 app.weather에서 받은 기상. 그러면 예측
-    # 제공자는 기상을 만들지 않고 받은 것을 쓴다(PredictionResult.weather 대신).
-    # services.prediction.run_prediction 주석 참고
+    # 서버가 기상 제공자(app.weather)에서 받은 9시간 기상(predictions.weather 모양). 있으면 예측
+    # 제공자는 이 기상으로 계산하고 결과 weather로 돌려준다. 없으면(시험 · 개발 명령) 스스로 고정값
+    weather: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class PredictionResult:
     slices: list[BaseGeometry]  # P1 ~ P8 누적 확산 범위(면)
-    # predictions.weather 모양: {"source", "issued_at", "location", "hours": [9개]}
+    # 예측에 실제로 쓴 기상 → predictions.weather
+    # 모양: {"source", "issued_at", "location", "hours": [9개]}
     weather: dict[str, Any]
     source: str  # 어떤 예측이 만들었나(synthetic · file · elmfire …)
     meta: dict[str, Any] = field(default_factory=dict)  # 예측마다 남길 값(파일 경로, 매개변수 …)

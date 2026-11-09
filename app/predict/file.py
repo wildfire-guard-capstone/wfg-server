@@ -5,7 +5,8 @@
 
 파일 모양: FeatureCollection, 피처마다 properties.hour = 1 ~ 8, geometry = Polygon · MultiPolygon.
 좌표계는 GeoJSON 기본인 WGS84(EPSG:4326). 5179로 저장된 파일이면 crs=5179.
-기상: weather 파일(predictions.weather 모양 JSON)이 있으면 그것, 없으면 고정값.
+기상: weather 파일(predictions.weather 모양 JSON)이 있으면 그것(범위를 만들 때 쓴 기상),
+없으면 서버가 받은 기상, 그것도 없으면 고정값.
 """
 
 import json
@@ -41,9 +42,11 @@ class FilePredictor:
         if self.crs != 5179:
             to_5179 = Transformer.from_crs(self.crs, 5179, always_xy=True).transform
             slices = [transform(to_5179, g) for g in slices]
-        if self.weather_path:
+        if self.weather_path:  # 그 범위를 만들 때 쓴 기상(받은 기상보다 우선 — 실제로 쓴 값)
             weather = json.loads(Path(self.weather_path).read_text(encoding="utf-8"))
         else:
-            weather = fixed_weather(request.base_at, self.wind_ms, self.wind_deg, "FILE_FIXED")
+            weather = request.weather or fixed_weather(
+                request.base_at, self.wind_ms, self.wind_deg, "FILE_FIXED"
+            )
         meta = {"path": str(self.path), "crs": self.crs}
         return PredictionResult(slices, weather, self.name, meta)

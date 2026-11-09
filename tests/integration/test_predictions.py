@@ -1,6 +1,7 @@
 from sqlalchemy import text
 
 from app.services import operations
+from app.weather import WeatherUnavailable
 
 URL = "/api/v1/incidents"
 
@@ -36,7 +37,9 @@ def test_predict_then_read_prediction_slices_weather(client, login, reported):
     assert [f["properties"]["hour"] for f in one["features"]] == [5]
 
     weather = client.get(f"{base}/weather", headers=view).json()["data"]
-    assert weather["source"] == "SYNTHETIC" and len(weather["hours"]) == 9
+    # 기상은 설정 WEATHER(기본 fixed)에서 받아 예측에 쓴 값 — 다섯 값 모두
+    assert weather["source"] == "FIXED" and len(weather["hours"]) == 9
+    assert weather["hours"][0]["temp"] == 15.0 and weather["hours"][0]["kind"] == "고정"
 
     detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
     assert detail["latest_prediction_id"] == pid and detail["needs_reprediction"] is False
@@ -87,6 +90,29 @@ def test_failed_prediction_keeps_nothing(client, login, reported, db, monkeypatc
         {"i": int(reported["id"])},
     )
     assert failed == 1
+
+
+def test_weather_failure_keeps_nothing(client, login, reported, db, monkeypatch):
+    """기상을 못 받으면 작업 실패 코드 WEATHER_UNAVAILABLE, 예측 · 제안서는 남기지 않는다."""
+
+    class NoWeather:
+        name = "down"
+
+        def fetch(self, request):
+            raise WeatherUnavailable("기상청 연결 실패")
+
+    monkeypatch.setattr("app.services.prediction.provider_from_settings", lambda: NoWeather())
+    cmd = login("t_cmd6", "COMMANDER")
+    op = run(client, reported, cmd)
+    assert op["status"] == "FAILED" and op["stage"] == "WEATHER"
+    assert (
+        op["error"]["code"] == "WEATHER_UNAVAILABLE"
+        and "기상청 연결 실패" in op["error"]["message"]
+    )
+    n = db.scalar(
+        text("SELECT count(*) FROM predictions WHERE incident_id = :i"), {"i": int(reported["id"])}
+    )
+    assert n == 0
 
 
 def test_predict_also_saves_proposal_and_stage(client, login, reported, db):

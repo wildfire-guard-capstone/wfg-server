@@ -4,7 +4,8 @@
 아래 WEATHERS에 이름을 더한다.
 지금: fixed(고정 시험값) · file(기상 JSON) · kma(기상청 단기예보, 운영) · asos(지상관측, 과거 시연).
 
-아직 예측 흐름에 잇지 않았다(4-2) — 잇는 자리는 services.prediction.run_prediction의 TODO 주석.
+예측 흐름: 설정 WEATHER로 고른 원천에서 9시간을 받아(작업 단계 WEATHER) 예측에 넘기고
+`predictions.weather`로 저장한다(services.prediction, 11/10).
 """
 
 from pathlib import Path

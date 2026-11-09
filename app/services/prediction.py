@@ -40,6 +40,11 @@ def run_prediction(
     start = to_shape(perimeter.geom)
     base_at = perimeter.observed_at.astimezone(KST)
     request = PredictionRequest(start, base_at, site_of(to_shape(incident.ignition_point)))
+    # TODO(기상 연결, 4-2): 지금 기상은 예측 제공자가 만든 값(가짜 · 파일 = 바람만)이다. 나중에는
+    #   ① 서버가 기상 제공자(app.weather, 설정 WEATHER = fixed · file · kma · asos)에서
+    #      9시간 기상을 받고(작업 단계 WEATHER, 실패하면 503 WEATHER_UNAVAILABLE)
+    #   ② PredictionRequest에 넣어 예측 제공자(가짜 · ELMFIRE)가 그 기상으로 확산을 계산하고
+    #   ③ 그 기상을 predictions.weather로 저장한다 → 규칙 엔진 · 제안서가 예측과 같은 기상을 쓴다
     result = predictor.predict(request)  # 2
     return predictions.save_prediction(  # 3
         session,

@@ -50,8 +50,16 @@ def get(op_id: str) -> Operation | None:
 
 
 def is_running(incident_id: int) -> bool:
+    return running(incident_id) is not None
+
+
+def running(incident_id: int) -> Operation | None:
+    """그 산불에서 진행 중인 작업(QUEUED · RUNNING). 없으면 None."""
     with _lock:
-        return any(o.incident_id == incident_id and o.status in ACTIVE for o in _ops.values())
+        return next(
+            (o for o in _ops.values() if o.incident_id == incident_id and o.status in ACTIVE),
+            None,
+        )
 
 
 def update(op: Operation, **changes: Any) -> None:

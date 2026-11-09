@@ -88,6 +88,7 @@ def incident_out(db: Session, incident: Incident) -> IncidentOut:
         ended_by=incident.ended_by,
         current_perimeter_id=perimeter.id,
         current_perimeter_version=perimeter.version_no,
+        running_operation_id=op.id if (op := operations.running(incident.id)) else None,
         **refs,
     )
 

@@ -50,6 +50,8 @@ class IncidentOut(BaseModel):
     needs_reprediction: bool
     proposal_stale: bool
     situation_revision: str
+    # 진행 중인 예측 작업(PRED-05로 진행 조회). 화면을 다시 열어도 진행 표시를 이어 간다
+    running_operation_id: str | None
 
 
 class PerimeterOut(BaseModel):

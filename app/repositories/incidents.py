@@ -57,6 +57,8 @@ def create_incident(
     report_text: str | None = None,
     reporter_org: str | None = None,
     situation: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+    request_hash: str | None = None,
 ) -> int:
     """산불 1행 + 화선 v0(발화점)을 함께 넣는다(DB 설계 2.2). 커밋은 부르는 쪽이 한다."""
     point = from_shape(ignition, srid=SRID)
@@ -72,6 +74,8 @@ def create_incident(
         reporter_org=reporter_org,
         situation=situation or {},
         reported_by=reported_by,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
     )
     session.add(incident)
     session.flush()
@@ -86,6 +90,13 @@ def create_incident(
     )
     session.flush()
     return incident.id
+
+
+def reported_with_key(session: Session, reported_by: int, key: str) -> Incident | None:
+    """같은 보고자가 같은 요청 번호로 이미 만든 산불(INC-02 재전송)."""
+    return session.scalar(
+        select(Incident).where(Incident.reported_by == reported_by, Incident.idempotency_key == key)
+    )
 
 
 def get_incident(session: Session, incident_id: int) -> Incident:

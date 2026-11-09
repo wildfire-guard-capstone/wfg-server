@@ -1,11 +1,24 @@
 """예측 돌리기: 현재 화선에서 예측 제공자를 불러 P1 ~ P8을 저장한다."""
 
+import logging
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+
 from geoalchemy2.shape import to_shape
 from sqlalchemy.orm import Session
 
-from app.predict import PredictionRequest, Predictor
-from app.repositories import incidents, predictions
+from app.api.errors import ApiError
+from app.core.config import get_settings
+from app.db.models import Incident, Prediction
+from app.db.models.enums import IncidentStatus
+from app.predict import PredictionRequest, Predictor, get_predictor
+from app.repositories import event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
+from app.services import operations
+from app.services.risk import compute_risk
+
+log = logging.getLogger(__name__)
+SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
 def run_prediction(
@@ -31,4 +44,81 @@ def run_prediction(
         base_at=base_at,
         result=result,
         requested_by=requested_by,
+    )
+
+
+def predictor_from_settings() -> Predictor:
+    """설정(PREDICTOR · PREDICTOR_PATH …)으로 예측 제공자를 고른다 — 팀원이 갈아 끼우는 자리."""
+    s = get_settings()
+    options = {}
+    if s.predictor == "file":
+        options = {"path": s.predictor_path, "crs": s.predictor_crs}
+        if s.predictor_weather:
+            options["weather_path"] = s.predictor_weather
+    return get_predictor(s.predictor, **options)
+
+
+def _check_still_current(db: Session, incident_id: int, perimeter_id: int) -> None:
+    """저장 직전 재검사: 그사이 종료되거나 화선이 바뀌었으면 옛 결과를 최신으로 저장하지 않는다."""
+    incident = db.get(Incident, incident_id)
+    if incident.status is IncidentStatus.ENDED:
+        raise ApiError(409, "INCIDENT_ENDED", "계산하는 동안 산불이 종료되었습니다.")
+    if incidents.current_perimeter(db, incident_id).id != perimeter_id:
+        raise ApiError(409, "STALE_PERIMETER", "계산하는 동안 화선이 바뀌었습니다.")
+
+
+def _risk_check(db: Session, prediction_id: int) -> None:
+    """위험도 단계. 지금은 저장하지 않고(조회 때 계산, Q-01) 계산되는지만 본다.
+    위험도는 제안의 입력이 아니라 실패해도 예측은 성공으로 둔다(04 수정 필요 6번)."""
+    try:
+        compute_risk(db, db.get(Prediction, prediction_id))
+    except Exception:  # noqa: BLE001
+        log.exception("위험도 계산 실패(예측은 계속) — 예측 %s", prediction_id)
+
+
+def run_prediction_operation(
+    op: operations.Operation, perimeter_id: int, session_factory: SessionFactory
+) -> None:
+    """PRED-01 작업: 예측(SPREAD) → 저장 직전 재검사 → 커밋(COMMIT).
+
+    실패하면 예측을 남기지 않고(직전 예측이 그대로 현재 예측) PREDICTION_FAILED만 기록한다.
+
+    규칙 판정 · 근거 · 제안 생성(RULES · EVIDENCE · PROPOSAL_GENERATION)은 LLM 응답 형식이
+    정해진 뒤 이 자리에 붙인다. 그래서 지금 result.proposal_id는 늘 null이다.
+    """
+    operations.update(op, status="RUNNING", stage="SPREAD")
+    with session_factory() as db:
+        try:
+            pid = run_prediction(
+                db,
+                incident_id=op.incident_id,
+                predictor=predictor_from_settings(),
+                requested_by=op.user_id,
+            )
+            operations.update(op, stage="RISK")
+            _risk_check(db, pid)
+            operations.update(op, stage="COMMIT")
+            _check_still_current(db, op.incident_id, perimeter_id)
+            db.commit()
+        except Exception as exc:  # noqa: BLE001 — 어떤 실패든 작업 실패로 알린다
+            db.rollback()
+            if isinstance(exc, ApiError):
+                error = {"code": exc.code, "message": exc.message}
+            elif isinstance(exc, ValueError):
+                error = {"code": "PREDICTION_INVALID", "message": str(exc)}
+            else:
+                log.exception("예측 작업 실패 (%s)", op.id)
+                error = {"code": "INTERNAL_ERROR", "message": "예측 중 오류가 발생했습니다."}
+            event_logs.add(
+                db,
+                "PREDICTION_FAILED",
+                user_id=op.user_id,
+                incident_id=op.incident_id,
+                details={"operation_id": op.id, **error},
+            )
+            db.commit()
+            operations.update(op, status="FAILED", error=error)
+            return
+    operations.update(
+        op, status="SUCCEEDED", result={"prediction_id": str(pid), "proposal_id": None}
     )

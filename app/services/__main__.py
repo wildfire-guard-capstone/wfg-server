@@ -4,6 +4,9 @@
     python -m app.services predict --incident 1 --predictor synthetic
     python -m app.services predict --incident 1 --predictor file --path p.geojson [--crs 5179]
     python -m app.services engine --incident 1 [--prediction 3] [--out out.json]
+    python -m app.services user --login-id admin01 --role ADMIN --name 전산관리자 --org 의성군
+    python -m app.services user --login-id cmd01 --role COMMANDER --name 의성군수 --org 의성군 \
+        --sigungu 의성군 [--password …]   # 비밀번호를 안 주면 임시 비밀번호를 만들어 한 번 보여 줌
 
 대상 DB는 설정(DATABASE_URL · POSTGRES_* · DB_HOST)을 따른다. 쓰기 전에 대상 DB를 출력한다.
 """
@@ -17,11 +20,13 @@ from shapely.geometry import Point
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.security import temporary_password
 from app.db.models.enums import UserRole
 from app.db.session import SessionLocal, engine
 from app.predict import PREDICTORS, get_predictor
 from app.repositories import incidents
 from app.repositories.engine_inputs import KST
+from app.services.accounts import create_user, sigungu_id
 from app.services.engine import run_engine
 from app.services.prediction import run_prediction
 
@@ -94,6 +99,24 @@ def cmd_engine(session: Session, args: argparse.Namespace) -> None:
         print(f"저장: {args.out}")
 
 
+def cmd_user(session: Session, args: argparse.Namespace) -> None:
+    password = args.password or temporary_password()
+    area = sigungu_id(session, args.sigungu) if args.sigungu else None
+    user = create_user(
+        session,
+        login_id=args.login_id,
+        name=args.name,
+        organization=args.org,
+        role=UserRole[args.role],
+        admin_area_id=area,
+        password=password,
+    )
+    session.commit()
+    print(f"계정 {user.id} 만듦: {user.login_id} ({args.role})")
+    if not args.password:
+        print(f"임시 비밀번호(한 번만 보여 줌): {password}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -118,6 +141,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reader", default="의성군수", help="읽는 사람 직함")
     p.add_argument("--out", type=Path, help="엔진 결과 JSON을 저장할 파일")
     p.set_defaults(run=cmd_engine)
+
+    p = sub.add_parser("user", help="계정 만들기(첫 전산 관리자 · 개발용 계정)")
+    p.add_argument("--login-id", required=True)
+    p.add_argument("--role", required=True, choices=[r.name for r in UserRole])
+    p.add_argument("--name", required=True)
+    p.add_argument("--org", required=True, help="소속")
+    p.add_argument("--sigungu", help="관할 시군구 이름(전산 관리자는 생략)")
+    p.add_argument("--password", help="생략하면 임시 비밀번호를 만든다")
+    p.set_defaults(run=cmd_user)
 
     args = parser.parse_args(argv)
     print(f"대상 DB: {engine.url.render_as_string(hide_password=True)}")

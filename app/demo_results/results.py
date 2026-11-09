@@ -1,4 +1,4 @@
-"""결과 폴더(``RESULTS_DIR``) 읽기.
+"""(김지오 전용 · 임시) 결과 폴더(``RESULTS_DIR``) 읽기.
 
 DB 대신 미리 만든 JSON 묶음에서 산불 · 화선 · 예측 · 제안을 꺼낸다.
 
@@ -6,7 +6,7 @@ DB 대신 미리 만든 JSON 묶음에서 산불 · 화선 · 예측 · 제안�
 
     <RESULTS_DIR>/
       manifest.json                         {"format": 1, "exported_at", "source", "incidents": [1]}
-      incidents/<id>/incident.json          app.schemas.results.Incident
+      incidents/<id>/incident.json          app.demo_results.result_schemas.Incident
       incidents/<id>/perimeters.json        [Perimeter]
       incidents/<id>/predictions/<n>.json   Prediction (n = 1, 2, …)
       incidents/<id>/proposals/<버전>.json   Proposal (버전 = v1.1, v2.1, …)

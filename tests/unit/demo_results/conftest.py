@@ -1,9 +1,10 @@
 from pathlib import Path
 
 import pytest
-from results_example import make_run
 
 from demo.uiseong.export_bundle import build, write
+
+from .results_example import make_run
 
 
 @pytest.fixture

@@ -1,4 +1,7 @@
-"""라우터가 쓰는 의존성 — 설정 · 계정 저장소 · 결과 저장소 · 로그인 확인 · 권한 확인."""
+"""(김지오 전용 · 임시) 라우터가 쓰는 의존성.
+
+설정 · 계정 저장소 · 결과 저장소 · 로그인 확인 · 권한 확인.
+"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -7,13 +10,13 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import Settings, get_settings
-from app.core.security import MIN_SECRET_LENGTH, InvalidToken, read_token
 from app.db.models.enums import UserRole
-from app.services.accounts import Account, AccountStore
-from app.services.results import BundleError, FileResultsStore
+from app.demo_results.accounts import Account, AccountStore
+from app.demo_results.config import DemoSettings, get_demo_settings
+from app.demo_results.results import BundleError, FileResultsStore
+from app.demo_results.security import MIN_SECRET_LENGTH, InvalidToken, read_token
 
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+SettingsDep = Annotated[DemoSettings, Depends(get_demo_settings)]
 
 # 경로마다 한 개 — 로그인 실패 횟수와 읽은 파일 캐시를 요청 사이에 유지한다.
 _account_stores: dict[Path, AccountStore] = {}

@@ -9,7 +9,7 @@ LOCAL_DATABASE_URL = "postgresql+psycopg://wfg:wfg@localhost:5432/wfg"  # docker
 
 
 class Settings(BaseSettings):
-    # env_ignore_empty: `RESULTS_DIR=`처럼 비워 둔 값은 기본값(None)으로 본다.
+    # env_ignore_empty: `KMA_API_KEY=`처럼 비워 둔 값은 기본값(None)으로 본다.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
 
     # DATABASE_URL wins. Without it the URL is built from the POSTGRES_* values the DB
@@ -28,16 +28,18 @@ class Settings(BaseSettings):
     elmfire_bin: str = "elmfire_1.1"
     kma_api_key: str | None = None
 
-    # 결과 조회 API(app.routers.incidents) — demo.uiseong.export_bundle이 만든 폴더.
-    # 제안 근거에 표준매뉴얼 원문이 들어 있으므로 저장소 밖에 둔다. 비우면 503.
-    results_dir: Path | None = None
-    # 로그인(app.routers.auth) — 계정 파일(python -m app.services.accounts)과 토큰 서명 키.
-    # 둘 중 하나라도 비우면 로그인이 503을 돌려준다.
-    accounts_file: Path | None = None
-    auth_secret: str | None = None
-    token_ttl_minutes: int = 480
     # 개발 중 다른 출처(예: Vite http://127.0.0.1:5173)에서 부를 때만. 같은 출처 배포면 비워 둔다.
     cors_origins: list[str] = []
+
+    # 예측 API(PRED-01)가 쓰는 예측 제공자(app.predict). file이면 PREDICTOR_PATH(P1~P8 GeoJSON)
+    predictor: str = "synthetic"
+    predictor_path: str | None = None
+    predictor_crs: int = 4326
+    predictor_weather: str | None = None
+
+    # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)
+    jwt_secret: str = ""
+    jwt_expires_s: int = 1800
 
     @model_validator(mode="after")
     def _build_database_url(self) -> "Settings":

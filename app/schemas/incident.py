@@ -50,6 +50,8 @@ class IncidentOut(BaseModel):
     needs_reprediction: bool
     proposal_stale: bool
     situation_revision: str
+    # 진행 중인 예측 작업(PRED-05로 진행 조회). 화면을 다시 열어도 진행 표시를 이어 간다
+    running_operation_id: str | None
 
 
 class PerimeterOut(BaseModel):
@@ -85,3 +87,18 @@ class IncidentCreateIn(In):
 
 class IncidentEndIn(In):
     expected_perimeter_id: int = Field(gt=0)
+
+
+class PerimeterReportIn(In):
+    """PER-02 실측 화선 보고."""
+
+    geometry: Geometry  # Polygon · MultiPolygon(EPSG:4326)
+    observed_at: AwareDatetime
+    expected_perimeter_id: int = Field(gt=0)  # 화면이 본 현재 화선(그사이 바뀌었으면 409)
+
+
+class PerimeterCorrectionIn(In):
+    """PER-03 현재 실측 화선 정정."""
+
+    geometry: Geometry
+    observed_at: AwareDatetime

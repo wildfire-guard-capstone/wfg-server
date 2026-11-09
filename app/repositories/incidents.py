@@ -95,14 +95,20 @@ def get_incident(session: Session, incident_id: int) -> Incident:
     return incident
 
 
-def current_perimeter(session: Session, incident_id: int) -> FirePerimeter:
-    """현재 화선 = 정정되지 않은 것 중 버전이 가장 큰 행(없으면 v0 발화점)."""
-    perimeter = session.scalar(
+def current_perimeter(
+    session: Session, incident_id: int, *, before_version: int | None = None
+) -> FirePerimeter:
+    """현재 화선 = 정정되지 않은 것 중 버전이 가장 큰 행(없으면 v0 발화점).
+    before_version을 주면 그 버전보다 앞선 것 중에서(정정할 화선의 직전 화선)."""
+    q = (
         select(FirePerimeter)
         .where(FirePerimeter.incident_id == incident_id, FirePerimeter.corrected_at.is_(None))
         .order_by(FirePerimeter.version_no.desc())
         .limit(1)
     )
+    if before_version is not None:
+        q = q.where(FirePerimeter.version_no < before_version)
+    perimeter = session.scalar(q)
     if perimeter is None:
         raise ValueError(f"산불 {incident_id}에 화선(v0 발화점)이 없습니다")
     return perimeter

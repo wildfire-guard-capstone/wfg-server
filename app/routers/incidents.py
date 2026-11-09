@@ -1,4 +1,5 @@
-"""INC-01 목록 · INC-02 보고 · INC-03 상세 · INC-04 종료, PER-01 화선 버전 목록."""
+"""INC-01 목록 · INC-02 보고 · INC-03 상세 · INC-04 종료,
+PER-01 화선 버전 목록 · PER-02 실측 화선 보고 · PER-03 현재 실측 화선 정정."""
 
 from datetime import UTC, datetime
 from typing import Annotated
@@ -21,7 +22,9 @@ from app.schemas.incident import (
     IncidentEndIn,
     IncidentOut,
     IncidentSummaryOut,
+    PerimeterCorrectionIn,
     PerimeterOut,
+    PerimeterReportIn,
     StatusName,
 )
 from app.services import operations
@@ -85,6 +88,7 @@ def incident_out(db: Session, incident: Incident) -> IncidentOut:
         ended_by=incident.ended_by,
         current_perimeter_id=perimeter.id,
         current_perimeter_version=perimeter.version_no,
+        running_operation_id=op.id if (op := operations.running(incident.id)) else None,
         **refs,
     )
 
@@ -240,3 +244,111 @@ def list_perimeters(
     items, next_cursor, has_more = cut(rows, limit, lambda p: (p.version_no,))
     page = Page(items=[perimeter_out(p) for p in items], next_cursor=next_cursor, has_more=has_more)
     return ok(request, page)
+
+
+FUTURE_SLACK_S = 300  # 관측 시각이 지금보다 이만큼 넘게 미래면 거절(기기 시계 차이는 허용)
+
+
+def _checked_perimeter(db: Session, incident: Incident, geometry: dict, observed_at: datetime):
+    """새 화선 도형 · 관측 시각 검사: 면(Polygon · MultiPolygon) · 올바른 도형, 현재 화선보다
+    앞선 시각이나 미래 시각은 거절(예측 0시가 거꾸로 가지 않게)."""
+    geom = to_multipolygon(from_geojson(geometry, ("Polygon", "MultiPolygon"), "geometry"))
+    current = incidents.current_perimeter(db, incident.id)
+    if observed_at < current.observed_at:
+        raise ApiError(
+            422,
+            "INVALID_OBSERVED_AT",
+            "현재 화선보다 앞선 관측 시각입니다.",
+            [{"field": "observed_at", "reason": "현재 화선 관측 시각 이후여야 합니다."}],
+        )
+    if (observed_at - datetime.now(UTC)).total_seconds() > FUTURE_SLACK_S:
+        raise ApiError(
+            422,
+            "INVALID_OBSERVED_AT",
+            "미래 시각입니다.",
+            [{"field": "observed_at", "reason": "지금보다 늦을 수 없습니다."}],
+        )
+    return geom
+
+
+@router.post("/{incident_id}/perimeters", status_code=201, response_model=Envelope[PerimeterOut])
+def report_perimeter(
+    incident_id: IncidentId,
+    body: PerimeterReportIn,
+    request: Request,
+    user: Reporter,
+    db: Db,
+    idempotency_key: Annotated[str | None, Header()] = None,
+):
+    """PER-02. 새 실측 화선을 다음 버전으로 저장한다. 예측은 자동으로 돌리지 않는다
+    (산불 상세 needs_reprediction = true). 대응단계는 예측할 때 판정한다(11/9 결정 — 명세의
+    「화선 보고 때 단계 재판정」과 다름). Idempotency-Key는 받기만 한다."""
+    incident = load_incident(db, user, incident_id)
+    if incident.status is IncidentStatus.ENDED:
+        raise ApiError(409, "INCIDENT_ENDED", "종료된 산불입니다.")
+    if incidents.current_perimeter(db, incident_id).id != body.expected_perimeter_id:
+        raise ApiError(409, "STALE_PERIMETER", "화선이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
+    geom = _checked_perimeter(db, incident, body.geometry, body.observed_at)
+    p = incidents.add_perimeter(
+        db, incident_id=incident_id, geom=geom, observed_at=body.observed_at, reported_by=user.id
+    )
+    event_logs.add(
+        db,
+        "PERIMETER_REPORTED",
+        user_id=user.id,
+        incident_id=incident_id,
+        details={"perimeter_id": p.id, "version_no": p.version_no},
+    )
+    db.commit()
+    return ok(request, perimeter_out(p))
+
+
+@router.post(
+    "/{incident_id}/perimeters/{perimeter_id}/corrections",
+    status_code=201,
+    response_model=Envelope[PerimeterOut],
+)
+def correct_perimeter(
+    incident_id: IncidentId,
+    perimeter_id: Annotated[int, Path(gt=0)],
+    body: PerimeterCorrectionIn,
+    request: Request,
+    user: Reporter,
+    db: Db,
+    idempotency_key: Annotated[str | None, Header()] = None,
+):
+    """PER-03. 현재 실측 화선(v1 이상)만 정정한다: 그 행에 corrected_at을 찍고 고친 도형을
+    다음 버전으로 넣는다(덮어쓰지 않음). 지난 예측 · 제안서는 그대로 둔다."""
+    incident = load_incident(db, user, incident_id)
+    if incident.status is IncidentStatus.ENDED:
+        raise ApiError(409, "INCIDENT_ENDED", "종료된 산불입니다.")
+    current = incidents.current_perimeter(db, incident_id)
+    target = db.get(FirePerimeter, perimeter_id)
+    if target is None or target.incident_id != incident_id:
+        raise not_found("화선을 찾을 수 없습니다.")
+    if target.version_no == 0:
+        raise ApiError(422, "V0_NOT_CORRECTABLE", "발화점(v0)은 정정할 수 없습니다.")
+    if target.id != current.id:
+        raise ApiError(409, "STALE_PERIMETER", "현재 화선만 정정할 수 있습니다.")
+    previous = incidents.current_perimeter(db, incident_id, before_version=target.version_no)
+    geom = to_multipolygon(from_geojson(body.geometry, ("Polygon", "MultiPolygon"), "geometry"))
+    if body.observed_at < previous.observed_at:
+        raise ApiError(
+            422,
+            "INVALID_OBSERVED_AT",
+            "직전 화선보다 앞선 관측 시각입니다.",
+            [{"field": "observed_at", "reason": "직전 화선 관측 시각 이후여야 합니다."}],
+        )
+    target.corrected_at = datetime.now(UTC)
+    p = incidents.add_perimeter(
+        db, incident_id=incident_id, geom=geom, observed_at=body.observed_at, reported_by=user.id
+    )
+    event_logs.add(
+        db,
+        "PERIMETER_CORRECTED",
+        user_id=user.id,
+        incident_id=incident_id,
+        details={"corrected_id": target.id, "perimeter_id": p.id, "version_no": p.version_no},
+    )
+    db.commit()
+    return ok(request, perimeter_out(p))

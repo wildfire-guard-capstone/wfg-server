@@ -74,3 +74,57 @@ def test_other_jurisdiction_is_hidden(client, login, make_user, db, anpyeong):
     assert client.get(f"{URL}/{inc['id']}", headers=other).status_code == 404
     listed = client.get(URL, headers=other).json()["data"]["items"]
     assert inc["id"] not in [i["id"] for i in listed]
+
+
+def test_report_and_correct_perimeter(client, login, anpyeong):
+    rep, cmd = login("t_rep5", "REPORTER"), login("t_cmd5", "COMMANDER")
+    inc = client.post(URL, json=body(*anpyeong), headers=rep).json()["data"]
+    per = f"{URL}/{inc['id']}/perimeters"
+    new = {"geometry": square(*anpyeong), "observed_at": "2025-03-22T13:00:00+09:00"}
+
+    r = client.post(per, json={**new, "expected_perimeter_id": "999999999"}, headers=rep)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "STALE_PERIMETER"
+    early = {**new, "observed_at": "2025-03-22T10:00:00+09:00"}
+    r = client.post(
+        per, json={**early, "expected_perimeter_id": inc["current_perimeter_id"]}, headers=rep
+    )
+    assert r.status_code == 422 and r.json()["error"]["code"] == "INVALID_OBSERVED_AT"
+    assert (
+        client.post(
+            per, json={**new, "expected_perimeter_id": inc["current_perimeter_id"]}, headers=cmd
+        ).status_code
+        == 403
+    )
+
+    r = client.post(
+        per, json={**new, "expected_perimeter_id": inc["current_perimeter_id"]}, headers=rep
+    )
+    assert r.status_code == 201, r.text
+    v1 = r.json()["data"]
+    assert v1["version_no"] == 1 and v1["geometry"]["type"] == "MultiPolygon"
+    detail = client.get(f"{URL}/{inc['id']}", headers=cmd).json()["data"]
+    assert detail["current_perimeter_id"] == v1["id"] and detail["needs_reprediction"]
+
+    v0 = inc["current_perimeter_id"]
+    fix = {"geometry": square(*anpyeong, d=0.004), "observed_at": "2025-03-22T13:05:00+09:00"}
+    r = client.post(f"{per}/{v0}/corrections", json=fix, headers=rep)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "V0_NOT_CORRECTABLE"
+    r = client.post(f"{per}/{v1['id']}/corrections", json=fix, headers=rep)
+    assert r.status_code == 201, r.text
+    v2 = r.json()["data"]
+    assert v2["version_no"] == 2
+    r = client.post(f"{per}/{v1['id']}/corrections", json=fix, headers=rep)  # 이미 정정됨
+    assert r.status_code == 409 and r.json()["error"]["code"] == "STALE_PERIMETER"
+
+    pages = client.get(per, headers=cmd).json()["data"]["items"]
+    assert [(p["version_no"], p["corrected_at"] is None) for p in pages] == [
+        (2, True),
+        (1, False),
+        (0, True),
+    ]
+    detail = client.get(f"{URL}/{inc['id']}", headers=cmd).json()["data"]
+    assert detail["current_perimeter_id"] == v2["id"]
+
+    client.post(f"{URL}/{inc['id']}/end", json={"expected_perimeter_id": v2["id"]}, headers=cmd)
+    r = client.post(per, json={**new, "expected_perimeter_id": v2["id"]}, headers=rep)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "INCIDENT_ENDED"

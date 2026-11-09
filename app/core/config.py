@@ -26,7 +26,13 @@ class Settings(BaseSettings):
     # capston-data 「data/지도자원/적재」 — 바탕 데이터 적재 파일(app.db.seed.base)
     base_data_dir: Path | None = None
     elmfire_bin: str = "elmfire_1.1"
-    kma_api_key: str | None = None
+    kma_api_key: str | None = None  # 기상청 API 허브(지상관측 asos)
+    data_go_kr_api_key: str | None = None  # 공공데이터포털(기상청 단기예보 kma)
+
+    # 예측에 쓰는 기상 원천(app.weather): fixed · file(WEATHER_PATH) · kma · asos(WEATHER_STATION)
+    weather: str = "fixed"
+    weather_path: str | None = None
+    weather_station: str = "278"  # 지상관측 지점(278 = 의성)
 
     # 개발 중 다른 출처(예: Vite http://127.0.0.1:5173)에서 부를 때만. 같은 출처 배포면 비워 둔다.
     cors_origins: list[str] = []

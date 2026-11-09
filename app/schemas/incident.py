@@ -72,6 +72,8 @@ class InitialPerimeterIn(In):
 
 
 class IncidentCreateIn(In):
+    """위기경보(alert_level)는 받지 않는다 — 보내면 모르는 칸이라 422(04 수정 필요 1번, 11/9)."""
+
     ignition_point: Geometry
     address: str = Field(min_length=1, max_length=200)
     started_at: AwareDatetime | None = None
@@ -80,8 +82,6 @@ class IncidentCreateIn(In):
     reporter_org: str | None = Field(None, max_length=100)
     reporter_name: str = Field(min_length=1, max_length=50)
     reporter_phone: str = Field(min_length=1, max_length=20)
-    # 명세 v0.4의 필수 칸이지만 11/6 DB에서 빠짐 — 보내도 받기만 하고 저장하지 않는다
-    alert_level: str | None = None
     initial_perimeter: InitialPerimeterIn | None = None
 
 

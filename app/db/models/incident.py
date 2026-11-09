@@ -25,6 +25,12 @@ class Incident(Base):
     """산불 하나. 현재 상황(``situation``)과 현재 대응단계를 담는다."""
 
     __tablename__ = "incidents"
+    # 같은 보고자 · 같은 요청 번호 = 같은 보고(통신 재전송) → 산불 하나(명세 2.4, 11/10)
+    __table_args__ = (
+        UniqueConstraint(
+            "reported_by", "idempotency_key", name="incidents_reported_by_idempotency_key_key"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     ignition_point: Mapped[WKBElement] = geometry("POINT")
@@ -51,6 +57,9 @@ class Incident(Base):
     created_at: Mapped[datetime] = created_at()
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    # 보고 요청 번호(Idempotency-Key)와 그 요청 본문의 해시. 번호 없이 보고하면 둘 다 null
+    idempotency_key: Mapped[str | None] = mapped_column(String(100))
+    request_hash: Mapped[str | None] = mapped_column(String(64))
 
 
 class FirePerimeter(Base):

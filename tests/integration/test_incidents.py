@@ -10,7 +10,7 @@ URL = "/api/v1/incidents"
 def test_report_list_detail_perimeters(client, login, anpyeong):
     rep, cmd = login("t_rep", "REPORTER"), login("t_cmd", "COMMANDER")
     perimeter = {"geometry": square(*anpyeong), "observed_at": "2025-03-22T11:55:00+09:00"}
-    payload = body(*anpyeong, alert_level="ATTENTION", initial_perimeter=perimeter)
+    payload = body(*anpyeong, initial_perimeter=perimeter)
     r = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k-1"})
     assert r.status_code == 201, r.text
     inc = r.json()["data"]
@@ -39,6 +39,8 @@ def test_report_validation(client, login, anpyeong):
     assert client.post(URL, json=bad, headers=rep).json()["error"]["code"] == "INVALID_GEOMETRY"
     naive = body(*anpyeong, reported_at="2025-03-22T11:25:00")
     assert client.post(URL, json=naive, headers=rep).json()["error"]["code"] == "VALIDATION_ERROR"
+    alert = client.post(URL, json=body(*anpyeong, alert_level="ATTENTION"), headers=rep)
+    assert alert.status_code == 422 and alert.json()["error"]["code"] == "VALIDATION_ERROR"
     viewer = login("t_view2", "VIEWER")
     assert client.post(URL, json=body(*anpyeong), headers=viewer).status_code == 403
 
@@ -137,3 +139,26 @@ def test_report_and_correct_perimeter(client, login, anpyeong):
     client.post(f"{URL}/{inc['id']}/end", json={"expected_perimeter_id": v2["id"]}, headers=cmd)
     r = client.post(per, json={**new, "expected_perimeter_id": v2["id"]}, headers=rep)
     assert r.status_code == 409 and r.json()["error"]["code"] == "INCIDENT_ENDED"
+
+
+def test_same_request_key_reports_once(client, login, anpyeong):
+    rep, other = login("t_rep7", "REPORTER"), login("t_rep8", "REPORTER")
+    payload = body(*anpyeong)
+    first = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k-7"})
+    again = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k-7"})  # 재전송
+    assert first.status_code == again.status_code == 201
+    assert again.json()["data"]["id"] == first.json()["data"]["id"]
+
+    changed = body(*anpyeong, address="경북 의성군 안평면 다른 곳")
+    r = client.post(URL, json=changed, headers={**rep, "Idempotency-Key": "k-7"})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    new_key = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k-8"})
+    other_user = client.post(URL, json=payload, headers={**other, "Idempotency-Key": "k-7"})
+    no_key = [client.post(URL, json=payload, headers=rep) for _ in range(2)]
+    ids = {first.json()["data"]["id"], new_key.json()["data"]["id"]}
+    ids |= {other_user.json()["data"]["id"]} | {r.json()["data"]["id"] for r in no_key}
+    assert len(ids) == 5  # 새 번호 · 다른 보고자 · 번호 없음은 모두 새 산불
+
+    too_long = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k" * 101})
+    assert too_long.status_code == 422

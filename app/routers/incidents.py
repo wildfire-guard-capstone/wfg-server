@@ -1,11 +1,14 @@
 """INC-01 목록 · INC-02 보고 · INC-03 상세 · INC-04 종료,
 PER-01 화선 버전 목록 · PER-02 실측 화선 보고 · PER-03 현재 실측 화선 정정."""
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Path, Request
 from geoalchemy2.shape import to_shape
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Db, require_roles
@@ -156,12 +159,20 @@ def report_incident(
     request: Request,
     user: Reporter,
     db: Db,
-    idempotency_key: Annotated[str | None, Header()] = None,
+    idempotency_key: Annotated[str | None, Header(max_length=100)] = None,
 ):
     """INC-02. 산불 + 화선 v0(발화점), 실측 화선을 함께 보내면 v1까지 한 번에 저장.
 
-    Idempotency-Key는 받기만 한다(중복 막기는 Q-05 뒤). alert_level은 저장하지 않는다.
+    Idempotency-Key(명세 2.4): 같은 보고자가 같은 번호 · 같은 본문을 다시 보내면(통신 재전송)
+    새로 만들지 않고 처음 만든 산불을 돌려준다. 같은 번호에 다른 본문은 409. 번호 없이 보내면
+    중복을 막지 않는다.
     """
+    request_hash = None
+    if idempotency_key:
+        request_hash = _hash(body)
+        done = _replayed(db, user.id, idempotency_key, request_hash)
+        if done is not None:
+            return ok(request, incident_out(db, done))
     point = from_geojson(body.ignition_point, ("Point",), "ignition_point")
     first = None
     if body.initial_perimeter:
@@ -177,18 +188,27 @@ def report_incident(
         ) from exc
     if user.admin_area_id is not None and incidents.parent_of(db, emd) != user.admin_area_id:
         raise ApiError(422, "OUTSIDE_JURISDICTION", "관할 밖의 산불입니다.")
-    incident_id = incidents.create_incident(
-        db,
-        ignition=point,
-        address=body.address,
-        reported_at=body.reported_at,
-        started_at=body.started_at,
-        reporter_name=body.reporter_name,
-        reporter_phone=body.reporter_phone,
-        report_text=body.report_text,
-        reporter_org=body.reporter_org,
-        reported_by=user.id,
-    )
+    try:
+        incident_id = incidents.create_incident(
+            db,
+            ignition=point,
+            address=body.address,
+            reported_at=body.reported_at,
+            started_at=body.started_at,
+            reporter_name=body.reporter_name,
+            reporter_phone=body.reporter_phone,
+            report_text=body.report_text,
+            reporter_org=body.reporter_org,
+            reported_by=user.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+        )
+    except IntegrityError:  # 같은 번호가 거의 동시에 두 번 → 먼저 저장된 것을 돌려줌
+        db.rollback()
+        done = _replayed(db, user.id, idempotency_key, request_hash) if idempotency_key else None
+        if done is None:
+            raise
+        return ok(request, incident_out(db, done))
     event_logs.add(db, "INCIDENT_REPORTED", user_id=user.id, incident_id=incident_id)
     if first:
         p = incidents.add_perimeter(
@@ -200,6 +220,19 @@ def report_incident(
         )
     db.commit()
     return ok(request, incident_out(db, db.get(Incident, incident_id)))
+
+
+def _hash(body: IncidentCreateIn) -> str:
+    raw = json.dumps(body.model_dump(mode="json"), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _replayed(db: Session, user_id: int, key: str, request_hash: str) -> Incident | None:
+    """같은 번호로 이미 만든 산불. 본문이 다르면 409(앱이 번호를 잘못 다시 씀)."""
+    done = incidents.reported_with_key(db, user_id, key)
+    if done is not None and done.request_hash != request_hash:
+        raise ApiError(409, "IDEMPOTENCY_KEY_REUSED", "같은 요청 번호로 다른 내용을 보냈습니다.")
+    return done
 
 
 @router.get("/{incident_id}", response_model=Envelope[IncidentOut])

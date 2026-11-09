@@ -181,3 +181,10 @@ def test_get_weather_by_name():
         get_weather("kma", service_key=None)
     with pytest.raises(ValueError, match="모르는 기상"):
         get_weather("ecmwf")
+
+
+def test_latest_observed_hour_waits_40_minutes():
+    from app.weather.kma import latest_observed_hour
+
+    assert latest_observed_hour(at(21, 39)) == at(20)  # 21시 자료는 아직
+    assert latest_observed_hour(at(21, 40)) == at(21)

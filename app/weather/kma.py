@@ -82,6 +82,11 @@ def _floor_hour(t: datetime) -> datetime:
     return t.replace(minute=0, second=0, microsecond=0)
 
 
+def latest_observed_hour(now: datetime) -> datetime:
+    """지금 받을 수 있는 가장 최근 관측 정시(정시 자료는 40분쯤 나온다)."""
+    return _floor_hour(now.astimezone(KST) - timedelta(minutes=40))
+
+
 def _by_time(items: Items) -> dict[datetime, dict[str, str]]:
     out: dict[datetime, dict[str, str]] = {}
     for i in items:
@@ -111,6 +116,18 @@ class KmaForecast:
         params = {"base_date": f"{base:%Y%m%d}", "base_time": f"{base:%H%M}", "nx": nx, "ny": ny}
         return self.get(op, params, self.service_key)
 
+    def observation(self, site: tuple[float, float], at: datetime) -> dict[str, float]:
+        """한 정시의 초단기실황(관측) 하나 — 풍향 · 풍속 · 기온 · 습도 · 강수."""
+        nx, ny = grid(*site)
+        o = {i["category"]: i["obsrValue"] for i in self._call("getUltraSrtNcst", at, nx, ny)}
+        return {
+            "wind_dir": float(o["VEC"]),
+            "wind_speed": float(o["WSD"]),
+            "temp": float(o["T1H"]),
+            "humidity": float(o["REH"]),
+            "precip": precip_mm(o["RN1"]),
+        }
+
     def fetch(self, request: WeatherRequest) -> Weather:
         """1. 지난 정시 = 초단기실황 2. 나머지 = 초단기예보 → 단기예보 3. 하나라도 비면 실패."""
         slots = hour_slots(request.base_at)
@@ -121,10 +138,9 @@ class KmaForecast:
             )
         nx, ny = grid(*request.site)
         hours: dict[datetime, dict[str, Any]] = {}
-        last_obs = _floor_hour(now - timedelta(minutes=40))
-        for t in (t for t in slots if t <= last_obs):  # 1
-            o = {i["category"]: i["obsrValue"] for i in self._call("getUltraSrtNcst", t, nx, ny)}
-            hours[t] = hour(t, "관측", o["VEC"], o["WSD"], o["T1H"], o["REH"], precip_mm(o["RN1"]))
+        for t in (t for t in slots if t <= latest_observed_hour(now)):  # 1
+            o = self.observation(request.site, t)
+            hours[t] = hour(t, "관측", **o)
         issued = None
         if rest := [t for t in slots if t not in hours]:  # 2
             ultra = _floor_hour(now - timedelta(minutes=45)).replace(minute=30)

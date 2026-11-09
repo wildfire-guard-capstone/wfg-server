@@ -13,7 +13,7 @@ def ddl(table: str) -> str:
     return str(CreateTable(Base.metadata.tables[table]).compile(dialect=DIALECT))
 
 
-def test_all_16_tables_registered():
+def test_all_17_tables_registered():
     assert set(Base.metadata.tables) == {
         "users", "event_logs",
         "incidents", "fire_perimeters",
@@ -22,6 +22,7 @@ def test_all_16_tables_registered():
         "situation_corrections", "qa_messages",
         "admin_areas", "villages", "facilities", "map_features",
         "resource_bases", "resources",
+        "weather_hours",
     }  # fmt: skip
 
 
@@ -80,3 +81,11 @@ def test_proposal_item_stores_agent_output():
     assert "categories item_category[] NOT NULL" in item
     assert "cardinality(categories)" not in item
     assert {"citations", "evidence_chunks"}.isdisjoint(Base.metadata.tables)
+
+
+def test_weather_hours_one_row_per_issue():
+    weather = ddl("weather_hours")
+    assert "UNIQUE (location, source, issued_at, at)" in weather
+    assert "source IN ('KMA_NCST', 'KMA_ULTRA', 'KMA_VILLAGE', 'ASOS')" in weather
+    assert "wind_speed REAL" in weather
+    assert "fetched_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL" in weather

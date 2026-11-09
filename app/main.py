@@ -13,6 +13,7 @@ from app.routers import (
     incidents,
     maps,
     predictions,
+    proposals,
     resources,
     users,
     weather,
@@ -28,6 +29,7 @@ app.include_router(auth.router, prefix=API)
 app.include_router(users.router, prefix=API)
 app.include_router(incidents.router, prefix=API)
 app.include_router(predictions.router, prefix=API)
+app.include_router(proposals.router, prefix=API)
 app.include_router(maps.router, prefix=API)
 app.include_router(resources.router, prefix=API)
 app.include_router(event_logs.router, prefix=API)

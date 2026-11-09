@@ -93,7 +93,7 @@ def test_failed_prediction_keeps_nothing(client, login, reported, db, monkeypatc
 
 
 def test_weather_failure_keeps_nothing(client, login, reported, db, monkeypatch):
-    """기상을 못 받으면 작업 실패 코드 WEATHER_UNAVAILABLE, 예측 · 제안서는 남기지 않는다."""
+    """기상을 못 받으면 요청이 503 WEATHER_UNAVAILABLE(명세 v0.4) — 작업 · 예측은 만들지 않는다."""
 
     class NoWeather:
         name = "down"
@@ -101,14 +101,16 @@ def test_weather_failure_keeps_nothing(client, login, reported, db, monkeypatch)
         def fetch(self, request):
             raise WeatherUnavailable("기상청 연결 실패")
 
-    monkeypatch.setattr("app.services.prediction.provider_from_settings", lambda: NoWeather())
+    monkeypatch.setattr("app.routers.predictions.provider_from_settings", lambda: NoWeather())
     cmd = login("t_cmd6", "COMMANDER")
-    op = run(client, reported, cmd)
-    assert op["status"] == "FAILED" and op["stage"] == "WEATHER"
-    assert (
-        op["error"]["code"] == "WEATHER_UNAVAILABLE"
-        and "기상청 연결 실패" in op["error"]["message"]
+    r = client.post(
+        f"{URL}/{reported['id']}/predictions",
+        json={"expected_perimeter_id": reported["current_perimeter_id"]},
+        headers=cmd,
     )
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WEATHER_UNAVAILABLE"
+    assert "기상청 연결 실패" in r.json()["error"]["message"]
+    assert not operations.is_running(int(reported["id"]))  # 작업을 시작하지 않음
     n = db.scalar(
         text("SELECT count(*) FROM predictions WHERE incident_id = :i"), {"i": int(reported["id"])}
     )

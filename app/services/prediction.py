@@ -21,8 +21,7 @@ from app.repositories.proposals import save_proposal
 from app.services import operations
 from app.services.engine import run_engine
 from app.services.risk import compute_risk
-from app.services.weather import provider_from_settings
-from app.weather import Weather, WeatherProvider, WeatherRequest, WeatherUnavailable
+from app.weather import Weather, WeatherProvider, WeatherRequest
 from app.weather.base import check_weather
 
 log = logging.getLogger(__name__)
@@ -119,11 +118,6 @@ def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
     """작업 실패 → 작업의 error. 어느 단계에서 났는지로 나눈다."""
     if isinstance(exc, ApiError):
         return {"code": exc.code, "message": exc.message}
-    if op.stage == "WEATHER":  # 기상 원천 실패 · 설정 없음 · 모양 오류(11/10 — 명세의 503 대신)
-        if isinstance(exc, (WeatherUnavailable, ValueError)):  # 우리가 만든 문장(키 없음)
-            return {"code": "WEATHER_UNAVAILABLE", "message": f"기상을 받지 못했습니다: {exc}"}
-        log.exception("예측 작업 기상 단계 실패 (%s)", op.id)
-        return {"code": "WEATHER_UNAVAILABLE", "message": "기상을 받지 못했습니다."}
     if op.stage == "SPREAD" and isinstance(exc, ValueError):  # 예측 결과 검사(8개 · 면 · 누적)
         return {"code": "PREDICTION_INVALID", "message": str(exc)}
     log.exception("예측 작업 실패 (%s, %s 단계)", op.id, op.stage)
@@ -133,20 +127,22 @@ def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
 
 
 def run_prediction_operation(
-    op: operations.Operation, perimeter_id: int, session_factory: SessionFactory
+    op: operations.Operation,
+    perimeter_id: int,
+    session_factory: SessionFactory,
+    weather: Weather | None = None,
 ) -> None:
-    """PRED-01 작업: 기상(WEATHER) → 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES)
-    → 제안 작성(PROPOSAL_GENERATION) → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT).
+    """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
+    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT). 기상(weather)은 예측 요청 때 받아 넘긴다
+    (못 받으면 요청이 503 WEATHER_UNAVAILABLE — 명세 v0.4 그대로, 작업은 시작하지 않음).
 
     예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
     제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
     근거 검색은 작성기 안에서 하므로 EVIDENCE 단계는 따로 두지 않는다.
     """
-    operations.update(op, status="RUNNING", stage="WEATHER")
+    operations.update(op, status="RUNNING", stage="SPREAD")
     with session_factory() as db:
         try:
-            weather = fetch_weather(db, op.incident_id, provider_from_settings())
-            operations.update(op, stage="SPREAD")
             pid = run_prediction(
                 db,
                 incident_id=op.incident_id,

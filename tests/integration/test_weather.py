@@ -75,3 +75,21 @@ def test_not_live_or_ended_uses_latest_prediction(db, reported, make_user):
     observer = FakeObserver()
     assert weather_now(db, incident, observer=observer, now=NOW)["source"] == "SYNTHETIC"
     assert observer.calls == []
+
+
+URL = "/api/v1/incidents/{}/weather/now"
+
+
+def test_api_weather_now(client, login, reported, monkeypatch):
+    cmd, rep = login("t_wx_cmd", "COMMANDER"), login("t_wx_rep", "REPORTER")
+    url = URL.format(reported["id"])
+    monkeypatch.setattr("app.routers.weather.observer_from_settings", lambda: None)
+    r = client.get(url, headers=cmd)  # 실시간 원천 없음 + 예측 전
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WEATHER_UNAVAILABLE"
+    observer = FakeObserver()
+    monkeypatch.setattr("app.routers.weather.observer_from_settings", lambda: observer)
+    data = client.get(url, headers=cmd).json()["data"]
+    assert data["source"] == "KMA_NCST" and data["wind_dir_name"] == "남동"
+    assert data["observed_at"].endswith("+09:00") and data["stale"] is False
+    assert client.get(url, headers=cmd).json()["data"] == data and len(observer.calls) == 1
+    assert client.get(url, headers=rep).status_code == 403  # 보고자는 못 봄(PRED-04와 같음)

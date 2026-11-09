@@ -10,7 +10,7 @@ URL = "/api/v1/incidents"
 def test_report_list_detail_perimeters(client, login, anpyeong):
     rep, cmd = login("t_rep", "REPORTER"), login("t_cmd", "COMMANDER")
     perimeter = {"geometry": square(*anpyeong), "observed_at": "2025-03-22T11:55:00+09:00"}
-    payload = body(*anpyeong, alert_level="ATTENTION", initial_perimeter=perimeter)
+    payload = body(*anpyeong, initial_perimeter=perimeter)
     r = client.post(URL, json=payload, headers={**rep, "Idempotency-Key": "k-1"})
     assert r.status_code == 201, r.text
     inc = r.json()["data"]
@@ -39,6 +39,8 @@ def test_report_validation(client, login, anpyeong):
     assert client.post(URL, json=bad, headers=rep).json()["error"]["code"] == "INVALID_GEOMETRY"
     naive = body(*anpyeong, reported_at="2025-03-22T11:25:00")
     assert client.post(URL, json=naive, headers=rep).json()["error"]["code"] == "VALIDATION_ERROR"
+    alert = client.post(URL, json=body(*anpyeong, alert_level="ATTENTION"), headers=rep)
+    assert alert.status_code == 422 and alert.json()["error"]["code"] == "VALIDATION_ERROR"
     viewer = login("t_view2", "VIEWER")
     assert client.post(URL, json=body(*anpyeong), headers=viewer).status_code == 403
 

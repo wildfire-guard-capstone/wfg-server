@@ -160,7 +160,7 @@ def report_incident(
 ):
     """INC-02. 산불 + 화선 v0(발화점), 실측 화선을 함께 보내면 v1까지 한 번에 저장.
 
-    Idempotency-Key는 받기만 한다(중복 막기는 Q-05 뒤). alert_level은 저장하지 않는다.
+    Idempotency-Key는 받기만 한다(중복 막기는 Q-05 뒤).
     """
     point = from_geojson(body.ignition_point, ("Point",), "ignition_point")
     first = None

@@ -1,4 +1,4 @@
-"""ORM models for the 16 tables in wfg-docs `docs/설계/DB-설계.md`.
+"""ORM models for the 17 tables in wfg-docs `docs/설계/DB-설계.md`.
 
 Importing this package registers every table on ``Base.metadata`` (Alembic needs that).
 """
@@ -10,6 +10,7 @@ from app.db.models.incident import FirePerimeter, Incident
 from app.db.models.prediction import Prediction, PredictionSlice
 from app.db.models.proposal import Proposal, ProposalItem
 from app.db.models.resource import Resource, ResourceBase
+from app.db.models.weather import WeatherHour
 
 __all__ = [
     "AdminArea",
@@ -28,4 +29,5 @@ __all__ = [
     "SituationCorrection",
     "User",
     "Village",
+    "WeatherHour",
 ]

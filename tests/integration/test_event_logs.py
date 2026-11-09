@@ -12,7 +12,8 @@ def test_commander_reads_incident_logs_newest_first(client, login, reported):
     logs = client.get(URL, params={"incident_id": reported["id"]}, headers=cmd)
     assert logs.headers["cache-control"] == "no-store"
     actions = [e["action"] for e in logs.json()["data"]["items"]]
-    assert actions[:2] == ["PREDICTION_CREATED", "INCIDENT_REPORTED"]
+    # 예측 작업이 제안서까지 저장한다(최신 먼저)
+    assert actions[:3] == ["PROPOSAL_CREATED", "PREDICTION_CREATED", "INCIDENT_REPORTED"]
     only = client.get(
         URL, params={"incident_id": reported["id"], "action": "INCIDENT_REPORTED"}, headers=cmd
     ).json()["data"]["items"]

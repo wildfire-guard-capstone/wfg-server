@@ -1,6 +1,7 @@
 """규칙 엔진 돌리기: 예측 하나 + 바탕 데이터 → 엔진 묶음 · LLM 입력.
 
-아직 저장하지 않는다. 제안서 저장(proposals.context · proposal_items)은 다음 단계에서 더한다.
+여기서는 저장하지 않는다. 예측 작업(services.prediction)이 이 결과를 작성기에 넘기고,
+제안서 저장(repositories.proposals: proposals.context · proposal_items.detail)까지 한다.
 """
 
 from datetime import datetime

@@ -19,7 +19,7 @@ def run(client, inc, headers):
 def test_predict_then_read_prediction_slices_weather(client, login, reported):
     cmd, view = login("t_cmd", "COMMANDER"), login("t_view", "VIEWER")
     op = run(client, reported, cmd)
-    assert op["status"] == "SUCCEEDED" and op["result"]["proposal_id"] is None
+    assert op["status"] == "SUCCEEDED" and op["result"]["proposal_id"]
     pid = op["result"]["prediction_id"]
     base = f"{URL}/{reported['id']}/predictions/{pid}"
 
@@ -87,6 +87,56 @@ def test_failed_prediction_keeps_nothing(client, login, reported, db, monkeypatc
         {"i": int(reported["id"])},
     )
     assert failed == 1
+
+
+def test_predict_also_saves_proposal_and_stage(client, login, reported, db):
+    """예측 → 규칙 엔진 → 가짜 작성기 → 제안서 저장까지 한 작업으로. 산불 대응단계 = 엔진 판정."""
+    cmd = login("t_cmd5", "COMMANDER")
+    op = run(client, reported, cmd)
+    assert op["status"] == "SUCCEEDED", op
+    pid, proposal_id = int(op["result"]["prediction_id"]), int(op["result"]["proposal_id"])
+    row = db.execute(
+        text(
+            "SELECT prediction_id, perimeter_version, seq, judged_stage FROM proposals"
+            " WHERE id = :p"
+        ),
+        {"p": proposal_id},
+    ).one()
+    assert (row.prediction_id, row.perimeter_version, row.seq) == (pid, 0, 1)
+    states = db.scalars(
+        text("SELECT state FROM proposal_items WHERE proposal_id = :p"), {"p": proposal_id}
+    ).all()
+    assert states and set(states) == {"ok"}
+    detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+    assert detail["current_stage"] == row.judged_stage
+    created = db.scalar(
+        text(
+            "SELECT count(*) FROM event_logs WHERE incident_id = :i AND action = 'PROPOSAL_CREATED'"
+        ),
+        {"i": int(reported["id"])},
+    )
+    assert created == 1
+
+
+def test_failed_proposal_keeps_neither_prediction_nor_proposal(
+    client, login, reported, db, monkeypatch
+):
+    class Broken:
+        name = "broken"
+
+        def write(self, llm_input):
+            raise RuntimeError("GPU 서버에 연결할 수 없음")
+
+    monkeypatch.setattr("app.services.prediction.writer_from_settings", lambda: Broken())
+    cmd = login("t_cmd6", "COMMANDER")
+    op = run(client, reported, cmd)
+    assert op["status"] == "FAILED" and op["error"]["code"] == "PROPOSAL_FAILED"
+    params = {"i": int(reported["id"])}
+    for table in ("predictions", "proposals"):
+        sql = f"SELECT count(*) FROM {table} WHERE incident_id = :i"
+        assert db.scalar(text(sql), params) == 0, table
+    detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+    assert detail["current_stage"] == "INITIAL" and detail["latest_prediction_id"] is None
 
 
 def test_fake_risk(client, login, reported):

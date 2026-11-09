@@ -31,6 +31,13 @@ input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
 [`deck/README.md`](deck/README.md). 아래 회차 표의 배율 열과 blend 설명은 11/8까지의 기록이다
 (`--calibration blend`로 그대로 돌릴 수 있다).
 
+**규칙 엔진에 넘기는 바람(1 ~ 8시간):** `step2_rules.wind_files`가 덱 `inputs/`에 시간평균 `ws.tif` · `wd.tif`가 있으면
+그것을, 없으면 덱 namelist의 `WS_FILENAME` · `WD_FILENAME`을 쓴다. 최종 덱은 `ws_gust`(시간 안 가장 센 1분 풍속)라
+그대로면 평균풍속보다 크게 들어가 대응단계의 풍속 기준 판정이 올라갈 수 있다 — 이때 실행 기록에 「! 규칙 엔진 바람: … 돌풍 값」을
+찍고 `round_k.json`의 `weather.wind_source`에 남긴다. 평균풍속으로 판정하려면 최종 덱 `inputs/`에 시간평균 `ws.tif` · `wd.tif`를
+함께 둔다(ELMFIRE는 namelist의 `ws_gust` · `wd_obs`를 그대로 쓴다). 11/9 서버 실행 `runs/e45-1109`는 11/1 덱의 시간평균
+`ws` · `wd`(시간 기준 같음: 밴드 1 = 3/22 11:00)를 넣은 `~/wfg/demo/deck_e45`로 돌렸다.
+
 **보정 방법 바꾼 이유(11/8, 사용자 결정):** 11/7에는 ①(직전 구간)만 썼는데 배율이 2.75 ~ 7.0으로 흔들렸다
 (손으로 그린 화선의 차이, 13:45 → 14:20 급성장). `backtest.py`로 회차 예측을 뒤 상황도 화선(13:10 ~ 22:00, 15쌍)과
 비교한 결과(오차 = |ln(예측 ÷ 실측 면적)| 회차 평균):

@@ -138,6 +138,8 @@ def main() -> None:
             f"항목 {[i['id'] for i in llm_in['items']]}",
             flush=True,
         )
+        if "돌풍" in ru["weather"]["wind_source"]:  # 최종 덱에 시간평균 ws · wd가 없을 때
+            print(f"  ! 규칙 엔진 바람: {ru['weather']['wind_source']}", flush=True)
         prev_stage, prev_alerts = ru["next_prev_stage"], ru["next_prev_alerts"]
         # 3. LLM 대응 생성
         items, logs, llm_s, calls = [], [], 0.0, []
@@ -181,6 +183,7 @@ def main() -> None:
             },
             "weather": ru["weather"],
             "llm_input": llm_in,
+            "llm_model": agent.llm.model if agent is not None else None,
             "proposal": items,
             "agent_log": logs,
             "llm_calls": calls,

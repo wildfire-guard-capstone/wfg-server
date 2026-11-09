@@ -85,7 +85,7 @@ th{background:#f9fafb}
 </head>
 <body>
 <header>
-  <div><h1>의성 산불 대응 제안 데모</h1><div class="sub">2025-03-22 안평면 괴산리 · ELMFIRE 예측 → 규칙 엔진 → EXAONE 4.0 32B · 실제 구동 결과</div></div>
+  <div><h1>의성 산불 대응 제안 데모</h1><div class="sub">2025-03-22 안평면 괴산리 · ELMFIRE 예측 → 규칙 엔진 → __MODEL__ · 실제 구동 결과</div></div>
   <div class="rounds" id="rounds"></div>
 </header>
 <main>
@@ -209,7 +209,7 @@ function spreadTab(r) {
   else h += `<table><tr><th>상황도</th><th>경과</th><th>예측(ha)</th><th>상황도(ha)</th><th>IoU</th></tr>${r.spread.validation.map(v => `<tr><td>${v.at}</td><td>${Math.floor(v.hours)?`${Math.floor(v.hours)}시간 `:""}${Math.round((v.hours%1)*60)?`${Math.round((v.hours%1)*60)}분`:""}</td><td>${v.pred_ha}</td><td>${v.obs_ha}</td><td>${v.iou}</td></tr>`).join("")}</table>
     <p class="small">상황도 면적 = 기준 화선 ∪ 그 시각 화선. 진화 효과가 없는 예측이라 실제보다 넓을 수 있습니다.</p>`;
   const w = r.weather;
-  h += `<h4>바람(0시 = 상황 보고, 1~8시간 = ELMFIRE 입력 기상)</h4><table><tr><th>시간</th>${Object.keys(w.wind_ms).map(k => `<th>${k}</th>`).join("")}</tr>
+  h += `<h4>바람(${esc(w.wind_source || "0시 = 상황 보고, 1~8시간 = ELMFIRE 입력 기상")})</h4><table><tr><th>시간</th>${Object.keys(w.wind_ms).map(k => `<th>${k}</th>`).join("")}</tr>
     <tr><td>m/s</td>${Object.values(w.wind_ms).map(v => `<td>${v}</td>`).join("")}</tr><tr><td>풍향°</td>${Object.values(w.wind_deg).map(v => `<td>${v}</td>`).join("")}</tr></table>`;
   return h;
 }

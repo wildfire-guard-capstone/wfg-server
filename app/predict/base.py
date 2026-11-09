@@ -19,6 +19,9 @@ class PredictionRequest:
     start: BaseGeometry  # P0 = 시작 형상: 현재 화선(없으면 발화점)
     base_at: datetime  # 0시 = 시작 형상의 관측 시각
     site: tuple[float, float]  # 기준점 위도 · 경도(WGS84) — 기상 지점 · 일출 · 일몰
+    # TODO(기상 연결, 4-2): weather 칸 — 서버가 app.weather에서 받은 기상. 그러면 예측
+    # 제공자는 기상을 만들지 않고 받은 것을 쓴다(PredictionResult.weather 대신).
+    # services.prediction.run_prediction 주석 참고
 
 
 @dataclass(frozen=True)

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     data_go_kr_api_key: str | None = None  # 공공데이터포털(기상청 단기예보 kma)
 
     # 예측에 쓰는 기상 원천(app.weather): fixed · file(WEATHER_PATH) · kma · asos(WEATHER_STATION)
+    # 아직 예측 흐름에 잇지 않음(4-2) — 지금은 예측 제공자가 만든 기상을 저장한다
     weather: str = "fixed"
     weather_path: str | None = None
     weather_station: str = "278"  # 지상관측 지점(278 = 의성)

@@ -3,6 +3,8 @@
 새 기상 원천은 이 폴더에 파일 하나를 만들고(base.WeatherProvider 약속을 지킴)
 아래 WEATHERS에 이름을 더한다.
 지금: fixed(고정 시험값) · file(기상 JSON) · kma(기상청 단기예보, 운영) · asos(지상관측, 과거 시연).
+
+아직 예측 흐름에 잇지 않았다(4-2) — 잇는 자리는 services.prediction.run_prediction의 TODO 주석.
 """
 
 from pathlib import Path

@@ -29,7 +29,7 @@ class WeatherRequest:
 
 class WeatherUnavailable(Exception):
     """기상 원천에서 값을 받지 못했다(연결 실패 · 응답 오류 · 받을 수 없는 시각).
-    예측 작업은 실패 코드 WEATHER_UNAVAILABLE로 끝난다(PRED-05에서 보임)."""
+    예측 요청(PRED-01)은 작업을 시작하지 않고 503 WEATHER_UNAVAILABLE로 거절한다(명세 v0.4)."""
 
 
 class WeatherProvider(Protocol):

@@ -4,8 +4,8 @@
 아래 WEATHERS에 이름을 더한다.
 지금: fixed(고정 시험값) · file(기상 JSON) · kma(기상청 단기예보, 운영) · asos(지상관측, 과거 시연).
 
-예측 흐름: 설정 WEATHER로 고른 원천에서 9시간을 받아(작업 단계 WEATHER) 예측에 넘기고
-`predictions.weather`로 저장한다(services.prediction, 11/10).
+예측 흐름: 예측 요청 때 설정 WEATHER로 고른 원천에서 9시간을 받아(못 받으면 요청이 503
+WEATHER_UNAVAILABLE) 예측에 넘기고 `predictions.weather`로 저장한다(routers.predictions).
 """
 
 from pathlib import Path

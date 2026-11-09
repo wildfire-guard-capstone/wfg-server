@@ -1,4 +1,5 @@
-"""예측 돌리기: 현재 화선에서 예측 제공자를 불러 P1 ~ P8을 저장하고, 그 예측으로 제안서를 만든다."""
+"""예측 돌리기: 현재 화선에서 기상을 받고 예측 제공자를 불러 P1 ~ P8을 저장하고,
+그 예측으로 제안서를 만든다."""
 
 import logging
 from collections.abc import Callable
@@ -20,32 +21,48 @@ from app.repositories.proposals import save_proposal
 from app.services import operations
 from app.services.engine import run_engine
 from app.services.risk import compute_risk
+from app.services.weather import provider_from_settings
+from app.weather import Weather, WeatherProvider, WeatherRequest, WeatherUnavailable
+from app.weather.base import check_weather
 
 log = logging.getLogger(__name__)
 PROPOSAL_STAGES = ("RULES", "PROPOSAL_GENERATION")
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
+def fetch_weather(session: Session, incident_id: int, provider: WeatherProvider) -> Weather:
+    """현재 화선 기준 9시간 기상(0시 = 화선 관측 시각을 내림한 정시, 기준점 = 발화점).
+    받지 못하면 WeatherUnavailable, 모양이 틀리면 ValueError."""
+    incident = incidents.get_incident(session, incident_id)
+    perimeter = incidents.current_perimeter(session, incident_id)
+    request = WeatherRequest(
+        site_of(to_shape(incident.ignition_point)), perimeter.observed_at.astimezone(KST)
+    )
+    return check_weather(provider.fetch(request))
+
+
 def run_prediction(
-    session: Session, *, incident_id: int, predictor: Predictor, requested_by: int
+    session: Session,
+    *,
+    incident_id: int,
+    predictor: Predictor,
+    requested_by: int,
+    weather: Weather | None = None,
 ) -> int:
     """예측 id를 돌려준다. 커밋은 부르는 쪽이 한다.
 
     1. 현재 화선(없으면 v0 발화점) = P0, 그 관측 시각 = 0시
-    2. 예측 제공자에 넘긴다 — 어떤 예측이든 같은 약속(app.predict.base)
-    3. 검사(8개 · 면 · 누적) 후 저장
+    2. 예측 제공자에 넘긴다 — 어떤 예측이든 같은 약속(app.predict.base). 받은 기상(weather)이
+       있으면 같이 넘겨 그 기상으로 계산한다(없으면 예측 제공자의 고정값 — 시험 · 개발 명령)
+    3. 검사(8개 · 면 · 누적) 후 저장. 기상은 예측에 실제로 쓴 값(결과의 weather) →
+       규칙 엔진 · 제안서가 예측과 같은 기상을 쓴다
     """
     incident = incidents.get_incident(session, incident_id)
     perimeter = incidents.current_perimeter(session, incident_id)  # 1
     start = to_shape(perimeter.geom)
     base_at = perimeter.observed_at.astimezone(KST)
-    request = PredictionRequest(start, base_at, site_of(to_shape(incident.ignition_point)))
-    # TODO(기상 연결, 4-2): 지금 기상은 예측 제공자가 만든 값(가짜 · 파일 = 바람만)이다. 나중에는
-    #   ① 서버가 기상 제공자(app.weather, 설정 WEATHER = fixed · file · kma · asos)에서
-    #      9시간 기상을 받고(작업 단계 WEATHER, 실패하면 503 WEATHER_UNAVAILABLE)
-    #   ② PredictionRequest에 넣어 예측 제공자(가짜 · ELMFIRE)가 그 기상으로 확산을 계산하고
-    #   ③ 그 기상을 predictions.weather로 저장한다 → 규칙 엔진 · 제안서가 예측과 같은 기상을 쓴다
-    result = predictor.predict(request)  # 2
+    site = site_of(to_shape(incident.ignition_point))
+    result = predictor.predict(PredictionRequest(start, base_at, site, weather))  # 2
     return predictions.save_prediction(  # 3
         session,
         incident_id=incident_id,
@@ -102,6 +119,11 @@ def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
     """작업 실패 → 작업의 error. 어느 단계에서 났는지로 나눈다."""
     if isinstance(exc, ApiError):
         return {"code": exc.code, "message": exc.message}
+    if op.stage == "WEATHER":  # 기상 원천 실패 · 설정 없음 · 모양 오류(11/10 — 명세의 503 대신)
+        if isinstance(exc, (WeatherUnavailable, ValueError)):  # 우리가 만든 문장(키 없음)
+            return {"code": "WEATHER_UNAVAILABLE", "message": f"기상을 받지 못했습니다: {exc}"}
+        log.exception("예측 작업 기상 단계 실패 (%s)", op.id)
+        return {"code": "WEATHER_UNAVAILABLE", "message": "기상을 받지 못했습니다."}
     if op.stage == "SPREAD" and isinstance(exc, ValueError):  # 예측 결과 검사(8개 · 면 · 누적)
         return {"code": "PREDICTION_INVALID", "message": str(exc)}
     log.exception("예측 작업 실패 (%s, %s 단계)", op.id, op.stage)
@@ -113,21 +135,24 @@ def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
 def run_prediction_operation(
     op: operations.Operation, perimeter_id: int, session_factory: SessionFactory
 ) -> None:
-    """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
-    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT).
+    """PRED-01 작업: 기상(WEATHER) → 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES)
+    → 제안 작성(PROPOSAL_GENERATION) → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT).
 
     예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
     제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
     근거 검색은 작성기 안에서 하므로 EVIDENCE 단계는 따로 두지 않는다.
     """
-    operations.update(op, status="RUNNING", stage="SPREAD")
+    operations.update(op, status="RUNNING", stage="WEATHER")
     with session_factory() as db:
         try:
+            weather = fetch_weather(db, op.incident_id, provider_from_settings())
+            operations.update(op, stage="SPREAD")
             pid = run_prediction(
                 db,
                 incident_id=op.incident_id,
                 predictor=predictor_from_settings(),
                 requested_by=op.user_id,
+                weather=weather,
             )
             operations.update(op, stage="RISK")
             _risk_check(db, pid)

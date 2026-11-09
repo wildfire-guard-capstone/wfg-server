@@ -1,4 +1,4 @@
-# API server: FastAPI + DB(models · migrations · seed) + rules engine.
+# API server: FastAPI + DB(models · migrations · seed) + rules engine + proposal agent (agent/).
 # ELMFIRE prediction runs in the separate worker image (docker/worker).
 # Build from the repo root: docker build -f docker/api/Dockerfile -t wfg-api .
 FROM python:3.12-slim
@@ -21,6 +21,7 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
 COPY rules ./rules
+COPY agent ./agent
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

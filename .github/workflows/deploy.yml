@@ -9,6 +9,7 @@ on:
     paths:
       - "app/**"
       - "rules/**"
+      - "agent/**"
       - "migrations/**"
       - "alembic.ini"
       - "docker/api/**"

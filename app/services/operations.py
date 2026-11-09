@@ -21,7 +21,7 @@ class Operation:
     incident_id: int
     user_id: int
     status: str = "QUEUED"  # QUEUED · RUNNING · SUCCEEDED · FAILED
-    stage: str | None = None  # SPREAD · RISK · COMMIT …
+    stage: str | None = None  # SPREAD · RISK · RULES · PROPOSAL_GENERATION · COMMIT
     result: dict[str, Any] | None = None
     error: dict[str, str] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))

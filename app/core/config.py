@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     predictor_path: str | None = None
     predictor_crs: int = 4326
     predictor_weather: str | None = None
+    # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
+    proposal_writer: str = "fake"
 
     # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)
     jwt_secret: str = ""

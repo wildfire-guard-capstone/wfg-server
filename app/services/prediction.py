@@ -1,4 +1,4 @@
-"""예측 돌리기: 현재 화선에서 예측 제공자를 불러 P1 ~ P8을 저장한다."""
+"""예측 돌리기: 현재 화선에서 예측 제공자를 불러 P1 ~ P8을 저장하고, 그 예측으로 제안서를 만든다."""
 
 import logging
 from collections.abc import Callable
@@ -7,17 +7,22 @@ from contextlib import AbstractContextManager
 from geoalchemy2.shape import to_shape
 from sqlalchemy.orm import Session
 
+from agent.prompt import head_of
 from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.db.models import Incident, Prediction
 from app.db.models.enums import IncidentStatus
 from app.predict import PredictionRequest, Predictor, get_predictor
+from app.propose import ProposalWriter, get_writer
 from app.repositories import event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
+from app.repositories.proposals import save_proposal
 from app.services import operations
+from app.services.engine import run_engine
 from app.services.risk import compute_risk
 
 log = logging.getLogger(__name__)
+PROPOSAL_STAGES = ("RULES", "PROPOSAL_GENERATION")
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
@@ -58,6 +63,18 @@ def predictor_from_settings() -> Predictor:
     return get_predictor(s.predictor, **options)
 
 
+def writer_from_settings() -> ProposalWriter:
+    """설정(PROPOSAL_WRITER)으로 제안 작성기를 고른다 — 가짜 ↔ 팀원 에이전트를 갈아 끼우는 자리."""
+    return get_writer(get_settings().proposal_writer)
+
+
+def reader_of(db: Session, incident_id: int) -> str:
+    """제안서를 읽는 사람 = 산불이 난 시군구의 단체장(의성군 → 의성군수).
+    계정에는 직함 칸이 없다."""
+    sigungu, _ = incidents.incident_names(db, incidents.get_incident(db, incident_id))
+    return head_of(sigungu)
+
+
 def _check_still_current(db: Session, incident_id: int, perimeter_id: int) -> None:
     """저장 직전 재검사: 그사이 종료되거나 화선이 바뀌었으면 옛 결과를 최신으로 저장하지 않는다."""
     incident = db.get(Incident, incident_id)
@@ -76,15 +93,27 @@ def _risk_check(db: Session, prediction_id: int) -> None:
         log.exception("위험도 계산 실패(예측은 계속) — 예측 %s", prediction_id)
 
 
+def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
+    """작업 실패 → 작업의 error. 어느 단계에서 났는지로 나눈다."""
+    if isinstance(exc, ApiError):
+        return {"code": exc.code, "message": exc.message}
+    if op.stage == "SPREAD" and isinstance(exc, ValueError):  # 예측 결과 검사(8개 · 면 · 누적)
+        return {"code": "PREDICTION_INVALID", "message": str(exc)}
+    log.exception("예측 작업 실패 (%s, %s 단계)", op.id, op.stage)
+    if op.stage in PROPOSAL_STAGES:
+        return {"code": "PROPOSAL_FAILED", "message": "제안서를 만드는 중 오류가 발생했습니다."}
+    return {"code": "INTERNAL_ERROR", "message": "예측 중 오류가 발생했습니다."}
+
+
 def run_prediction_operation(
     op: operations.Operation, perimeter_id: int, session_factory: SessionFactory
 ) -> None:
-    """PRED-01 작업: 예측(SPREAD) → 저장 직전 재검사 → 커밋(COMMIT).
+    """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
+    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT).
 
-    실패하면 예측을 남기지 않고(직전 예측이 그대로 현재 예측) PREDICTION_FAILED만 기록한다.
-
-    규칙 판정 · 근거 · 제안 생성(RULES · EVIDENCE · PROPOSAL_GENERATION)은 LLM 응답 형식이
-    정해진 뒤 이 자리에 붙인다. 그래서 지금 result.proposal_id는 늘 null이다.
+    예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
+    제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
+    근거 검색은 작성기 안에서 하므로 EVIDENCE 단계는 따로 두지 않는다.
     """
     operations.update(op, status="RUNNING", stage="SPREAD")
     with session_factory() as db:
@@ -97,18 +126,24 @@ def run_prediction_operation(
             )
             operations.update(op, stage="RISK")
             _risk_check(db, pid)
+            operations.update(op, stage="RULES")
+            llm_input = run_engine(
+                db,
+                incident_id=op.incident_id,
+                reader=reader_of(db, op.incident_id),
+                prediction_id=pid,
+            )
+            operations.update(op, stage="PROPOSAL_GENERATION")
+            written = writer_from_settings().write(llm_input)
             operations.update(op, stage="COMMIT")
             _check_still_current(db, op.incident_id, perimeter_id)
+            proposal_id = save_proposal(
+                db, prediction_id=pid, llm_input=llm_input, written=written, user_id=op.user_id
+            )
             db.commit()
         except Exception as exc:  # noqa: BLE001 — 어떤 실패든 작업 실패로 알린다
             db.rollback()
-            if isinstance(exc, ApiError):
-                error = {"code": exc.code, "message": exc.message}
-            elif isinstance(exc, ValueError):
-                error = {"code": "PREDICTION_INVALID", "message": str(exc)}
-            else:
-                log.exception("예측 작업 실패 (%s)", op.id)
-                error = {"code": "INTERNAL_ERROR", "message": "예측 중 오류가 발생했습니다."}
+            error = _error_of(exc, op)
             event_logs.add(
                 db,
                 "PREDICTION_FAILED",
@@ -120,5 +155,7 @@ def run_prediction_operation(
             operations.update(op, status="FAILED", error=error)
             return
     operations.update(
-        op, status="SUCCEEDED", result={"prediction_id": str(pid), "proposal_id": None}
+        op,
+        status="SUCCEEDED",
+        result={"prediction_id": str(pid), "proposal_id": str(proposal_id)},
     )

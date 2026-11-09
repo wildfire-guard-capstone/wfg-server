@@ -13,12 +13,12 @@ def ddl(table: str) -> str:
     return str(CreateTable(Base.metadata.tables[table]).compile(dialect=DIALECT))
 
 
-def test_all_18_tables_registered():
+def test_all_16_tables_registered():
     assert set(Base.metadata.tables) == {
         "users", "event_logs",
         "incidents", "fire_perimeters",
         "predictions", "prediction_slices",
-        "proposals", "proposal_items", "citations", "evidence_chunks",
+        "proposals", "proposal_items",
         "situation_corrections", "qa_messages",
         "admin_areas", "villages", "facilities", "map_features",
         "resource_bases", "resources",
@@ -45,9 +45,7 @@ def test_shared_enum_is_one_type():
 
 def test_constraints():
     assert "(status = 'DEPLOYED') = (deployed_incident_id IS NOT NULL)" in ddl("resources")
-    assert "num_nonnulls(item_id, message_id) = 1" in ddl("citations")
     assert "hour BETWEEN 1 AND 8" in ddl("prediction_slices")
-    assert "categories item_category[] NOT NULL" in ddl("proposal_items")
 
 
 def test_login_id_unique_ignoring_case():
@@ -68,3 +66,17 @@ def test_no_alert_level():
 def test_proposal_context():
     # Rule engine bundles for the version (rules.llm_input), added 11/8.
     assert "context JSONB DEFAULT '{}'::jsonb NOT NULL" in ddl("proposals")
+
+
+def test_proposal_item_stores_agent_output():
+    # 11/9: state · screen sections · cited source text · reuse key; no chunk tables.
+    item = ddl("proposal_items")
+    assert "state VARCHAR(10) DEFAULT 'ok' NOT NULL" in item
+    assert "state IN ('ok', 'partial', 'failed', 'reused')" in item
+    assert "sections JSONB DEFAULT '[]'::jsonb NOT NULL" in item
+    assert "evidence JSONB DEFAULT '[]'::jsonb NOT NULL" in item
+    assert "input_key VARCHAR(16)" in item
+    # A failed item has no paragraphs, so no categories.
+    assert "categories item_category[] NOT NULL" in item
+    assert "cardinality(categories)" not in item
+    assert {"citations", "evidence_chunks"}.isdisjoint(Base.metadata.tables)

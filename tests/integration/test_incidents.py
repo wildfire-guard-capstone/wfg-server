@@ -76,6 +76,15 @@ def test_other_jurisdiction_is_hidden(client, login, make_user, db, anpyeong):
     assert inc["id"] not in [i["id"] for i in listed]
 
 
+def test_admin_lists_all_incidents_only(client, login, anpyeong):
+    rep, admin = login("t_rep6", "REPORTER"), login("t_admin6", "ADMIN")
+    inc = client.post(URL, json=body(*anpyeong), headers=rep).json()["data"]
+    listed = client.get(URL, params={"status": "IN_PROGRESS"}, headers=admin)
+    assert listed.status_code == 200
+    assert inc["id"] in [i["id"] for i in listed.json()["data"]["items"]]
+    assert client.get(f"{URL}/{inc['id']}", headers=admin).status_code == 403  # 상세는 그대로
+
+
 def test_report_and_correct_perimeter(client, login, anpyeong):
     rep, cmd = login("t_rep5", "REPORTER"), login("t_cmd5", "COMMANDER")
     inc = client.post(URL, json=body(*anpyeong), headers=rep).json()["data"]

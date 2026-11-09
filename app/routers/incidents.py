@@ -31,6 +31,8 @@ from app.services import operations
 
 router = APIRouter(prefix="/incidents", tags=["산불 · 보고"])
 Reader = require_roles("COMMANDER", "VIEWER", "REPORTER")
+# INC-01만 관리자도: 자원을 「투입」으로 바꿀 때 진행 중 산불을 고른다(04 수정 필요 2번)
+Lister = require_roles("COMMANDER", "VIEWER", "REPORTER", "ADMIN")
 Reporter = require_roles("REPORTER")
 Commander = require_roles("COMMANDER")
 IncidentId = Annotated[int, Path(gt=0)]
@@ -126,13 +128,13 @@ def perimeter_out(p: FirePerimeter) -> PerimeterOut:
 @router.get("", response_model=Envelope[Page[IncidentSummaryOut]])
 def list_incidents(
     request: Request,
-    user: Reader,
+    user: Lister,
     db: Db,
     status: StatusName | None = None,
     cursor: str | None = None,
     limit: int = LIMIT,
 ):
-    """INC-01. 관할 시군구 산불만, 접수 시각 · id 내림차순."""
+    """INC-01. 관할 시군구 산불만(관리자는 관할이 없어 전체 지역), 접수 시각 · id 내림차순."""
     after = decode_cursor(cursor, 2)
     rows = incidents.list_incidents(
         db,

@@ -1,7 +1,8 @@
 """PROP-01 ~ 04: 저장된 제안서(proposals · proposal_items)를 응답 모양으로(06 제안서 조회 API).
 
 - 한 번 만든 버전은 바뀌지 않는다 → 「변경」은 그 버전의 바로 앞 버전과 비교한 값이라 고정
-- 값은 한글(단계 · 계기 · 진화/대피 · 구분 · 상태) — 06 문서 결정. 명세 3.2의 영문 코드와 다름
+- 값은 영문 코드(단계 · 계기 · 진화/대피 · 구분 · 상태) — 명세 3.2 · 다른 API와 같음(11/10).
+  보여 주는 글(판정 한 줄 · 제안 문장 · 이름 · 표 열 이름)만 한글
 - 저장하는 칸은 늘지 않는다 — 다 읽을 때 계산
 """
 
@@ -13,12 +14,13 @@ from sqlalchemy.orm import Session
 
 from app.core.time import KST
 from app.db.models import Prediction, Proposal, ProposalItem, SituationCorrection
-from app.db.models.enums import ItemAxis, ItemCategory, ProposalTrigger, ResponseStage
+from app.db.models.enums import ItemAxis, ItemCategory, ProposalTrigger
 from app.repositories.proposals import items_by_proposal, previous_proposal
 from app.services.proposal_compare import (
     CHANGED,
     CODES,
     ITEM_NAMES,
+    category_code,
     change_of,
     changed_count,
     changes,
@@ -26,20 +28,12 @@ from app.services.proposal_compare import (
     table_row,
 )
 
-STAGE_NAME = {
-    ResponseStage.INITIAL: "초기 대응",
-    ResponseStage.STAGE1: "확산대응 1단계",
-    ResponseStage.STAGE2: "확산대응 2단계",
-}
-STATE_NAME = {"ok": "생성", "partial": "일부 생성", "failed": "실패", "reused": "재사용"}
-NOT_TRIGGERED = "해당 없음"
-AXIS_NAME = {"S": ItemAxis.SUPPRESSION.value, "E": ItemAxis.EVACUATION.value}
-CHANGE_TYPE = {
-    "변경": "변경",
-    "신규": "신규",
-    "표현만": "같음",
-    "같음": "같음",
-}  # PROP-02 「변경」 태그
+# DB 항목 상태(ok …) → 응답 코드: 생성 · 일부 생성 · 실패 · 재사용
+STATE_CODE = {"ok": "GENERATED", "partial": "PARTIAL", "failed": "FAILED", "reused": "REUSED"}
+NOT_TRIGGERED = "NOT_TRIGGERED"  # 해당 없음
+AXIS_CODE = {"S": ItemAxis.SUPPRESSION.name, "E": ItemAxis.EVACUATION.name}
+# PROP-02 「변경」 태그: LLM 표현만 바뀐 항목은 SAME
+CHANGE_TYPE = {"CHANGED": "CHANGED", "NEW": "NEW", "WORDING_ONLY": "SAME", "SAME": "SAME"}
 HIDDEN = ("quote_ok", "action", "writer")  # 문단의 내부 검사값 · 엔진 자리 번호
 
 
@@ -53,7 +47,7 @@ def version_of(p: Proposal) -> str:
 def category_counts(items: Sequence[ProposalItem]) -> dict[str, int]:
     """구분별 항목 수(한 항목이 여러 구분이면 각각 셈)."""
     n = Counter(c for i in items for c in i.categories)
-    return {c.value: n[c] for c in ItemCategory}
+    return {c.name: n[c] for c in ItemCategory}
 
 
 def version_rows(session: Session, rows: Sequence[Proposal], limit: int) -> list[dict[str, Any]]:
@@ -66,10 +60,10 @@ def version_rows(session: Session, rows: Sequence[Proposal], limit: int) -> list
             {
                 "id": p.id,
                 "version": version_of(p),
-                "trigger": p.trigger.value,
+                "trigger": p.trigger.name,
                 "created_at": p.created_at,
-                "judged_stage": STAGE_NAME[p.judged_stage],
-                "predicted_stage": STAGE_NAME[p.predicted_stage],
+                "judged_stage": p.judged_stage.name,
+                "predicted_stage": p.predicted_stage.name,
                 "category_counts": category_counts(items[p.id]),
                 "changed_count": None
                 if prev is None
@@ -91,11 +85,14 @@ def _block(b: dict[str, Any]) -> dict[str, Any]:
             "style": b.get("style"),
             "rows": [{"text": r["text"]} for r in b["rows"]],
         }
-    return {k: v for k, v in b.items() if k not in HIDDEN}
+    out = {k: v for k, v in b.items() if k not in HIDDEN}
+    if b.get("type") == "paragraph":
+        out["category"] = category_code(b.get("category"))  # 「즉시」 → IMMEDIATE
+    return out
 
 
 def sections_out(sections: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """문단의 quote_ok · action을 빼고, 표 행을 열 순서 배열로."""
+    """문단의 quote_ok · action을 빼고 구분을 영문 코드로, 표 행을 열 순서 배열로."""
     return [
         {"title": s.get("title", ""), "blocks": [_block(b) for b in s.get("blocks", [])]}
         for s in sections
@@ -109,7 +106,7 @@ def _item_out(
         return {
             "item_code": code,
             "name": ITEM_NAMES[code],
-            "axis": AXIS_NAME[code[0]],
+            "axis": AXIS_CODE[code[0]],
             "state": NOT_TRIGGERED,
             "categories": [],
             "finding": "",
@@ -122,9 +119,9 @@ def _item_out(
     return {
         "item_code": code,
         "name": item.detail.get("name") or ITEM_NAMES[code],
-        "axis": item.axis.value,
-        "state": STATE_NAME.get(item.state, item.state),
-        "categories": [c.value for c in item.categories],
+        "axis": item.axis.name,
+        "state": STATE_CODE.get(item.state, item.state),
+        "categories": [c.name for c in item.categories],
         "finding": item.detail.get("finding", ""),
         "withheld": item.detail.get("withheld", []),
         "change_type": CHANGE_TYPE.get(change) if change else None,
@@ -142,12 +139,12 @@ def proposal_out(session: Session, p: Proposal) -> dict[str, Any]:
     return {
         "id": p.id,
         "version": version_of(p),
-        "trigger": p.trigger.value,
+        "trigger": p.trigger.name,
         "created_at": p.created_at,
         "base_at": session.get(Prediction, p.prediction_id).base_at,
         "prediction_id": p.prediction_id,
-        "judged_stage": STAGE_NAME[p.judged_stage],
-        "predicted_stage": STAGE_NAME[p.predicted_stage],
+        "judged_stage": p.judged_stage.name,
+        "predicted_stage": p.predicted_stage.name,
         "items": [_item_out(code, mine.get(code), prev) for code in CODES],
     }
 
@@ -173,7 +170,7 @@ def diff_out(session: Session, p: Proposal) -> dict[str, Any]:
     """그 버전과 바로 앞 버전 비교 — 바뀐 항목만. 첫 버전이면 빈 결과."""
     head = {
         "version": version_of(p),
-        "trigger": p.trigger.value,
+        "trigger": p.trigger.name,
         "created_at": p.created_at,
     }
     before = previous_proposal(session, p)
@@ -191,8 +188,8 @@ def diff_out(session: Session, p: Proposal) -> dict[str, Any]:
     b = {i.item_code: i for i in items[p.id]}
     found = changes(items[before.id], items[p.id])
     changed = [item_diff(a.get(c), b.get(c), ch) for c, ch in found.items() if ch in CHANGED]
-    wording = [c for c, ch in found.items() if ch == "표현만"]
-    same = [c for c, ch in found.items() if ch == "같음"]
+    wording = [c for c, ch in found.items() if ch == "WORDING_ONLY"]
+    same = [c for c, ch in found.items() if ch == "SAME"]
     return head | {
         "previous_version": version_of(before),
         "cause": cause_of(session, before, p),

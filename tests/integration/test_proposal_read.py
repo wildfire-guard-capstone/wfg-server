@@ -38,12 +38,12 @@ def test_proposal_versions_view_and_diff(client, login, reported, anpyeong):
         (first, "v0.1"),
     ]
     assert rows[1]["changed_count"] == 0 and rows[2]["changed_count"] is None
-    assert rows[0]["trigger"] == "예측 갱신" and rows[0]["judged_stage"] in (
-        "초기 대응",
-        "확산대응 1단계",
-        "확산대응 2단계",
+    assert rows[0]["trigger"] == "PREDICTION" and rows[0]["judged_stage"] in (
+        "INITIAL",
+        "STAGE1",
+        "STAGE2",
     )
-    assert set(rows[0]["category_counts"]) == {"즉시", "대기", "협의", "요청"}
+    assert set(rows[0]["category_counts"]) == {"IMMEDIATE", "STANDBY", "CONSULT", "REQUEST"}
     one = client.get(f"{inc}/proposals", params={"limit": 1}, headers=cmd).json()["data"]
     assert one["has_more"] and one["items"][0]["changed_count"] == rows[0]["changed_count"]
     nxt = client.get(
@@ -57,12 +57,14 @@ def test_proposal_versions_view_and_diff(client, login, reported, anpyeong):
     assert latest["base_at"] == "2025-03-22T13:00:00+09:00"
     assert [i["item_code"] for i in latest["items"]] == CODES
     for item in latest["items"]:
-        if item["state"] == "해당 없음":
+        if item["state"] == "NOT_TRIGGERED":
             assert item["sections"] == [] and item["change_type"] is None
             continue
-        assert item["finding"] and item["change_type"] in ("변경", "같음", "신규")
+        assert item["finding"] and item["change_type"] in ("CHANGED", "SAME", "NEW")
         for b in blocks(item):
             assert "quote_ok" not in b and "action" not in b and "writer" not in b
+            if b["type"] == "paragraph":
+                assert b["category"] in ("IMMEDIATE", "STANDBY", "CONSULT", "REQUEST")
             if b["type"] == "table":
                 assert all(
                     isinstance(row, list) and len(row) == len(b["head"]) for row in b["rows"]

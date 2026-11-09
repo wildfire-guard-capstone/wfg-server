@@ -1,5 +1,5 @@
 """제안서 조회 DTO: PROP-01 버전 목록 · PROP-02/03 제안서 · PROP-04 직전 버전 비교
-(06 제안서 조회 API). 값은 한글(06 결정) — 명세 3.2의 영문 코드와 다름."""
+(06 제안서 조회 API). 값은 영문 코드(명세 3.2 · 다른 API와 같음, 11/10) — 화면 글자는 프론트가."""
 
 from typing import Any, Literal
 
@@ -7,10 +7,11 @@ from pydantic import BaseModel
 
 from app.schemas.common import DateTimeOut, Id
 
-StageLabel = Literal["초기 대응", "확산대응 1단계", "확산대응 2단계"]
-TriggerLabel = Literal["예측 갱신", "상황 정정"]
-CategoryLabel = Literal["즉시", "대기", "협의", "요청"]
-StateLabel = Literal["생성", "일부 생성", "실패", "재사용", "해당 없음"]
+StageCode = Literal["INITIAL", "STAGE1", "STAGE2"]
+TriggerCode = Literal["PREDICTION", "CORRECTION"]  # 예측 갱신 · 상황 정정
+CategoryCode = Literal["IMMEDIATE", "STANDBY", "CONSULT", "REQUEST"]  # 즉시 · 대기 · 협의 · 요청
+# 생성 · 일부 생성 · 실패 · 재사용 · 해당 없음
+StateCode = Literal["GENERATED", "PARTIAL", "FAILED", "REUSED", "NOT_TRIGGERED"]
 
 
 class ProposalVersionOut(BaseModel):
@@ -18,11 +19,11 @@ class ProposalVersionOut(BaseModel):
 
     id: Id
     version: str  # 「v1.2」
-    trigger: TriggerLabel
+    trigger: TriggerCode
     created_at: DateTimeOut
-    judged_stage: StageLabel
-    predicted_stage: StageLabel
-    category_counts: dict[CategoryLabel, int]  # 구분별 항목 수
+    judged_stage: StageCode
+    predicted_stage: StageCode
+    category_counts: dict[CategoryCode, int]  # 구분별 항목 수
     changed_count: int | None  # 바로 앞 버전 대비 바뀐 항목 수. 첫 버전은 null
 
 
@@ -45,12 +46,13 @@ class SectionOut(BaseModel):
 class ProposalItemOut(BaseModel):
     item_code: str  # S1 ~ E6
     name: str
-    axis: Literal["진화", "대피"]
-    state: StateLabel
-    categories: list[CategoryLabel]
+    axis: Literal["SUPPRESSION", "EVACUATION"]  # 진화 · 대피
+    state: StateCode
+    categories: list[CategoryCode]
     finding: str  # 판정 한 줄
     withheld: list[dict[str, Any]] | None = None  # 엔진이 판단하지 않은 것
-    change_type: Literal["변경", "같음", "신규"] | None  # 첫 버전 · 해당 없음이면 null
+    # 변경 · 같음(표현만 바뀐 것 포함) · 신규. 첫 버전 · 해당 없음이면 null
+    change_type: Literal["CHANGED", "SAME", "NEW"] | None
     sections: list[SectionOut]
     evidence: list[EvidenceOut]
 
@@ -60,12 +62,12 @@ class ProposalOut(BaseModel):
 
     id: Id
     version: str
-    trigger: TriggerLabel
+    trigger: TriggerCode
     created_at: DateTimeOut
     base_at: DateTimeOut  # 예측 기준 시각(화선 관측 시각)
     prediction_id: Id
-    judged_stage: StageLabel
-    predicted_stage: StageLabel
+    judged_stage: StageCode
+    predicted_stage: StageCode
     items: list[ProposalItemOut]
 
 
@@ -75,12 +77,12 @@ class Pair(BaseModel):
 
 
 class ParagraphSide(BaseModel):
-    category: str | None
+    category: CategoryCode | None
     body: str | None
 
 
 class ProposalChangeOut(BaseModel):
-    change: Literal["새 제안", "없어진 제안", "바뀐 제안"]
+    change: Literal["ADDED", "REMOVED", "MODIFIED"]  # 새 · 없어진 · 바뀐 제안
     topic: str | None
     before: ParagraphSide | None
     after: ParagraphSide | None
@@ -94,7 +96,7 @@ class RowsDiff(BaseModel):
 class ItemDiffOut(BaseModel):
     item_code: str
     name: str
-    change: Literal["변경", "신규", "빠짐"]
+    change: Literal["CHANGED", "NEW", "REMOVED"]  # 변경 · 신규 · 빠짐
     categories: Pair  # 신규면 before null, 빠짐이면 after null
     finding: Pair | None  # 같으면 null
     proposals: list[ProposalChangeOut]  # 바뀐 제안만
@@ -113,7 +115,7 @@ class ProposalDiffOut(BaseModel):
 
     version: str
     previous_version: str | None
-    trigger: TriggerLabel
+    trigger: TriggerCode
     created_at: DateTimeOut
     cause: str | None
     counts: DiffCounts | None

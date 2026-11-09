@@ -1,11 +1,11 @@
 """「변경」 판단 — PROP-01 changed_count · PROP-02 change_type · PROP-04 · 저장 이벤트가 같이 쓴다
 (06 제안서 조회 API 「변경」 판단).
 
-같은 항목 코드끼리:
-  변경 : 판정 한 줄 · 구분 · 다룬 주제 · 목록/표/※ 줄 · 문단 상황 문장 중 하나라도 다름
-  신규 · 빠짐 : 앞 버전에 없음 / 이번에 없음(해당 없음)
-  표현만            : 위가 모두 같고 LLM 할 일 문장만 다름 → 「변경」 아님
-  같음              : 다 같음
+같은 항목 코드끼리(값은 영문 코드 — 명세 3.2, 11/10):
+  CHANGED 변경 : 판정 한 줄 · 구분 · 다룬 주제 · 목록/표/※ 줄 · 문단 상황 문장 중 하나라도 다름
+  NEW · REMOVED 신규 · 빠짐 : 앞 버전에 없음 / 이번에 없음(해당 없음)
+  WORDING_ONLY 표현만 : 위가 모두 같고 LLM 할 일 문장만 다름 → 「변경」 아님
+  SAME 같음 : 다 같음
 DB 없이 proposal_items 행(또는 같은 칸을 가진 객체)만 받는다.
 """
 
@@ -14,11 +14,12 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any, Protocol
 
+from app.db.models.enums import ItemCategory
 from rules.items import e1, e2, e3, e4, e5, e6, s1, s2, s3, s4, s5, s6
 
 ITEM_NAMES = {m.ID: m.NAME for m in (s1, s2, s3, s4, s5, s6, e1, e2, e3, e4, e5, e6)}
 CODES = list(ITEM_NAMES)  # S1 → S6, E1 → E6
-CHANGED = ("변경", "신규", "빠짐")
+CHANGED = ("CHANGED", "NEW", "REMOVED")  # 「바뀐 항목」으로 세는 것
 TABLE_KEYS = ("group", "agency", "ask", "item", "basis")  # rules.items.requests.HEAD 순서
 # 「직전 버전 대비」 표기(S1 판정 · 상황 문장, E5 판정): 값이 아니라 비교 기준이 옮겨 간 것
 # → 비교할 때만 지운다
@@ -27,6 +28,7 @@ RELATIVE = re.compile(
 )
 
 Sections = Sequence[dict[str, Any]]
+CATEGORY_VALUES = {c.value for c in ItemCategory}
 
 
 class Item(Protocol):
@@ -62,8 +64,15 @@ def rows_of(sections: Sections) -> list[str]:
     return out
 
 
-def _labels(item: Item) -> list[str]:
-    return [getattr(c, "value", c) for c in item.categories]
+def category_code(c: Any) -> str:
+    """구분 → 영문 코드. ItemCategory · 한글(문단의 「즉시」) 둘 다 받는다."""
+    if isinstance(c, ItemCategory):
+        return c.name
+    return ItemCategory(c).name if c in CATEGORY_VALUES else c
+
+
+def _codes(item: Item) -> list[str]:
+    return [category_code(c) for c in item.categories]
 
 
 def _engine_side(item: Item) -> tuple[Any, ...]:
@@ -71,7 +80,7 @@ def _engine_side(item: Item) -> tuple[Any, ...]:
     ps = paragraphs(item.sections)
     return (
         norm(item.detail.get("finding")),
-        _labels(item),
+        _codes(item),
         sorted({str(p.get("topic")) for p in ps}),
         sorted(rows_of(item.sections)),
         [norm(p.get("situation")) for p in ps],
@@ -79,17 +88,17 @@ def _engine_side(item: Item) -> tuple[Any, ...]:
 
 
 def change_of(before: Item | None, after: Item | None) -> str | None:
-    """「변경」 · 「신규」 · 「빠짐」 · 「표현만」 · 「같음」. 둘 다 없으면(해당 없음) None."""
+    """CHANGED · NEW · REMOVED · WORDING_ONLY · SAME. 둘 다 없으면(해당 없음) None."""
     if before is None and after is None:
         return None
     if before is None:
-        return "신규"
+        return "NEW"
     if after is None:
-        return "빠짐"
+        return "REMOVED"
     if _engine_side(before) != _engine_side(after):
-        return "변경"
+        return "CHANGED"
     bodies = [[p.get("body") for p in paragraphs(i.sections)] for i in (before, after)]
-    return "표현만" if bodies[0] != bodies[1] else "같음"
+    return "WORDING_ONLY" if bodies[0] != bodies[1] else "SAME"
 
 
 def changes(before: Sequence[Item], after: Sequence[Item]) -> dict[str, str]:
@@ -125,7 +134,7 @@ def _pairs(a: Item | None, b: Item | None) -> list[tuple[dict | None, dict | Non
 
 
 def _side(p: dict[str, Any] | None) -> dict[str, Any] | None:
-    return p and {"category": p.get("category"), "body": p.get("body")}
+    return p and {"category": category_code(p.get("category")), "body": p.get("body")}
 
 
 def item_diff(a: Item | None, b: Item | None, change: str) -> dict[str, Any]:
@@ -136,7 +145,7 @@ def item_diff(a: Item | None, b: Item | None, change: str) -> dict[str, Any]:
     rb = Counter(rows_of(b.sections)) if b else Counter()
     proposals = [
         {
-            "change": "새 제안" if x is None else "없어진 제안" if y is None else "바뀐 제안",
+            "change": "ADDED" if x is None else "REMOVED" if y is None else "MODIFIED",
             "topic": (y or x).get("topic"),
             "before": _side(x),
             "after": _side(y),
@@ -161,7 +170,7 @@ def item_diff(a: Item | None, b: Item | None, change: str) -> dict[str, Any]:
         "item_code": code,
         "name": (b or a).detail.get("name") or ITEM_NAMES.get(code, ""),
         "change": change,
-        "categories": {"before": a and _labels(a), "after": b and _labels(b)},
+        "categories": {"before": a and _codes(a), "after": b and _codes(b)},
         "finding": None if a and b and norm(fa) == norm(fb) else {"before": fa, "after": fb},
         "proposals": proposals,
         "rows": {"added": list((rb - ra).elements()), "removed": list((ra - rb).elements())},

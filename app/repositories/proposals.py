@@ -14,16 +14,12 @@ from app.db.models import FirePerimeter, Incident, Prediction, Proposal, Proposa
 from app.db.models.enums import ItemAxis, ItemCategory, ProposalTrigger, ResponseStage
 from app.propose.base import LlmInput, WrittenItem
 from app.repositories import event_logs, incidents
+from app.services.proposal_compare import changed_count, paragraphs
 from rules.core.stage import LABEL
 
 STAGE_OF = {label: ResponseStage[stage.name] for stage, label in LABEL.items()}  # 1단계 → STAGE1
 AXIS_OF = {"S": ItemAxis.SUPPRESSION, "E": ItemAxis.EVACUATION}
 Sections = Sequence[dict[str, Any]]
-Compared = dict[str, tuple[Any, ...]]  # 항목 코드 → (구분, 본문)
-
-
-def paragraphs(sections: Sections) -> list[dict[str, Any]]:
-    return [b for s in sections for b in s.get("blocks", []) if b.get("type") == "paragraph"]
 
 
 def categories_of(sections: Sections) -> list[ItemCategory]:
@@ -37,19 +33,44 @@ def text_of(sections: Sections) -> str:
     return "\n".join(p["body"] for p in paragraphs(sections))
 
 
-def changed_items(prev: Compared, new: Compared) -> int:
-    """직전 버전과 항목 코드끼리 비교: 구분 · 본문이 바뀐 것 + 새로 생긴 것 + 빠진 것."""
-    return sum(prev.get(code) != new.get(code) for code in prev.keys() | new.keys())
-
-
-def compared(items: Sequence[ProposalItem]) -> Compared:
-    return {i.item_code: (tuple(i.categories), i.text) for i in items}
-
-
 def items_of(session: Session, proposal_id: int) -> list[ProposalItem]:
     return list(
         session.scalars(select(ProposalItem).where(ProposalItem.proposal_id == proposal_id))
     )
+
+
+def previous_proposal(session: Session, p: Proposal) -> Proposal | None:
+    """바로 앞 버전 = 같은 산불에서 id가 그보다 작은 것 중 최대."""
+    return session.scalar(
+        select(Proposal)
+        .where(Proposal.incident_id == p.incident_id, Proposal.id < p.id)
+        .order_by(Proposal.id.desc())
+        .limit(1)
+    )
+
+
+def items_by_proposal(session: Session, ids: Sequence[int]) -> dict[int, list[ProposalItem]]:
+    out: dict[int, list[ProposalItem]] = {i: [] for i in ids}
+    if ids:
+        rows = session.scalars(select(ProposalItem).where(ProposalItem.proposal_id.in_(ids)))
+        for row in rows:
+            out[row.proposal_id].append(row)
+    return out
+
+
+def list_proposals(
+    session: Session, incident_id: int, *, before_id: int | None, limit: int
+) -> list[Proposal]:
+    """id 내림차순 limit + 1개. 남는 1개는 has_more 표시이자 마지막 줄의 바로 앞 버전."""
+    q = (
+        select(Proposal)
+        .where(Proposal.incident_id == incident_id)
+        .order_by(Proposal.id.desc())
+        .limit(limit + 1)
+    )
+    if before_id is not None:
+        q = q.where(Proposal.id < before_id)
+    return list(session.scalars(q))
 
 
 def next_seq(session: Session, incident_id: int, perimeter_version: int) -> int:
@@ -84,7 +105,7 @@ def save_proposal(
     incident_id = prediction.incident_id
     perimeter_version = session.get(FirePerimeter, prediction.perimeter_id).version_no  # 1
     prev = incidents.latest_proposal(session, incident_id)
-    prev_items = compared(items_of(session, prev.id)) if prev else {}
+    prev_items = items_of(session, prev.id) if prev else None
     stage = llm_input["bundles"]["stage"]
     proposal = Proposal(  # 2
         incident_id=incident_id,
@@ -119,7 +140,8 @@ def save_proposal(
         "proposal_id": proposal.id,
         "version": f"v{perimeter_version}.{proposal.seq}",
         "trigger": proposal.trigger.name,
-        "changed_items": changed_items(prev_items, compared(items)),
+        # PROP-01 changed_count와 같은 규칙(LLM 표현만 바뀐 항목은 안 셈). 첫 제안서는 None
+        "changed_items": None if prev_items is None else changed_count(prev_items, items),
     }
     event_logs.add(
         session, "PROPOSAL_CREATED", user_id=user_id, incident_id=incident_id, details=details

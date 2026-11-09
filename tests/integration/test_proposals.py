@@ -92,7 +92,7 @@ def test_save_proposal_rows_stage_and_events(db, make_user, reported):
                 "proposal_id": first,
                 "version": "v0.1",
                 "trigger": "PREDICTION",
-                "changed_items": len(written),  # 첫 제안서는 모두 새로
+                "changed_items": None,  # 첫 제안서는 비교 대상 없음
             },
         ),
         (

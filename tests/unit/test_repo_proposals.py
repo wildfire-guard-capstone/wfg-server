@@ -5,7 +5,7 @@ from rules_example import full_inputs
 
 from agent.generate import assemble
 from app.db.models.enums import ItemAxis, ItemCategory, ResponseStage
-from app.repositories.proposals import AXIS_OF, STAGE_OF, categories_of, changed_items, text_of
+from app.repositories.proposals import AXIS_OF, STAGE_OF, categories_of, text_of
 from rules.llm_input import build_llm_input
 
 INCIDENT = {"name": "의성군 안평면 산불 (2025-03-22)", "sigungu": "의성군", "emd": "안평면"}
@@ -53,12 +53,3 @@ def test_failed_item_has_no_categories_and_empty_text():
 def test_unknown_category_is_an_error():
     with pytest.raises(ValueError):
         categories_of([{"blocks": [para("기타", "…")]}])
-
-
-def test_changed_items_counts_changed_new_and_removed():
-    same = ((ItemCategory.IMMEDIATE,), "가")
-    prev = {"S1": same, "S2": same, "E6": same}
-    new = {"S1": same, "S2": ((ItemCategory.REQUEST,), "가"), "E5": same}
-    assert changed_items(prev, new) == 3  # S2 바뀜 · E5 새로 생김 · E6 빠짐
-    assert changed_items({}, new) == 3  # 첫 제안서는 모두 새로
-    assert changed_items(new, new) == 0

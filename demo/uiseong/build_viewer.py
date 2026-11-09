@@ -9,7 +9,9 @@
 """
 
 import argparse
+import html
 import json
+import re
 from pathlib import Path
 
 from shapely.geometry import mapping, shape
@@ -17,6 +19,21 @@ from shapely.geometry import mapping, shape
 from demo.uiseong.data import to4326
 
 ZONE_KEYS = ("burning", "p5", "p8")
+
+
+def model_label(rounds: list[dict]) -> str:
+    """머리말의 LLM 이름. run_demo가 round_k.json에 남긴 llm_model(11/9부터)을 읽는다.
+    예: exaone-4.5-33b-awq → EXAONE 4.5 33B. 기록이 없는 옛 실행(tune15까지 = 4.0 32B)은 「모델 기록 없음」."""
+    ids = list(dict.fromkeys(r.get("llm_model") for r in rounds if r.get("llm_model")))
+    if not ids:
+        if any(r["proposal"] and r["proposal"][0].get("state") != "not_run" for r in rounds):
+            return "EXAONE(모델 기록 없음)"
+        return "LLM 생성 없음"
+    out = []
+    for m in ids:
+        g = re.match(r"exaone-(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)b", m, re.I)
+        out.append(f"EXAONE {g[1]} {g[2].upper()}B" if g else m)
+    return " · ".join(out)
 
 
 def _round(path: Path) -> dict:
@@ -78,6 +95,7 @@ def _round(path: Path) -> dict:
         "logs": logs,
         "calls": r.get("llm_calls") or [],
         "timing": r["timing"],
+        "llm_model": r.get("llm_model"),
     }
 
 
@@ -129,10 +147,10 @@ def main() -> None:
     a = ap.parse_args()
     payload = build(a.runs, a.data)
     tpl = (Path(__file__).parent / "viewer_template.html").read_text(encoding="utf-8")
-    html = tpl.replace(
+    page = tpl.replace("__MODEL__", html.escape(model_label(payload["rounds"]))).replace(
         "/*__DATA__*/null", json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
-    a.out.write_text(html, encoding="utf-8")
+    a.out.write_text(page, encoding="utf-8")
     print(f"회차 {len(payload['rounds'])}개 → {a.out} ({a.out.stat().st_size / 1e6:.1f} MB)")
 
 

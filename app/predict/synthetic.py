@@ -2,6 +2,9 @@
 
 바람 방향으로 늘어난 타원이다. 기상은 고정값.
 P(n) = 시작 형상 ∪ 타원(n) 이라 늘 시작 형상을 덮고, 시간이 갈수록 커진다(P(n) ⊇ P(n−1)).
+
+기본값은 약한 바람의 초기 산불 정도다(11/9): 풍속 2 m/s(바람 기준 초기 대응, 평소 평균 풍속은
+대개 3 m/s 아래), 시간당 150 m → 발화점에서 5시간 뒤(P5) 약 71 ha.
 """
 
 from dataclasses import dataclass
@@ -16,9 +19,9 @@ from app.predict.base import HOURS, PredictionRequest, PredictionResult, fixed_w
 @dataclass(frozen=True)
 class SyntheticPredictor:
     name: str = "synthetic"
-    grow_m: float = 600.0  # 한 시간에 바람 방향으로 퍼지는 거리
+    grow_m: float = 150.0  # 한 시간에 바람 방향으로 퍼지는 거리
     side_ratio: float = 0.4  # 옆으로 퍼지는 비율(바람 방향 대비)
-    wind_ms: float = 4.0
+    wind_ms: float = 2.0  # 3 m/s 아래 = 바람 기준 초기 대응
     wind_deg: float = 270.0  # 불어오는 방향(서풍 = 270 → 동쪽으로 퍼짐)
 
     def predict(self, request: PredictionRequest) -> PredictionResult:

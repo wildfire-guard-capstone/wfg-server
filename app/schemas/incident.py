@@ -85,3 +85,18 @@ class IncidentCreateIn(In):
 
 class IncidentEndIn(In):
     expected_perimeter_id: int = Field(gt=0)
+
+
+class PerimeterReportIn(In):
+    """PER-02 실측 화선 보고."""
+
+    geometry: Geometry  # Polygon · MultiPolygon(EPSG:4326)
+    observed_at: AwareDatetime
+    expected_perimeter_id: int = Field(gt=0)  # 화면이 본 현재 화선(그사이 바뀌었으면 409)
+
+
+class PerimeterCorrectionIn(In):
+    """PER-03 현재 실측 화선 정정."""
+
+    geometry: Geometry
+    observed_at: AwareDatetime

@@ -252,6 +252,12 @@ def run(
     toa[~(toa > 0)] = np.nan
     if is_point:  # the ignition cell itself
         start_mask = np.isfinite(toa) & (toa <= t_start_s + 1.0)
+        # ELMFIRE leaves no arrival time in the point-ignition cell (EC2 11/11: neighbours burned
+        # at +10 · +12 · +22 min, the ignition cell stayed empty), so P1 missed the ignition
+        # point. The fire starts there — count that cell as burned from the start.
+        row, col = rasterio.transform.rowcol(transform, start.x, start.y)
+        if 0 <= row < toa.shape[0] and 0 <= col < toa.shape[1]:
+            start_mask[row, col] = True
     return RunResult(
         run_dir,
         t_start_s,

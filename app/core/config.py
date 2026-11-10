@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     predictor_path: str | None = None
     predictor_crs: int = 4326
     predictor_weather: str | None = None
+    # elmfire면 PREDICTOR_DECK(덱 폴더, demo/uiseong/deck 모양) · ELMFIRE_BIN · PREDICTOR_WORK_DIR
+    predictor_deck: str | None = None
+    predictor_work_dir: str | None = None
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
     proposal_writer: str = "fake"
     # 위험도(RISK-01) 지형 7 · 연료 6 변수의 지역 격자 폴더(risk.grid: grades.tif · values.tif ·

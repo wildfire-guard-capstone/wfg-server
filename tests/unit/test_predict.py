@@ -123,4 +123,4 @@ def test_file_missing_hour_raises(tmp_path):
 
 def test_get_predictor_unknown_name():
     with pytest.raises(ValueError, match="모르는 예측"):
-        get_predictor("elmfire")
+        get_predictor("replay")

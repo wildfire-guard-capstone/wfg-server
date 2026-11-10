@@ -179,13 +179,20 @@ def run(
     start: BaseGeometry,
     adj: float = 1.0,
     extra_ignitions: tuple[tuple[float, float, float], ...] = (),
+    own_inputs: dict[str, tuple[np.ndarray, dict]] | None = None,
+    namelist: dict[str, str] | None = None,
 ) -> RunResult:
     """One ELMFIRE run from `start` (Polygon = perimeter, Point = ignition) for `hours`.
 
     extra_ignitions = (x, y, t) point ignitions besides the start (see edit_namelist).
+    own_inputs = {name: (bands, rasterio profile)} written as inputs/<name>.tif for this run
+      only (e.g. the request's weather instead of the deck's), never into the deck.
+    namelist = {KEY: value} set after the time window (e.g. WS_FILENAME, HOUR_OF_YEAR).
     """
     import rasterio
 
+    own_inputs = own_inputs or {}
+    own = OWN_RASTERS | {f"{name}.tif" for name in own_inputs}
     run_dir = Path(run_dir)
     if run_dir.exists():
         shutil.rmtree(run_dir)
@@ -193,8 +200,14 @@ def run(
     (run_dir / "outputs").mkdir()
     (run_dir / "scratch").mkdir()
     for f in (deck.folder / "inputs").iterdir():
-        if f.name not in OWN_RASTERS:
+        if f.name not in own:
             os.symlink(f.resolve(), run_dir / "inputs" / f.name)
+    for name, (bands, prof) in own_inputs.items():
+        bands = np.asarray(bands, "float32")
+        bands = bands[None] if bands.ndim == 2 else bands
+        prof = {**prof, "count": bands.shape[0], "dtype": "float32", "nodata": None}
+        with rasterio.open(run_dir / "inputs" / f"{name}.tif", "w", **prof) as w:
+            w.write(bands)
     profile, base_adj = deck.grid()
     profile.update(dtype="float32", count=1, compress="deflate", nodata=None)
     is_point = isinstance(start, Point)
@@ -206,9 +219,10 @@ def run(
         w.write((base_adj * adj).astype("float32"), 1)
     t_stop = t_start_s + hours * HOUR_S
     ign = (start.x, start.y) if is_point else None
-    (run_dir / "elmfire.data").write_text(
-        edit_namelist(deck.namelist, t_start_s, t_stop, ign, extra_ignitions), encoding="utf-8"
-    )
+    text = edit_namelist(deck.namelist, t_start_s, t_stop, ign, extra_ignitions)
+    for key, value in (namelist or {}).items():
+        text = _set(text, key, value)
+    (run_dir / "elmfire.data").write_text(text, encoding="utf-8")
     env = {**os.environ, **deck.env}
     t0 = time.time()
     proc = subprocess.run(

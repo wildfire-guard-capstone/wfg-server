@@ -46,6 +46,16 @@ def provider_from_settings() -> WeatherProvider:
     return get_weather(s.weather, **options)
 
 
+def asos_provider_from_settings() -> WeatherProvider:
+    """시연 1(DEMO_ELMFIRE)의 기온 · 습도 · 강수 = 의성 지상관측(asos).
+
+    KMA_API_KEY · WEATHER_STATION. 설정 WEATHER와 상관없이 고른다
+    (2025년 산불이라 예보를 받을 수 없음).
+    """
+    s = get_settings()
+    return get_weather("asos", auth_key=s.kma_api_key, station=s.weather_station)
+
+
 def observer_from_settings() -> KmaForecast | None:
     """지금 날씨를 실시간으로 받는 원천. 설정 WEATHER=kma일 때만(키 DATA_GO_KR_API_KEY)."""
     s = get_settings()

@@ -20,13 +20,18 @@ from app.schemas.prediction import OperationOut, PredictionOut, PredictionReques
 from app.schemas.risk import RiskOut
 from app.services import operations
 from app.services.prediction import (
+    MODE_SOURCES,
     build_elmfire_weather,
     elmfire_source_from_settings,
     fetch_weather,
     run_prediction_operation,
 )
 from app.services.risk import compute_risk
-from app.services.weather import prediction_weather_out, provider_from_settings
+from app.services.weather import (
+    asos_provider_from_settings,
+    prediction_weather_out,
+    provider_from_settings,
+)
 from app.weather import WeatherUnavailable
 
 router = APIRouter(prefix="/incidents/{incident_id}", tags=["예측"])
@@ -59,9 +64,11 @@ def request_prediction(
 
     기상은 여기서 먼저 받는다. 못 받으면 작업을 시작하지 않고 503 WEATHER_UNAVAILABLE(명세 v0.4
     그대로). 받은 기상은 작업에 넘겨 예측 · 제안에 같이 쓴다.
-      - ELMFIRE(PREDICTOR=elmfire): 기상 입력(출처 PREDICTOR_WEATHER_FIELD — stations 실시간 ·
-        deck 시연, app.weather.elmfire_input). 관측소가 모자라거나 덱에 없는 시각이어도 503
-      - 그 밖(synthetic · file): 설정 WEATHER의 원천에서 기준점 9시간
+      - mode LIVE(실서비스): ELMFIRE 기상 입력 — 실시간 관측소(stations)
+      - mode DEMO_ELMFIRE(시연 1): ELMFIRE 기상 입력 — 덱에 든 2025 실측(deck), 기온 · 습도는 asos
+      - mode 없음: 서버 기본 설정 — PREDICTOR=elmfire면 PREDICTOR_WEATHER_FIELD의 출처, 아니면
+        (synthetic · file) 설정 WEATHER의 원천에서 기준점 9시간
+      관측소가 모자라거나 덱에 없는 시각이어도 503(다른 기상으로 대신하지 않는다).
     """
     incident = load_incident(db, user, incident_id)
     if incident.status is IncidentStatus.ENDED:
@@ -70,11 +77,14 @@ def request_prediction(
         raise ApiError(409, "STALE_PERIMETER", "화선이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
     if operations.is_running(incident_id):  # 이미 계산 중이면 기상청을 부르지 않는다
         raise ApiError(409, "PREDICTION_RUNNING", "이 산불의 예측을 이미 계산하는 중입니다.")
-    weather = elmfire_weather = None
+    mode, weather, elmfire_weather = body.mode, None, None
     try:
-        if get_settings().predictor == "elmfire":
-            source = elmfire_source_from_settings()  # 예측마다 고르면 여기에 이름(options.weather)
-            server = provider_from_settings() if source.uses_server_weather else None
+        if mode or get_settings().predictor == "elmfire":
+            source = elmfire_source_from_settings(MODE_SOURCES.get(mode))  # 모드 없으면 설정
+            server = None
+            if source.uses_server_weather:  # deck: 기온 · 습도 · 강수
+                demo = mode == "DEMO_ELMFIRE"
+                server = asos_provider_from_settings() if demo else provider_from_settings()
             elmfire_weather = build_elmfire_weather(db, incident_id, source, server)
         else:
             weather = fetch_weather(db, incident_id, provider_from_settings())
@@ -93,6 +103,7 @@ def request_prediction(
         session_factory,
         weather,
         elmfire_weather,
+        mode,
     )
     return ok(request, OperationOut.of(op))
 

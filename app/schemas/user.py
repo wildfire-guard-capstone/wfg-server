@@ -2,10 +2,10 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.models import User
-from app.schemas.common import DateTimeOut, Id, In
+from app.schemas.common import DateTimeOut, Id, In, need_one, no_nulls
 
 RoleName = Literal["COMMANDER", "VIEWER", "REPORTER", "ADMIN"]
 
@@ -70,4 +70,24 @@ class UserCreateIn(In):
 
 class UserCreated(BaseModel):
     user: AdminUserOut
+    temporary_password: str
+
+
+class UserUpdateIn(In):
+    """USR-03. 보낸 것만 바꾼다(1개 이상). admin_area_id만 null을 받는다(전산 관리자)."""
+
+    name: str | None = Field(None, min_length=1, max_length=50)
+    organization: str | None = Field(None, min_length=1, max_length=100)
+    role: RoleName | None = None
+    admin_area_id: int | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "UserUpdateIn":
+        need_one(self)
+        no_nulls(self, "name", "organization", "role")
+        return self
+
+
+class PasswordReset(BaseModel):
+    user_id: Id
     temporary_password: str

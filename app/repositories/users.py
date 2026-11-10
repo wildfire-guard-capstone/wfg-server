@@ -42,3 +42,17 @@ def list_users(
     if after_id is not None:
         q = q.where(User.id > after_id)
     return list(session.scalars(q))
+
+
+def other_commanders(session: Session, admin_area_id: int, except_id: int) -> int:
+    """그 관할에서 이 계정을 뺀, 쓸 수 있는(회수 안 된) 통합지휘권자 수."""
+    return session.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(
+            User.role == UserRole.COMMANDER,
+            User.admin_area_id == admin_area_id,
+            User.deleted_at.is_(None),
+            User.id != except_id,
+        )
+    )

@@ -10,6 +10,7 @@ on:
       - "app/**"
       - "rules/**"
       - "agent/**"
+      - "assistant/**"
       - "migrations/**"
       - "alembic.ini"
       - "docker/api/**"

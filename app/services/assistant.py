@@ -35,8 +35,8 @@ from app.services import operations, proposal_compare
 from app.services.engine import run_engine
 from app.services.prediction import reader_of, writer_from_settings
 from assistant import Assistant, Context
-from assistant.context import DEPLOYED_LABELS
-from assistant.correction import CorrectionError
+from assistant.context import DEPLOYED_LABELS, slot_value
+from assistant.correction import CorrectionError, over_capacity
 from assistant.service import AssistantUnavailable
 from assistant.tools import change_label
 
@@ -75,6 +75,7 @@ def build_context(db: Session, incident: Incident, proposal: Proposal | None) ->
         situation=copy.deepcopy(incident.situation or {}),
         villages=repo.village_directory(db, incidents.sigungu_of(db, incident)),
         revision=incidents.situation_revision(db, incident.id),
+        capacity=repo.capacity(db, incident.id),
     )
     if proposal is not None:
         ctx.proposal = {
@@ -307,12 +308,9 @@ def _current(situation: dict[str, Any], ch: dict[str, Any]) -> Any:
                 ch["item"], False
             )
         )
-    if ch["target"] == "deployed":
+    if ch["target"] == "deployed":  # 미상 · 기타 칸은 합계의 남는 몫까지(확인안을 만들 때와 같게)
         group, _, key = ch["item"].partition(".")
-        g = (situation.get("deployed") or {}).get(group) or {}
-        if key == "total":
-            return int(g.get("total", sum(int(v) for k, v in g.items() if k != "total")))
-        return int(g.get(key, 0))
+        return slot_value((situation.get("deployed") or {}).get(group) or {}, group, key)
     if ch["target"] == "situation":
         return bool(situation.get(ch["item"], False))
     raise ValueError(f"정정할 수 없는 대상: {ch['target']}")
@@ -378,6 +376,12 @@ def confirm(
                 "STALE_SITUATION",
                 f"「{ch.get('label') or change_label(ch)}」의 지금 값이 확인안과 다릅니다. 다시 입력해 주십시오.",
             )
+    cap = repo.capacity(db, incident_id)  # 확인안 뒤 자원 현황이 바뀌었을 수 있어 다시 본다
+    for ch in changes:
+        if ch["target"] == "deployed" and not ch["item"].endswith(".total"):
+            problem = over_capacity(ch["item"], ch["before"], ch["after"], cap)
+            if problem:
+                raise ApiError(409, "RESOURCE_CAPACITY_EXCEEDED", problem)
     at = datetime.now(KST).strftime("%H:%M")
     incident.situation = apply_changes(incident.situation or {}, changes, at)
     row = repo.add_correction(

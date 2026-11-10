@@ -253,7 +253,7 @@ CORRECTION_SYSTEM = """통합지휘권자가 알린 현장 상황 변화를 정�
 - helicopter · vehicle · crew: 투입한 헬기 · 차량(소방차 · 진화차 · 지휘차) · 인력(진화대 · 공무원 · 소방 · 군 · 경찰) 수
   - count: 입력에 나온 수 그대로(「두 대」 → 2)
   - mode: 「추가 · 더 · 증원 · 도착」이면 add, 「철수 · 복귀 · 빠짐 · 줄」이면 remove, 「총 · 모두 · 현재 · 지금 몇 대(명)」이면 set
-  - group: 기관을 말했을 때만 — 헬기 forest(산림청) · local(지자체 · 임차) · fire(소방) · military(군) · police(경찰), 차량 forest_vehicle(진화차 · 지휘차) · fire_truck(소방차) · other, 인력 special_crew(진화대) · forest_officials(공무원) · fire(소방) · military(군) · police(경찰) · other. 모르면 빈 글
+  - group: 기관을 말했을 때만 — 헬기 forest(산림청) · local(지자체 · 임차) · fire(소방) · military(군) · police(경찰) · unknown(「미상」이라고 말했을 때), 차량 forest_vehicle(진화차 · 지휘차) · fire_truck(소방차) · other, 인력 special_crew(진화대) · forest_officials(공무원) · fire(소방) · military(군) · police(경찰) · other. 모르면 빈 글
 - value: 대피 완료 · 명령 · 문자 송출을 했으면 true, 취소했거나 아직이면 false
 - 마을 여러 곳이면 마을마다 하나씩 씁니다. emd는 읍면을 말했을 때만 씁니다.
 

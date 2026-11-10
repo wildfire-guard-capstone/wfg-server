@@ -19,6 +19,7 @@ DEPLOYED_LABELS: dict[str, dict[str, str]] = {
         "fire": "소방",
         "military": "군",
         "police": "경찰",
+        "unknown": "미상",  # 기관을 모르는 헬기(합계만 받은 보고 · 정정)
     },
     "crew": {
         "special_crew": "진화대",
@@ -30,6 +31,21 @@ DEPLOYED_LABELS: dict[str, dict[str, str]] = {
     },
     "vehicle": {"forest_vehicle": "지휘·진화차", "fire_truck": "소방차", "other": "기타"},
 }
+# 기관을 모르는 투입 수를 두는 칸(헬기 미상, 인력 · 차량 기타). 합계가 기관 칸 합보다 크면 그 차이도
+# 이 칸 몫이다(엔진 입력 engine_inputs.deployed_of와 같은 규칙).
+UNSPECIFIED = {"helicopter": "unknown", "crew": "other", "vehicle": "other"}
+
+
+def slot_value(g: dict[str, Any], group: str, key: str) -> int:
+    """situation.deployed.<group>의 칸 값(key = total 또는 기관 칸). 미상 · 기타 칸은 남는 몫을 더한다."""
+    known = sum(int(v) for k, v in g.items() if k != "total")
+    total = int(g.get("total", known))
+    if key == "total":
+        return total
+    value = int(g.get(key, 0))
+    return value + max(0, total - known) if key == UNSPECIFIED.get(group) else value
+
+
 GROUP_NAMES = {"helicopter": "헬기", "vehicle": "차량", "crew": "인력"}
 GROUP_UNITS = {"helicopter": "대", "vehicle": "대", "crew": "명"}
 ITEM_NAMES = {
@@ -61,7 +77,9 @@ class Context:
     previous: dict[str, Any] | None = None  # 직전 제안서: version · items[{item_code, …}]
     corrections: list[dict[str, Any]] = field(default_factory=list)  # 최근 정정(새것 먼저)
     villages: list[dict[str, Any]] = field(default_factory=list)  # 정정 대상: id · name · emd
-    capacity: dict[str, int | None] = field(default_factory=dict)  # 투입 수 상한(모르면 없음)
+    capacity: dict[str, int] = field(
+        default_factory=dict
+    )  # 투입 칸(helicopter.forest 등) 상한, 모르면 없음
     revision: str = "rev-0"  # 상황 버전(정정할 때마다 바뀜)
 
     @property

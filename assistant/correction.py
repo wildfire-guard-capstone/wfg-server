@@ -5,7 +5,9 @@
 2. 검사(도구):
    - 대상 찾기: 마을 이름 → villages.id. 없으면 TARGET_NOT_FOUND, 여러 읍면에 같은 이름이면 AMBIGUOUS_TARGET(422)
    - 허용 항목: 마을 대피 완료 · 대피명령 · 사전대피 완료, 투입 수(헬기 · 차량 · 인력, 합계와 기관별), 재난문자 송출
-   - 범위: 투입 수는 0 이상, 상한(Context.capacity)을 알면 그 이하(RESOURCE_CAPACITY_EXCEEDED)
+   - 범위: 투입 수는 0 이상. 자원 테이블에 있는 칸(산림청 · 지자체 · 소방 헬기, 진화차 · 소방차)은 대기 + 이 산불
+     투입 대수(Context.capacity) 이하 — 넘는 줄은 확인안에서 빼고(ignored), 저장(COR-01) 때 다시 보면 409
+     RESOURCE_CAPACITY_EXCEEDED
    - 이미 그 값이면 바꿀 것 없음(ignored)
 3. 변경안 = API CorrectionChange 꼴 {target, target_id, item, before, after} + 화면용 label.
    before는 지금 상황(incidents.situation) 값이다. 확인(COR-01) 때 서버 값과 다시 대조한다.
@@ -16,7 +18,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from assistant import prompt
-from assistant.context import DEPLOYED_LABELS, GROUP_NAMES, GROUP_UNITS, Context
+from assistant.context import (
+    DEPLOYED_LABELS,
+    GROUP_NAMES,
+    GROUP_UNITS,
+    UNSPECIFIED,
+    Context,
+    slot_value,
+)
 from assistant.tools import change_label, josa, num
 
 VILLAGE_ITEMS = {
@@ -116,6 +125,7 @@ AGENCY_WORDS = {
         ("fire", r"소방"),
         ("military", r"군용|군\s|육군|공군|군헬기|군 헬기|국방"),
         ("police", r"경찰"),
+        ("unknown", r"미상|소속\s?모를|기관\s?모를"),
     ],
     "vehicle": [
         ("fire_truck", r"소방차"),
@@ -135,7 +145,8 @@ AGENCY_WORDS = {
 # 본다(_clause_before · _clause_after) — 절을 넘어 「더 왔고 … 철수」의 철수를 앞 구절에 붙이지 않게.
 RES = re.compile(
     rf"(?P<word>{'|'.join(GROUP_WORDS.values())})\s*(?P<mid>[가-힣\s]{{0,6}}?)\s*"
-    r"(?P<count>\d[\d,]*|(?:열|스무|스물|서른|마흔|쉰)?\s?(?:하나|한|둘|두|셋|세|석|넷|네|다섯|여섯|일곱|여덟|아홉)?)\s*(?P<unit>대|명|기)(?![가-힣])"
+    r"(?P<count>\d[\d,]*|(?:열|스무|스물|서른|마흔|쉰)?\s?(?:하나|한|둘|두|셋|세|석|넷|네|다섯|여섯|일곱|여덟|아홉)?)\s*(?P<unit>대|명|기)"
+    r"(?=(?:[은는이가을를도로만와과]|으로)?(?![가-힣]))"  # 「2대는 산림청」처럼 조사 하나는 붙어도 된다
 )
 CLAUSE = re.compile(r"(?:하고|그리고|이고|으며|며|고|는데|인데)\s|[,.;\n]")
 
@@ -222,6 +233,14 @@ def _group_of(kind: str, text: str, word: str) -> str:
     return ""
 
 
+def _move_target(kind: str, group: str, after: str) -> str:
+    """미상 · 기타 칸 구절 뒤에 다른 기관만 오면(「… 2대는 산림청이었어」) 옮길 칸, 아니면 ""."""
+    if group != UNSPECIFIED[kind] or REMOVE.search(after) or ADD.search(after) or SET.search(after):
+        return ""
+    to = _group_of(kind, after, "")
+    return to if to and to != group else ""
+
+
 def parse_rules(text: str) -> Parsed:
     out = Parsed(source="rules")
     used: list[tuple[int, int]] = []
@@ -236,8 +255,13 @@ def parse_rules(text: str) -> Parsed:
         mode = "remove" if REMOVE.search(around) else "set" if SET.search(around) else "add"
         group = _group_of(kind, before + " " + m.group("mid"), word)
         phrase = (before.strip() + " " + m.group(0) + after).strip()
-        out.drafts.append(Draft(kind, count=count, mode=mode, group=group, text=phrase))
         used.append(m.span())
+        to = _move_target(kind, group, after)
+        if to:  # 「미상 헬기 2대는 산림청」: 미상 칸에서 빼 산림청 칸에 넣는다(합계는 그대로)
+            out.drafts.append(Draft(kind, count=count, mode="remove", group=group, text=phrase))
+            out.drafts.append(Draft(kind, count=count, mode="add", group=to, text=phrase))
+            continue
+        out.drafts.append(Draft(kind, count=count, mode=mode, group=group, text=phrase))
     rest = text
     for a, b in reversed(used):  # 자원 구절을 지운 나머지에서 마을 · 문자 · 처리 불가를 찾는다
         rest = rest[:a] + " " * (b - a) + rest[b:]
@@ -370,39 +394,48 @@ def resolve(ctx: Context, name: str, emd: str = "") -> list[dict[str, Any]]:
 
 
 # 기관을 말하지 않은 투입 수를 넣을 칸. 규칙 엔진은 기관별 칸을 더해 합계를 다시 계산하므로(엔진 입력
-# deployed_of는 total을 버림) 합계만 바꾸면 제안서에 반영되지 않는다. 헬기는 「기타」 칸이 없어 기관을 묻는다.
-UNSPECIFIED = {"crew": "other", "vehicle": "other"}
+# deployed_of는 total을 버림) 합계만 바꾸면 제안서에 반영되지 않는다. 헬기는 「미상」, 인력 · 차량은 「기타」
+# 칸(UNSPECIFIED)에 넣고, 기관을 알게 되면 「미상 헬기 2대는 산림청」처럼 다시 정정한다(11-10 결정).
 AGENCY_HINT = {
     "helicopter": "산림청 · 지자체 · 소방 · 군 · 경찰",
+    "vehicle": "소방차 · 진화차",
+    "crew": "진화대 · 공무원 · 소방 · 군 · 경찰",
+}
+MOVE_EXAMPLE = {
+    "helicopter": "미상 헬기 2대는 산림청",
+    "vehicle": "기타 차량 2대는 소방차",
+    "crew": "기타 인력 10명은 소방",
 }
 
 
 def _deployed_change(
     ctx: Context, d: Draft, pending: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """투입 수 변화 1건 → (변경안, 확인 카드에 보일 메모). 기관이 꼭 필요하면 NeedsAgency."""
+    """투입 수 변화 1건 → (변경안, 확인 카드에 보일 메모). 줄일 기관을 꼭 알아야 하면 NeedsAgency."""
     group, sub = d.kind, d.group
     note = None
     if not sub:
-        if group not in UNSPECIFIED:
-            raise NeedsAgency(group)
         sub = UNSPECIFIED[group]
-        note = f"{GROUP_NAMES[group]} 기관을 말하지 않아 「기타」 칸에 넣었습니다(기관을 함께 입력하면 그 칸에 넣습니다)."
+        note = (
+            f"{GROUP_NAMES[group]} 기관을 말하지 않아 「{DEPLOYED_LABELS[group][sub]}」 칸에 넣었습니다"
+            f"(기관을 알면 「{MOVE_EXAMPLE[group]}」처럼 다시 정정해 주십시오)."
+        )
     cur = dict((ctx.situation.get("deployed") or {}).get(group) or {})
     cur.update(pending.get(group, {}))  # 같은 입력 안에서 앞선 변경을 이어 받는다
-    known = sum(int(v) for k, v in cur.items() if k != "total")
-    total = int(cur.get("total", known))
+    total = slot_value(cur, group, "total")
     n = d.count or 0
-    before_sub = int(cur.get(sub, 0))
+    before_sub = slot_value(cur, group, sub)  # 미상 · 기타 칸은 합계의 남는 몫까지
     if d.mode == "add":
         delta = n
     elif d.mode == "remove":
         delta = -n
     elif d.group:  # 기관 칸을 n으로
         delta = n - before_sub
-    else:  # 합계를 n으로(모르는 기관 몫은 기타 칸에서)
+    else:  # 합계를 n으로(모르는 기관 몫은 미상 · 기타 칸에서)
         delta = n - total
     after_total, after_sub = total + delta, before_sub + delta
+    if after_total >= 0 and after_sub < 0 and not d.group:
+        raise NeedsAgency(group)  # 미상 · 기타 칸에 뺄 만큼이 없으면 어느 기관이 줄었는지 묻는다
     if after_total < 0 or after_sub < 0:
         raise CorrectionError(
             422,
@@ -410,13 +443,9 @@ def _deployed_change(
             f"투입 {GROUP_NAMES[group]} 수가 0보다 작아집니다(지금 {num(total)}{GROUP_UNITS[group]}"
             f", 그중 {DEPLOYED_LABELS[group][sub]} {num(before_sub)}). 기관과 수를 확인해 주십시오.",
         )
-    cap = ctx.capacity.get(group)
-    if cap is not None and after_total > cap:
-        raise CorrectionError(
-            409,
-            "RESOURCE_CAPACITY_EXCEEDED",
-            f"투입 {GROUP_NAMES[group]} {num(after_total)}{GROUP_UNITS[group]}는 가용 범위({num(cap)}{GROUP_UNITS[group]})를 넘습니다.",
-        )
+    problem = over_capacity(f"{group}.{sub}", before_sub, after_sub, ctx.capacity)
+    if problem:
+        raise OverCapacity(problem)
     if delta == 0:
         return [], None
     out = [
@@ -425,6 +454,28 @@ def _deployed_change(
     ]
     pending.setdefault(group, {}).update({sub: after_sub, "total": after_total})
     return out, note
+
+
+def over_capacity(item: str, before: int, after: int, capacity: dict[str, int]) -> str | None:
+    """투입 칸(helicopter.forest 등)이 자원 현황 상한을 넘게 늘면 그 이유, 아니면 None.
+
+    상한 = 자원 테이블의 대기 + 이 산불 투입 대수(app repo.capacity). 줄이는 정정과 상한을 모르는 칸
+    (군 · 경찰 · 미상 · 기타 · 인력)은 통과한다. 확인안(AI-01)과 저장(COR-01)이 같이 쓴다.
+    """
+    cap = capacity.get(item)
+    if cap is None or after <= before or after <= cap:
+        return None
+    group, _, key = item.partition(".")
+    unit = GROUP_UNITS[group]
+    return (
+        f"{DEPLOYED_LABELS[group][key]} {GROUP_NAMES[group]} {num(after)}{unit}는 자원 현황의 가용 대수"
+        f"({num(cap)}{unit} = 대기 + 이 산불 투입)를 넘어 반영할 수 없습니다. "
+        "수를 확인하시거나 자원 관리자에게 자원 현황 갱신을 요청해 주십시오."
+    )
+
+
+class OverCapacity(Exception):
+    """확인안에서는 그 줄만 반영하지 않음(ignored)으로 보인다."""
 
 
 class NeedsAgency(Exception):
@@ -498,9 +549,12 @@ def build_changes(
                 ignored.append(
                     {
                         "text": d.text,
-                        "reason": f"{GROUP_NAMES[e.group]}는 기관({AGENCY_HINT[e.group]})을 함께 알려 주셔야 반영할 수 있습니다. 예: 「산림청 헬기 2대 추가」",
+                        "reason": f"기관을 모르는 {GROUP_NAMES[e.group]} 수보다 많이 줄어 어느 기관({AGENCY_HINT[e.group]})이 줄었는지 알려 주셔야 반영할 수 있습니다. 예: 「산림청 {GROUP_NAMES[e.group]} 2{GROUP_UNITS[e.group]} 철수」",
                     }
                 )
+                continue
+            except OverCapacity as e:
+                ignored.append({"text": d.text, "reason": str(e)})
                 continue
             if note and note not in notes:
                 notes.append(note)
@@ -522,7 +576,8 @@ def build_changes(
                 ),
             }
         )
-    out = list(changes.values())
+    # 칸을 옮기면 합계 줄은 처음 · 끝이 같다 → 바뀌지 않은 줄은 뺀다
+    out = [c for c in changes.values() if c["target"] != "deployed" or c["before"] != c["after"]]
     for ch in out:
         ch["label"] = change_label(ch)
     return out, ignored, notes
@@ -548,7 +603,19 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     """
     out = Parsed(source="llm+rules")
     dropped: list[str] = []
+    # 규칙이 찾은 칸 옮기기(「미상 헬기 2대는 산림청」 → 미상 빼기 + 산림청 더하기)는 규칙 해석을 쓴다.
+    # LLM이 한쪽만 내면(산림청 2대 추가) 합계가 늘어나 버린다
+    moves = [
+        r
+        for r in rules.drafts
+        if r.kind in GROUPS
+        and sum(o.kind == r.kind and o.count == r.count and o.text == r.text for o in rules.drafts)
+        == 2
+    ]
+    moved = {(r.kind, r.count) for r in moves}
     for d in llm.drafts:
+        if d.kind in GROUPS and (d.kind, d.count) in moved:
+            continue
         if d.kind in VILLAGE_ITEMS:
             stem = _stem(d.village)
             if not stem or stem not in re.sub(r"\s", "", text):
@@ -569,7 +636,9 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
         return (d.kind, d.count) if d.kind in GROUPS else (d.kind,)
 
     have = {key(d) for d in out.drafts}
-    out.drafts += [r for r in rules.drafts if key(r) not in have]
+    out.drafts += [
+        r for r in rules.drafts if key(r) not in have
+    ]  # 옮기기 둘은 여기서 함께 들어온다
     specific = [n for n in rules.not_allowed if n["kind"] not in ("other",)]
     kinds = {n["kind"] for n in specific}
     out.not_allowed = specific + [

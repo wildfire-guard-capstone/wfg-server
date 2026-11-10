@@ -95,32 +95,38 @@ Fact의 `ref`는 답변 문장의 `data_refs`로 화면에 간다(예: `situatio
 | 「괴산리 대피 완료」 「다 빠져나갔어」 | village · evacuated false → true | 「대피명령 내렸어」 evac_order, 「사전대피 끝」 pre_evac_done(엔진이 읽는 칸) |
 | 「산림청 헬기 2대 추가」 | deployed · helicopter.forest 5 → 7, helicopter.total 23 → 25 | 추가 · 더 · 도착 = 더함, 철수 · 복귀 = 뺌, 총 · 지금 · 현재 = 그 수로 |
 | 「인력 50명 추가」(기관 없음) | crew.other(기타) + total, 확인 카드에 메모 | 차량도 같음 |
-| 「헬기 2대 추가」(기관 없음) | **반영 안 함** — 기관을 함께 알려 달라고 안내 | 6장 1번 |
+| 「헬기 2대 추가」(기관 없음) | helicopter.unknown(미상) 0 → 2, total 23 → 25, 확인 카드에 메모 | 6장 1번 |
+| 「미상 헬기 2대는 산림청이었어」 | helicopter.unknown 2 → 0, helicopter.forest 5 → 7(합계 줄 없음) | 기타 인력 · 차량도 같음. 뺄 미상이 모자라면 어느 기관인지 물음 |
 | 「재난문자 보냈어」 | situation · disaster_sms_sent | |
 | 「2단계 발령됐어」 「바람이 세졌어」 「부상자」 「화선」 | 반영 안 함, 이유 안내(UNSUPPORTED) | 대응단계는 시스템 판정, 기상은 다시 예측 … |
 
 - **대상 찾기**: 마을 이름(「괴산」 · 「괴산1리」도) → ① 이번 제안서의 마을 ② 산불 시군구 ③ 인접 시군구 순으로 좁힌다. 없으면 422
   TARGET_NOT_FOUND, 같은 단계에 여러 읍면이면 422 AMBIGUOUS_TARGET(「안평면 하화리」처럼 다시).
 - **LLM 해석 검사**: LLM이 낸 투입 수는 입력에 그 수(숫자 · 한글 수사)가 있을 때만 받는다. 마을은 json_schema enum(관할 마을 이름)으로 묶는다.
-- **범위**: 0 아래로 내려가면 422 INVALID_COUNT. `Context.capacity`(투입 상한)를 알면 넘을 때 409 RESOURCE_CAPACITY_EXCEEDED — 지금 앱은 상한을 넣지 않는다(6장 2번).
+- **합계만 있는 보고**: `total`이 기관 칸 합보다 크면 남는 몫은 미상(헬기) · 기타(인력 · 차량) 칸 몫으로 본다. 엔진 입력(`deployed_of`) · 확인안 ·
+  COR-01 대조(`slot_value`)가 같은 규칙이다(6장 1번).
+- **범위**: 0 아래로 내려가면 422 INVALID_COUNT. 상한 = 자원 테이블의 대기 + 이 산불에 투입된 대수(`repo.capacity`, 칸별: 산림청 ·
+  지자체 임차 · 소방 헬기, 진화차 · 소방차). 확인안에서는 넘는 줄만 반영 안 함(ignored)으로 보이고, COR-01에서 자원 현황을 다시 읽어
+  넘으면 409 RESOURCE_CAPACITY_EXCEEDED. 군 · 경찰 · 미상 · 기타 · 인력과 그 칸 자원이 하나도 등록되지 않은 경우는 상한이 없다(6장 2번).
 - **확인 토큰**: HS256, 서명 키 = JWT 비밀에서 「correction-preview」 용도로 갈라 낸 키(로그인 토큰으로 못 씀). 담는 것: 사용자 · 산불 ·
   상황 버전 · 원문 · 변경안 · 만료(10분). 화면은 변경안을 다시 보내지 않는다.
 - **확인(COR-01)**: 산불 행 잠금(FOR UPDATE) → 종료 · 상황 버전 · 변경 전 값 대조(다르면 409 STALE_SITUATION — 같은 토큰을 두 번 보내도 여기서 걸림)
   → 반영(마을 · 투입 칸의 `reported_at` = 확인 시각) → 커밋 → 제안서 다시 만들기 작업. 작업을 못 열면(다른 계산 중) proposal_operation = null,
   proposal_stale = true → PROP-05. 작업은 저장 직전에 종료 · 새 예측 · 더 새로운 정정이 있으면 저장하지 않는다(옛 상황 제안서를 최신으로 보이지 않게).
 
-## 6. 정할 것(팀)
+## 6. 정한 것(11-10)
 
-1. **투입 합계만 바꾸는 정정**: DB 설계는 「헬기 2대 추가」처럼 기관을 모르면 `total`만 바꾼다고 했지만, 엔진 입력(`engine_inputs.deployed_of`)은
-   `total`을 버리고 기관 칸을 다시 더한다 → 합계만 바꾸면 제안서에 반영되지 않는다. 지금은 인력 · 차량은 「기타」 칸에 넣고(메모 표시),
-   헬기는 「기타」 칸이 없어 기관을 묻는다. 엔진 헬기 라벨에 「미상」을 더하면 합계만 받는 쪽으로 바꿀 수 있다.
-2. **가용 범위 상한**(RESOURCE_CAPACITY_EXCEEDED): `situation.deployed`는 `resources`에 없는 자원(군 · 경찰 헬기 등)과 인력이라
-   `resources`로 상한을 정하기 어렵다. 기준을 정하면 `Context.capacity`에 넣는다.
-3. **위기경보(alert_level)**: incidents에 칸이 없어 정정 항목에서 뺐다(명세 Q-03).
-4. **QaMessage 응답 칸**: 명세 필드 + `route` · `sentences`(문장별 근거 번호 · 상황 값 출처) · `insufficient` · `no_evidence` · citations의
-   `label` · `origin` · `text`를 더 준다. CorrectionPreview에는 `ignored`(반영 안 한 말과 이유) · `notes` · `summary` · `proposal_regenerates`를 더 준다.
-5. **이벤트 이름**: QA_NO_EVIDENCE(근거 부족), SITUATION_CORRECTED, PROPOSAL_FAILED(정정 뒤 제안 실패).
-6. **API 서버 → GPU 서버**: `ASSISTANT=exaone`이면 `LLM_URL` · `EVIDENCE_URL`이 API 서버에서 닿아야 한다(EC2라면 역터널). 닿지 않으면 503 AI_UNAVAILABLE.
+1. **합계만 바꾸는 정정 → 헬기 「미상」 칸**: 엔진 입력(`engine_inputs.deployed_of`)은 `total`을 버리고 기관 칸을 다시 더하므로, 헬기 기관 칸에
+   `unknown`(미상)을 더했다(엔진 라벨 `rules/bundles/resources.LABELS` 포함). 기관을 모르는 헬기는 미상, 인력 · 차량은 기타 칸에 넣고, 기관을
+   알게 되면 「미상 헬기 2대는 산림청」으로 옮긴다. 기본 흐름은 자원 관리자가 올린 가용 자원을 통합지휘권자가 보고 배치하는 것이다.
+2. **투입 상한 = 자원 테이블 기준**: 칸별로 대기 + 이 산불 투입 대수(5장 「범위」).
+3. **위기경보(alert_level)**: 정정 항목이 아니라 격상 · 조정 메뉴를 따로 두는 쪽으로(별도 작업 — DB 칸 · API · 명세). 지금은 정정 항목에서 뺀다.
+4. **응답에 더한 칸은 명세에 올린다**: QaMessage `route` · `sentences` · `insufficient` · `no_evidence` · citations의 `label` · `origin` · `text`,
+   CorrectionPreview `ignored` · `notes` · `summary` · `proposal_regenerates`.
+5. **이벤트 이름**: QA_NO_EVIDENCE(ITEM_NO_EVIDENCE와 같은 꼴), SITUATION_CORRECTED(DB 설계에 있는 이름), PROPOSAL_FAILED(PREDICTION_FAILED와
+   같은 꼴 · 같은 details: operation_id + code · message, 여기에 correction_id). 서버 코드 · DB 설계의 이벤트 이름과 대조해 맞음.
+6. **API 서버 → GPU 서버**: `ASSISTANT=exaone`이면 `LLM_URL` · `EVIDENCE_URL`이 API 서버에서 닿아야 한다(EC2라면 역터널). 닿지 않으면 바로
+   503 AI_UNAVAILABLE. GPU 서버 LLM은 필요할 때만 켜는 것이 기본(상시도 가능). 기본 설정은 `ASSISTANT=rules`라 LLM 없이도 동작한다.
 
 ## 7. 시험
 

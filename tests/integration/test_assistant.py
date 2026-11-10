@@ -145,14 +145,72 @@ def test_correction_rejections(client, login, reported):
     assert r.json()["data"]["type"] == "UNSUPPORTED"
     r = ask(client, reported, cmd, "없는마을리 대피 완료")
     assert (r.status_code, r.json()["error"]["code"]) == (422, "TARGET_NOT_FOUND")
-    r = ask(client, reported, cmd, "헬기 2대 추가")  # 기관 없음 → 반영할 수 없음 안내
-    assert r.json()["data"]["type"] == "UNSUPPORTED" and "기관" in r.json()["data"]["reason"]
+    r = ask(client, reported, cmd, "헬기 2대 철수")  # 뺄 미상 헬기가 없음 → 어느 기관인지 묻기
+    assert r.json()["data"]["type"] == "UNSUPPORTED" and "어느 기관" in r.json()["data"]["reason"]
     bad = client.post(
         f"{URL}/{reported['id']}/corrections",
         json={"confirmation_token": "not-a-token-at-all"},
         headers=cmd,
     )
     assert bad.json()["error"]["code"] == "INVALID_CONFIRMATION_TOKEN"
+
+
+def test_helicopter_without_agency_goes_to_unknown(client, login, reported, db):
+    """11-10 결정: 기관을 모르는 헬기는 미상 칸 → 엔진 합계에 들어가고, 나중에 기관 칸으로 옮긴다."""
+    cmd = login("t_cmd", "COMMANDER")
+
+    def confirm(text):
+        data = ask(client, reported, cmd, text).json()["data"]
+        assert data["type"] == "CORRECTION_PREVIEW", data
+        r = client.post(
+            f"{URL}/{reported['id']}/corrections",
+            json={"confirmation_token": data["confirmation_token"]},
+            headers=cmd,
+        )
+        assert r.status_code == 201, r.text
+        db.expire_all()
+        return db.get(Incident, int(reported["id"])).situation["deployed"]["helicopter"]
+
+    assert confirm("헬기 3대 추가") == {"unknown": 3, "total": 3}
+    assert confirm("미상 헬기 2대는 산림청이었어") == {"unknown": 1, "forest": 2, "total": 3}
+
+
+def test_capacity_uses_resource_table(client, login, reported, db):
+    """11-10 결정: 상한 = 자원 테이블의 대기 + 이 산불 투입(칸별). 확인안 뒤 자원이 줄면 저장에서 409."""
+    cmd = login("t_cmd", "COMMANDER")
+    base = db.execute(
+        text(
+            "INSERT INTO resource_bases (name, org_type, coverage_area_ids)"
+            " VALUES ('시험 산림항공관리소', 'forest', '{}') RETURNING id"
+        )
+    ).scalar_one()
+    for name, status in [
+        ("시험-1", "AVAILABLE"),
+        ("시험-2", "AVAILABLE"),
+        ("시험-3", "MAINTENANCE"),
+    ]:
+        db.execute(
+            text(
+                "INSERT INTO resources (kind, name, base_id, status)"
+                " VALUES ('HELICOPTER', :n, :b, CAST(:s AS resource_status))"
+            ),
+            {"n": name, "b": base, "s": status},
+        )
+    db.flush()
+    assert repo.capacity(db, int(reported["id"]))["helicopter.forest"] == 2  # 정비 중은 뺌
+
+    over = ask(client, reported, cmd, "산림청 헬기 3대 추가").json()["data"]
+    assert over["type"] == "UNSUPPORTED" and "가용 대수(2대" in over["reason"]
+    ok = ask(client, reported, cmd, "산림청 헬기 2대 추가").json()["data"]
+    assert ok["type"] == "CORRECTION_PREVIEW"
+    db.execute(text("UPDATE resources SET status = 'MAINTENANCE' WHERE name = '시험-2'"))
+    db.flush()
+    r = client.post(
+        f"{URL}/{reported['id']}/corrections",
+        json={"confirmation_token": ok["confirmation_token"]},
+        headers=cmd,
+    )
+    assert (r.status_code, r.json()["error"]["code"]) == (409, "RESOURCE_CAPACITY_EXCEEDED")
 
 
 def test_correction_before_prediction_saves_only_situation(client, login, reported, db):

@@ -82,6 +82,39 @@ def list_corrections(
     return list(session.scalars(q))
 
 
+# 투입 칸 ↔ 자원 테이블(resources.kind · resource_bases.org_type). 군 · 경찰 · 미상 · 기타 · 인력은 자원
+# 테이블에 없어 상한을 두지 않는다(11-10 결정: 상한은 자원 테이블 기준)
+CAPACITY_SLOTS = {
+    "helicopter.forest": ("HELICOPTER", ("forest",)),
+    "helicopter.local": ("HELICOPTER", ("local_lease", "local")),
+    "helicopter.fire": ("HELICOPTER", ("fire",)),
+    "vehicle.forest_vehicle": ("VEHICLE", ("forest", "local_lease", "local")),
+    "vehicle.fire_truck": ("VEHICLE", ("fire",)),
+}
+
+
+def capacity(session: Session, incident_id: int) -> dict[str, int]:
+    """투입 칸별 상한 = 자원 관리자가 올린 자원 중 대기 + 이 산불에 이미 투입된 대수.
+
+    정비 중 · 다른 산불에 투입된 것은 빼고, 그 칸의 자원이 하나도 등록되지 않았으면 상한을 두지 않는다
+    (자원 자료가 없는 DB에서 모든 정정을 막지 않게).
+    """
+    rows = session.execute(
+        text(
+            "SELECT r.kind::text, b.org_type, count(*),"
+            " count(*) FILTER (WHERE r.status = 'AVAILABLE' OR r.deployed_incident_id = :inc)"
+            " FROM resources r JOIN resource_bases b ON b.id = r.base_id GROUP BY 1, 2"
+        ),
+        {"inc": incident_id},
+    ).all()
+    out = {}
+    for slot, (kind, orgs) in CAPACITY_SLOTS.items():
+        mine = [(n, usable) for k, org, n, usable in rows if k == kind and org in orgs]
+        if sum(n for n, _ in mine):
+            out[slot] = sum(usable for _, usable in mine)
+    return out
+
+
 def village_directory(session: Session, sigungu_id: int | None) -> list[dict[str, Any]]:
     """정정 대상 마을: 산불 시군구 + 인접 시군구의 리(id · 이름 · 읍면 · 시군구). 산불 시군구가 먼저."""
     if sigungu_id is None:

@@ -217,6 +217,20 @@ def test_predict_needs_input_and_rejects_outside_mismatched_or_bad_grid(fake_dec
         pred.predict(PredictionRequest(START, BASE_AT, SITE, None, fake_input(shape=(9, 3, 6))))
 
 
+def test_predict_stops_elmfire_after_timeout(fake_deck, tmp_path):
+    """시간 제한을 넘기면 ELMFIRE를 끊고 TimeoutError(worker는 504 · 작업 실패로 알림)."""
+    deck, _ = fake_deck
+    slow = tmp_path / "slow_elmfire"
+    slow.write_text(f"#!{sys.executable}\nimport time; time.sleep(30)\n", encoding="utf-8")
+    slow.chmod(slow.stat().st_mode | stat.S_IEXEC)
+    pred = ElmfirePredictor(deck, str(slow), tmp_path / "runs", timeout_s=1)
+    t0 = datetime.now()
+    with pytest.raises(TimeoutError, match="1초 안에"):
+        pred.predict(PredictionRequest(START, BASE_AT, SITE, None, fake_input()))
+    assert (datetime.now() - t0).total_seconds() < 10
+    assert not list((tmp_path / "runs").glob("pred_*"))  # 실행 폴더도 지운다
+
+
 def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):
     """시연 출처: 덱 기상에서 화선 시각부터 9밴드, 발화점 칸 바람 + 서버 기상의 기온 · 습도."""
     deck, exe = fake_deck

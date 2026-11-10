@@ -3,15 +3,11 @@ name: elmfire-image
 # Build the upstream ELMFIRE base image (pinned commit) and our worker image,
 # natively on linux/amd64, and push both to GHCR so nobody has to build ELMFIRE
 # under emulation on a Mac.
+# Called by deploy.yml on every deploy (so the worker on EC2 runs the same commit as the API);
+# run it by hand (workflow_dispatch) to rebuild without deploying.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "docker/worker/**"
-      - "spread/**"
-      - "evaluation/**"
-      - "pyproject.toml"
+  workflow_call:
 
 permissions:
   contents: read

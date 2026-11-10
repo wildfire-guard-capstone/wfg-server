@@ -33,11 +33,21 @@ NAMES = {  # 우리 이름 → 응답 열 이름 후보
 MISSING = -50.0  # 이 값 이하는 결측(응답 머리말: "-50 이하면 관측이 없거나, 에러처리된 것")
 
 
+# API 허브 오류 코드(「AWS 매분자료 API 명세」 d. 에러 코드)
+HTTP_ERRORS = {
+    401: "유효한 인증키가 아닙니다(KMA_API_KEY 확인)",
+    403: "활용신청이 필요한 API입니다(API 허브에서 AWS 매분자료 활용신청)",
+}
+
+
 def _get_text(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=20) as r:
             return r.read().decode("euc-kr", errors="replace")
-    except (urllib.error.URLError, TimeoutError) as e:  # 주소(키 포함)를 남기지 않는다
+    except urllib.error.HTTPError as e:  # 주소(키 포함)를 남기지 않는다
+        why = HTTP_ERRORS.get(e.code, f"HTTP {e.code}")
+        raise WeatherUnavailable(f"기상청 API 허브 매분자료: {why}") from None
+    except (urllib.error.URLError, TimeoutError) as e:
         raise WeatherUnavailable(f"기상청 API 허브 연결 실패: {type(e).__name__}") from None
 
 
@@ -118,7 +128,12 @@ class AwsMinute:
     get_text: Callable[[str], str] = _get_text
 
     def fetch(self, stn: str, start: datetime, end: datetime) -> dict[datetime, dict]:
-        """한 관측소의 start ~ end 분 자료 → 시간별. 자료가 없으면 빈 dict."""
+        """한 관측소의 start ~ end 분 자료 → 시간별. 자료가 없으면 빈 dict.
+
+        한 지점은 하루 이내까지 한 번에 받을 수 있다(전체 지점 stn=0은 10분까지 — 명세 tm1).
+        """
+        if end - start > timedelta(days=1):
+            raise ValueError("AWS 매분자료는 한 지점에 하루 이내만 받을 수 있습니다")
         url = (
             f"{URL}?tm1={start.astimezone(KST):%Y%m%d%H%M}&tm2={end.astimezone(KST):%Y%m%d%H%M}"
             f"&stn={stn}&disp=1&help=1&authKey={self.auth_key}"

@@ -174,3 +174,23 @@ def test_parse_minutes_real_api_response():
     assert (r["wd"], r["ws"], r["ta"], r["hm"], r["rn"]) == (333.7, 0.6, 0.7, 92.6, 0.0)
     h = hourly(rows)[datetime(2026, 11, 10, 23, tzinfo=KST)]
     assert h["gust"] == h["mean"] == 0.6 and h["wd"] == 333.7
+
+
+def test_aws_http_errors_name_the_cause(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    from app.weather import aws_minute
+
+    for code, word in [(401, "인증키"), (403, "활용신청")]:
+
+        def boom(url, timeout, code=code):
+            raise urllib.error.HTTPError(url, code, "x", {}, io.BytesIO(b""))
+
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        with pytest.raises(WeatherUnavailable, match=word) as e:
+            aws_minute._get_text("https://example/?authKey=SECRET")
+        assert "SECRET" not in str(e.value)
+    with pytest.raises(ValueError, match="하루"):
+        AwsMinute("K").fetch("278", T0 - timedelta(days=2), T0)

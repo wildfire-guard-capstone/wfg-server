@@ -20,7 +20,7 @@ wind_max_1min은 ELMFIRE 입력 기록(DB에만, PRED-04 응답에서 뺀다).
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -53,10 +53,17 @@ class ElmfireWeatherRequest:
 
 @dataclass(frozen=True)
 class ElmfireWeatherInput:
-    t0: datetime  # 밴드 1 시각 = 기상 0시(한국 시간)
+    t0: datetime  # 기상 0시(한국 시간) = grids 첫 밴드 시각
     grids: dict[str, np.ndarray]  # GRID_KEYS → (9, 행, 열) float32, 덱 기상 격자
     weather: Weather  # 발화점 칸 9시간(명세 Weather + hours[].wind_max_1min) → predictions.weather
     meta: dict[str, Any] = field(default_factory=dict)  # 출처 · 관측소 · 덱 밴드 → 이벤트 로그
+    # 0시 1시간 앞(t0 − 1시간) 밴드: GRID_KEYS → (행, 열). 있으면 ELMFIRE 밴드 1로 앞에 붙인다.
+    # ELMFIRE는 시각 T의 기상을 밴드 floor(T/Δ) · floor(T/Δ)+1로 F = (T − (ITLO−1)Δ)/Δ 만큼
+    # 섞는데(elmfire_level_set.f90 842 ~ 846), 첫 1시간만 F가 0 ~ 1(보간)이고 그 뒤는 1 ~ 2(앞
+    # 두 밴드 추세를 연장)다. 시연 덱(밴드 1 = 11:00)은 1보부터 늘 뒤쪽으로 계산됐고 A′ 성능도
+    # 그 결과다. 0시부터 자르면 첫 1시간이 보간으로 바뀌어 결과가 달라지므로(1보 P1 116 → 107 ha)
+    # 한 밴드를 앞에 붙여 시연과 같은 계산을 만든다. 없으면(덱 첫 시각 등) 0시부터 — 시연도 같다
+    lead: dict[str, np.ndarray] | None = None
 
 
 class ElmfireWeatherSource(Protocol):
@@ -64,6 +71,14 @@ class ElmfireWeatherSource(Protocol):
     uses_server_weather: bool  # True면 서버가 기준점 기상을 먼저 받아 request.weather로 넘긴다
 
     def build(self, request: ElmfireWeatherRequest) -> ElmfireWeatherInput: ...
+
+
+def elmfire_bands(inp: "ElmfireWeatherInput") -> tuple[dict[str, np.ndarray], datetime]:
+    """ELMFIRE에 넣을 밴드(lead가 있으면 앞에 붙임)와 밴드 1의 시각."""
+    if inp.lead is None:
+        return inp.grids, inp.t0
+    stacked = {k: np.concatenate([inp.lead[k][None], inp.grids[k]]) for k in GRID_KEYS}
+    return stacked, inp.t0 - timedelta(hours=1)
 
 
 def floor_hour(t: datetime) -> datetime:
@@ -122,7 +137,12 @@ def check_input(inp: ElmfireWeatherInput, profile: Mapping[str, Any]) -> Elmfire
             raise ValueError(f"ELMFIRE 기상 {k} 격자가 {shape}가 아닙니다: {got}")
         if not np.isfinite(a).all():
             raise ValueError(f"ELMFIRE 기상 {k} 격자에 빈 값이 있습니다")
-    g = inp.grids  # 2
+        if inp.lead is not None:
+            b = inp.lead.get(k)
+            if b is None or b.shape != shape[1:] or not np.isfinite(b).all():
+                got = None if b is None else b.shape
+                raise ValueError(f"ELMFIRE 기상 {k} 앞 밴드가 {shape[1:]}가 아닙니다: {got}")
+    g, _ = elmfire_bands(inp)  # 2
     moisture_ok = all(((g[k] >= 0) & (g[k] <= 100)).all() for k in ("m1", "m10", "m100"))
     if (g["ws"] < 0).any() or ((g["wd"] < 0) | (g["wd"] > 360)).any() or not moisture_ok:
         raise ValueError("ELMFIRE 기상 격자 값이 범위를 벗어납니다")
@@ -142,6 +162,7 @@ __all__ = [
     "cell_centre",
     "check_input",
     "deck_weather_profile",
+    "elmfire_bands",
     "floor_hour",
     "namelist_value",
     "site_cell",

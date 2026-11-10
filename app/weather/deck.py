@@ -7,6 +7,8 @@
 
   ELMFIRE 격자 = namelist WS · WD · M1 · M10 · M100 래스터
                  (시간 안 가장 센 1분 풍속 · 풍향 · 연료수분)
+                 + 0시 1시간 앞 밴드(lead, 덱 첫 시각이면 없음) — 시연과 같은 ELMFIRE 계산
+                 (app.weather.elmfire_input.ElmfireWeatherInput.lead)
   발화점 칸 9시간(저장 · 판정용), 9시간 모두 「관측」
     바람 = 덱의 발화점 칸(평균풍속 = ws.tif, 1분 최대 · 풍향 = ELMFIRE 격자)
     기온 · 습도 · 강수 = 서버가 받은 기상(시연은 WEATHER=asos, 의성 지상관측)
@@ -80,6 +82,12 @@ class DeckWeather:
             )
         bands = list(range(int(offset) + 1, int(offset) + HOURS + 2))
         grids = {k: self._read(f, bands, request.profile) for k, f in files.items()}  # 2
+        lead_band = bands[0] - 1 if bands[0] > 1 else None  # 0시 1시간 앞(덱 첫 시각이면 없음)
+        lead = (
+            {k: self._read(f, [lead_band], request.profile)[0] for k, f in files.items()}
+            if lead_band
+            else None
+        )
 
         server = request.weather  # 3
         if not server or len(server.get("hours") or []) != HOURS + 1:
@@ -118,10 +126,11 @@ class DeckWeather:
             "deck": str(self.deck),
             "deck_start": start.isoformat(),
             "bands": [bands[0], bands[-1]],
+            "lead_band": lead_band,
             "temp_humidity_from": server.get("source"),
             "site_cell": [row, col],
         }
-        return ElmfireWeatherInput(t0, grids, weather, meta)
+        return ElmfireWeatherInput(t0, grids, weather, meta, lead)
 
 
 __all__ = ["DeckWeather", "deck_start"]

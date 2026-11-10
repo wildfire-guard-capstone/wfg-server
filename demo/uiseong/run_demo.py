@@ -9,7 +9,8 @@
 map/(지도 레이어) · elmfire_deck/(ELMFIRE 입력). 자세한 것은 input/README.md.
 
 결과 폴더(--out):
-  round_k/01_spread/   spread.json(보정 · P0~P8 · 검증, 다시 쓰기용 WKT) · ranges_4326.geojson
+  round_k/01_spread/   spread.json(보정 · P0~P8 · 검증, 다시 쓰기용 WKT) · ranges_4326.geojson(hour 0 ~ 8)
+                       · weather.json(예측에 쓴 기상) — 두 파일이 곧 EC2 file 예측의 입력(README 「EC2로 넘기기」)
   round_k/02_rules/    inputs.json(규칙 엔진에 넣은 값) · llm_input.json(규칙 엔진 출력: bundles · common · items)
   round_k/03_rag/      <항목>.json(질의 · 찾은 근거)
   round_k/04_llm/      <항목>.json(보낸 메시지 · 답 원문 · 검사) · <항목>_prompt.txt(사람이 읽는 판)
@@ -28,8 +29,8 @@ from pathlib import Path
 
 from agent.clients import LLM, Evidence
 from agent.generate import Agent
+from demo.uiseong import prediction_weather, step1_spread, step2_rules, step3_agent
 from demo.uiseong import rounds as rounds_mod
-from demo.uiseong import step1_spread, step2_rules, step3_agent
 from demo.uiseong.data import MapData, to4326
 from spread import perimeter_run as pr
 
@@ -108,8 +109,22 @@ def main() -> None:
                 f"  1 확산: 배율 {sp.calibration['adj']:.3f} ({sp.calibration['method']}) · {sp.wall_s}초",
                 flush=True,
             )
-        step1_spread.save(sp, rdir / "01_spread")
+        weather = None  # EC2 file 예측으로 넘길 「예측에 쓴 기상」
+        asos_csv = a.input / "risk" / "weather_hourly.csv"
+        if asos_csv.exists():
+            weather = prediction_weather.weather_used(
+                deck_dir, md.ignition, rd.base_at, rd.band1, asos_csv
+            )
+        else:
+            print(f"    weather.json 건너뜀: {asos_csv} 없음", flush=True)
+        step1_spread.save(sp, rdir / "01_spread", weather)
         print(f"    P0~P8 {sp.areas_ha} ha", flush=True)
+        if weather:
+            print(
+                "    기상(weather.json) 풍향 · 풍속 "
+                + " ".join(f"{h['wind_dir']:.0f}°/{h['wind_speed']}" for h in weather["hours"]),
+                flush=True,
+            )
         print(
             f"    검증 {[(c['at'], c['pred_ha'], c['obs_ha'], c['iou']) for c in sp.validation]}",
             flush=True,

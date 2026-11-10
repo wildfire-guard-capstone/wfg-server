@@ -6,8 +6,9 @@
   ta · hm = 그 시간 마지막 값, rn = 그 시간 마지막 1시간 강수(RN-60m).
 지금 진행 중인 시간(0시)은 받은 분까지만 쓴다.
 
-응답 열 순서는 문서로 확인하지 못해, help=1 머리말의 열 이름(WS1 · WD1 · TA · HM · RN-60m …)으로
-찾는다. 이름을 못 찾으면 WeatherUnavailable. 키(KMA_API_KEY)는 주소에만 넣고 오류에 남기지 않는다.
+응답 열은 help=1 머리말의 열 이름(WS1 · WD1 · TA · HM · RN-60m …)으로 찾는다
+(11/10 실제 키 호출로 형식 확인 — tests/unit/test_weather_field.py REAL_AWS).
+이름을 못 찾으면 WeatherUnavailable. 키(KMA_API_KEY)는 주소에만 넣고 오류에 남기지 않는다.
 """
 
 import math
@@ -29,7 +30,7 @@ NAMES = {  # 우리 이름 → 응답 열 이름 후보
     "hm": ("HM",),
     "rn": ("RN-60M", "RN_60M", "RN60M"),
 }
-MISSING = -90.0  # 이 값 이하는 결측(-99.9 · -999 …)
+MISSING = -50.0  # 이 값 이하는 결측(응답 머리말: "-50 이하면 관측이 없거나, 에러처리된 것")
 
 
 def _get_text(url: str) -> str:

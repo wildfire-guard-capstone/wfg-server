@@ -136,3 +136,41 @@ def test_station_field_selects_nearby_skips_failures_and_needs_minimum():
         StationField(observed, forecast, stations=stations, buffer_m=0, min_stations=3).build(
             T0, prof
         )
+
+
+# 11/10 23:00 실제 키로 부른 응답(의성 278, help=1 · disp=1) 그대로
+REAL_AWS = """#START7777
+#--------------------------------------------------------------------------------------------------
+#  WD1    : 1분 평균 풍향 (degree) : 0-N, 90-E, 180-S, 270-W, 360-무풍
+#  WS1    : 1분 평균 풍속 (m/s)
+#  WDS    : 최대 순간 풍향 (degree)
+#  WSS    : 최대 순간 풍속 (m/s)
+#  WD10   : 10분 평균 풍향 (degree)
+#  WS10   : 10분 평균 풍속 (m/s)
+#  TA     : 1분 평균 기온 (C)
+#  RE     : 강수감지 (0-무강수, 1-강수, 음수인 경우 null값)
+#  RN-15m : 15분 누적 강수량 (mm)
+#  RN-60m : 60분 누적 강수량 (mm)
+#  RN-12H : 12시간 누적 강수량 (mm)
+#  RN-DAY : 일 누적 강수량 (mm)
+#  HM     : 1분 평균 상대습도 (%)
+#  PA     : 1분 평균 현지기압 (hPa)
+#  PS     : 1분 평균 해면기압 (hPa)
+#  TD     : 이슬점온도 (C)
+#  *) -50 이하면 관측이 없거나, 에러처리된 것을 표시
+#--------------------------------------------------------------------------------------------------
+# YYMMDDHHMI   STN    WD1    WS1    WDS    WSS   WD10   WS10      TA      RE RN-15m RN-60m RN-12H RN-DAY      HM      PA      PS      TD
+#        KST    ID    deg    m/s    deg    m/s    deg    m/s       C       1     mm     mm     mm     mm       %     hPa     hPa       C
+202611102300,278,333.7,0.6,337.7,0.6,340.1,0.3,0.7,-99.9,0.0,0.0,0.0,0.0,92.6,1016.3,1026.6,-0.4,=
+#7777END
+"""  # noqa: E501
+
+
+def test_parse_minutes_real_api_response():
+    rows = parse_minutes(REAL_AWS)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["at"] == datetime(2026, 11, 10, 23, tzinfo=KST) and r["stn"] == "278"
+    assert (r["wd"], r["ws"], r["ta"], r["hm"], r["rn"]) == (333.7, 0.6, 0.7, 92.6, 0.0)
+    h = hourly(rows)[datetime(2026, 11, 10, 23, tzinfo=KST)]
+    assert h["gust"] == h["mean"] == 0.6 and h["wd"] == 333.7

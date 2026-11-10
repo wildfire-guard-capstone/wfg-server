@@ -151,8 +151,8 @@ python -m app.predict.run_elmfire --deck ~/wfg/demo/deck --start p0.geojson \
   (`stations`는 돌풍 비율로 맞춘다).
 - **공간**: `point`는 한 곳 기상을 영역 전체에 쓴다. `stations`도 관측소 사이는 보간이라 산악 지형의
   국지 바람은 반영하지 않는다.
-- **API 확인 필요**: 매분자료 응답의 열 이름(WS1 · WD1 · TA · HM · RN-60m)은 머리말에서 찾도록
-  만들었지만 실제 키로 호출해 보지 못했다. GPU 서버에서 한 번 확인해야 한다.
+- **API 확인**: 매분자료 응답 형식은 11/10 실제 키 호출(의성 278)로 확인했다(열 이름 · 결측 −50 이하).
+  GPU 서버 `.env`에 `KMA_API_KEY`를 넣은 뒤 `check_stations --deck`으로 관측소 전체를 한 번 더 본다.
 - **관측소 표**: `config/weather_stations.csv`는 의성 덱 주변(경북 25곳)만 있다. 다른 지역은 표를
   늘려야 한다.
 - **호출 수**: `stations`는 예측 한 번에 관측소마다 매분자료 1번 + 예보 격자마다 2 ~ 3번을 부른다

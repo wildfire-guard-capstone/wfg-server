@@ -227,6 +227,8 @@ def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):
     assert inp.t0 == datetime(2025, 3, 22, 12, tzinfo=KST)  # 덱 시작 11:00 → 밴드 2부터
     assert inp.meta["bands"] == [2, 10] and inp.meta["temp_humidity_from"] == "FIXED"
     assert inp.grids["ws"][:, 0, 0].tolist() == [10.0 + b for b in range(2, 11)]
+    # 0시 1시간 앞 밴드(덱 밴드 1 = 11:00)를 같이 자른다 — 시연과 같은 ELMFIRE 계산
+    assert inp.meta["lead_band"] == 1 and float(inp.lead["ws"][0, 0]) == 11.0
     w, h0, h8 = inp.weather, inp.weather["hours"][0], inp.weather["hours"][8]
     assert w["source"] == "AWS_OBS" and {h["kind"] for h in w["hours"]} == {"관측"}
     assert h0["wind_max_1min"] == pytest.approx(12.0 * MS_PER_MPH, abs=0.01)  # 밴드 2 = 12 mph
@@ -234,11 +236,13 @@ def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):
     assert h8["wind_max_1min"] == pytest.approx(20.0 * MS_PER_MPH, abs=0.01)
     assert h0["wind_dir"] == 270.0 and h0["temp"] == server["hours"][0]["temp"]
 
-    # 이 입력으로 돌리면 덱 밴드 2가 ELMFIRE 0시로 들어가고, 결과 기상 = 발화점 칸 9시간
+    # 이 입력으로 돌리면 덱 밴드 1(11:00) ~ 10이 ELMFIRE 밴드 1 ~ 10으로 들어가고 시작 시각도
+    # 덱과 같다(12:50 = 밴드 1 뒤 6600초) — 덱을 그대로 돌린 시연과 같은 계산. 결과 기상 = 9시간
     pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True)
     result = pred.predict(PredictionRequest(START, BASE_AT, SITE, None, inp))
     seen = json.loads(next(Path(result.meta["run_dir"]).glob("seen.json")).read_text())
-    assert seen["ws0"] == 12.0 and seen["ws_bands"] == 9
+    assert seen["ws0"] == 11.0 and seen["ws_bands"] == 10 and seen["HOUR_OF_YEAR"] == "1931"
+    assert result.meta["t_start_s"] == 6600.0 and result.meta["lead_band"] is True
     assert result.weather is w and result.meta["weather_input"]["source"] == "deck"
 
 
@@ -270,3 +274,30 @@ def test_api_starts_without_spread_package():
     code = "import sys; sys.modules['spread'] = None; import app.main, app.predict; print('ok')"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and "ok" in out.stdout, out.stderr[-800:]
+
+
+def test_deck_weather_at_deck_start_has_no_lead_band(fake_deck, tmp_path):
+    """덱 첫 시각(11:00)의 화선은 앞 밴드가 없다 — 덱을 그대로 돌린 시연도 밴드 1부터라 같다."""
+    deck, exe = fake_deck
+    profile = deck_weather_profile(deck)
+    at = datetime(2025, 3, 22, 11, 24, tzinfo=KST)  # 의성 발화(괴산리)
+    inp = DeckWeather(deck).build(ElmfireWeatherRequest(at, SITE, profile, server_weather(at)))
+    assert inp.lead is None and inp.meta["lead_band"] is None and inp.meta["bands"] == [1, 9]
+    pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True)
+    result = pred.predict(PredictionRequest(START, at, SITE, None, inp))
+    seen = json.loads(next(Path(result.meta["run_dir"]).glob("seen.json")).read_text())
+    assert seen["ws_bands"] == 9 and seen["ws0"] == 11.0 and result.meta["t_start_s"] == 1440.0
+
+
+def test_check_input_rejects_bad_lead_band():
+    inp = fake_input()
+    bad = ElmfireWeatherInput(
+        inp.t0, inp.grids, inp.weather, inp.meta, {k: a[0][:1] for k, a in inp.grids.items()}
+    )
+    profile = {"height": 2, "width": 6}
+    with pytest.raises(ValueError, match="앞 밴드"):
+        check_input(bad, profile)
+    ok = ElmfireWeatherInput(
+        inp.t0, inp.grids, inp.weather, inp.meta, {k: a[0] for k, a in inp.grids.items()}
+    )
+    check_input(ok, profile)

@@ -165,6 +165,10 @@ def test_station_field_builds_grid_and_site_hours_skipping_failures():
     assert inp.t0 == T0 and inp.grids["ws"].shape == (9, 104, 179)
     assert sorted(inp.meta["stations"]) == ["136", "278"] and "276" in inp.meta["skipped"]
     assert inp.meta["kinds"] == {"관측": 2, "예보": 16} and inp.meta["hour0_observed_share"] == 1.0
+    # 0시 1시간 앞 밴드 = 1시간 전 관측(가장 센 1분 9 m/s · 서풍) — 시연 덱과 같은 ELMFIRE 계산
+    assert inp.meta["lead_observed"] == 2 and inp.lead["ws"].shape == (104, 179)
+    assert float(inp.lead["ws"][50, 90]) == pytest.approx(9.0 * MPH_PER_MS, abs=1e-3)
+    assert float(inp.lead["wd"][50, 90]) == pytest.approx(270.0, abs=1e-3)
     assert len(calls) == 3  # 예보 칸마다 한 번(세 관측소가 다른 칸)
 
     w = inp.weather

@@ -7,6 +7,7 @@ EC2 /home/ubuntu/wfg/
 ├── compose.yml   ← deploy/compose.ec2.yml (배포 때마다 복사됨)
 ├── .env          ← API_IMAGE=…:<커밋> (배포가 씀, 지금 떠 있는 버전)
 ├── db.env        ← POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (wfg-db와 같이 씀, 비공개)
+├── api.env       ← API 설정(없으면 배포가 빈 파일로 만듦, 덮어쓰지 않음) — 「GPU 서버 연결」
 └── data/base/    ← 바탕 데이터 적재 파일 6개 (컨테이너 /data/base, 읽기 전용)
 ```
 
@@ -48,6 +49,45 @@ rsync -az "<capston-data>/data/지도자원/적재/" wfg-ec2:/home/ubuntu/wfg/da
 ```
 
 API를 내 컴퓨터에서 보려면 터널: `ssh -N -L 8000:127.0.0.1:8000 wfg-ec2` → http://localhost:8000/health
+
+## GPU 서버 연결 (제안서 · AI 어시스턴트를 EXAONE으로)
+
+학교 GPU 서버는 밖에서 들어오는 접속을 막는다. 그래서 **GPU 서버가 EC2로 SSH를 걸어** EC2 안에
+포트 두 개를 만들어 둔다(역방향 터널). API 컨테이너는 그 포트로 요청하고, 요청은 터널을 타고
+GPU 서버의 vLLM · 근거 서버로 간다.
+
+```
+wfg-api 컨테이너 ──▶ gpu:8031 · gpu:8032 (= EC2 docker0 172.17.0.1)
+                        │  SSH 터널(GPU 서버가 걸어 둠)
+                        ▼
+GPU 서버 127.0.0.1:18041 vLLM(EXAONE) · 127.0.0.1:18042 근거 서버
+```
+
+처음 한 번(EC2에서):
+
+```bash
+# 1. 컨테이너가 터널 포트에 닿도록, 터널이 docker0 주소에 묶이는 것을 허용
+echo 'GatewayPorts clientspecified' | sudo tee /etc/ssh/sshd_config.d/60-wfg-tunnel.conf
+sudo sshd -t && sudo systemctl reload ssh
+
+# 2. GPU 서버의 터널 전용 공개 키 등록 — 포트 전달만, 그 두 포트만
+echo 'restrict,port-forwarding,permitlisten="172.17.0.1:8031",permitlisten="172.17.0.1:8032" <공개 키 한 줄>' >> ~/.ssh/authorized_keys
+
+# 3. API 설정
+cat >> /home/ubuntu/wfg/api.env <<'ENV'
+PROPOSAL_WRITER=agent
+ASSISTANT=exaone
+LLM_URL=http://gpu:8031
+EVIDENCE_URL=http://gpu:8032
+ENV
+cd /home/ubuntu/wfg && docker compose up -d api
+```
+
+- 보안 그룹은 그대로 22번만. 22번을 특정 IP로 좁혔다면 GPU 서버 IP를 더한다. 8031 · 8032는 열지 않는다
+- GPU 서버 쪽(`deploy/gpu/`의 두 스크립트를 `~/wfg/tunnel/`에 둔다): `serve.sh start`로 vLLM · 근거 서버를 켜고 `tunnel.sh start`로 터널을 건다. GPU 서버의 8031 · 8032는 다른 계정이 써서 18041 · 18042로 띄우고, 터널이 EC2의 8031 · 8032에 잇는다. EC2 주소는 `~/wfg/tunnel/ec2_host` 한 줄 — EC2 IP가 바뀌면 고친다
+- 확인(EC2에서): `curl -s http://172.17.0.1:8031/v1/models` · `docker exec wfg-api python -c "import urllib.request as u; print(u.urlopen('http://gpu:8031/v1/models').read()[:80])"`
+- 터널이나 vLLM이 꺼져 있으면 예측 작업은 `PROPOSAL_FAILED`로 끝나고 예측 · 제안서 모두 저장하지 않는다. 가짜 작성기로 되돌리려면 `api.env`에서 `PROPOSAL_WRITER` 줄을 지우고 다시 켠다
+- 공용 GPU라 vLLM은 쓸 때만 켠다(상시 실행은 관리자 허락 뒤)
 
 ## 처음 한 번 (끝남, 2026-11-08)
 

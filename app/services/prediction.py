@@ -8,14 +8,16 @@ from contextlib import AbstractContextManager
 from geoalchemy2.shape import to_shape
 from sqlalchemy.orm import Session
 
+from agent.clients import LLM, Evidence
 from agent.prompt import head_of
 from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.db.models import Incident, Prediction
 from app.db.models.enums import IncidentStatus
+from app.db.session import SessionLocal
 from app.predict import PredictionRequest, Predictor, get_predictor
 from app.propose import ProposalWriter, get_writer
-from app.repositories import event_logs, incidents, predictions
+from app.repositories import base_data, event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
 from app.repositories.proposals import save_proposal
 from app.services import operations
@@ -102,8 +104,25 @@ def predictor_from_settings() -> Predictor:
 
 
 def writer_from_settings() -> ProposalWriter:
-    """설정(PROPOSAL_WRITER)으로 제안 작성기를 고른다 — 가짜 ↔ 팀원 에이전트를 갈아 끼우는 자리."""
-    return get_writer(get_settings().proposal_writer)
+    """설정(PROPOSAL_WRITER)으로 제안 작성기를 고른다 — 가짜 ↔ 에이전트를 갈아 끼우는 자리.
+    agent는 GPU 서버의 vLLM(LLM_URL) · 근거 서버(EVIDENCE_URL)를 부른다."""
+    s = get_settings()
+    if s.proposal_writer != "agent":
+        return get_writer(s.proposal_writer)
+    if not s.evidence_url:
+        raise ValueError("PROPOSAL_WRITER=agent에는 EVIDENCE_URL(근거 서버 주소)이 필요합니다")
+    return get_writer(
+        "agent",
+        llm=LLM(url=s.llm_url, model=s.llm_model, timeout=s.proposal_llm_timeout_s),
+        evidence=Evidence(url=s.evidence_url),
+        names=known_names,
+    )
+
+
+def known_names() -> set[str]:
+    """제안 문장의 이름 검사(agent.check)에 쓰는 지명 목록 — 작성기가 쓸 때 부른다."""
+    with SessionLocal() as db:
+        return base_data.known_names(db)
 
 
 def reader_of(db: Session, incident_id: int) -> str:

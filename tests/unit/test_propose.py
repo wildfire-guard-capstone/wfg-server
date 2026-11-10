@@ -87,4 +87,4 @@ def test_categories_rotate_so_all_four_show(written):
 def test_get_writer():
     assert isinstance(get_writer("fake"), FakeWriter)
     with pytest.raises(ValueError, match="모르는 작성기"):
-        get_writer("agent")
+        get_writer("exaone")

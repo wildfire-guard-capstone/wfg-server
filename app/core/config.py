@@ -49,8 +49,10 @@ class Settings(BaseSettings):
     # elmfire 기상: point(기준점 한 곳, 기본) · stations(관측소 여러 곳 매분자료 + 예보 × 돌풍 비율,
     # 의성 시연 방식). stations는 KMA_API_KEY · DATA_GO_KR_API_KEY가 필요하다
     predictor_weather_field: str = "point"
-    # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
+    # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose): fake(테스트 문장, 기본) · agent(EXAONE +
+    # 근거 검색). agent는 아래 LLM_URL · EVIDENCE_URL(GPU 서버 터널 주소)이 필요하다
     proposal_writer: str = "fake"
+    proposal_llm_timeout_s: float = 600  # 제안 한 항목 호출(어시스턴트 답보다 길다)
     # 위험도(RISK-01) 지형 7 · 연료 6 변수의 지역 격자 폴더(risk.grid: grades.tif · values.tif ·
     # meta.json, rasterio 필요). 비우면 그 13개는 빼고 나머지 변수로 계산한다
     risk_grid_dir: Path | None = None
@@ -61,7 +63,8 @@ class Settings(BaseSettings):
     llm_url: str = "http://127.0.0.1:8031"
     llm_model: str = "exaone-4.5-33b-awq"
     llm_timeout_s: float = 120
-    evidence_url: str | None = None  # 비우면 검색 없이 제안서가 인용한 원문만 쓴다
+    # 어시스턴트는 비우면 검색 없이 제안서가 인용한 원문만 쓴다. 제안 작성기 agent에는 꼭 필요하다
+    evidence_url: str | None = None
     correction_ttl_s: int = 600  # 정정 확인안 유효 시간(명세 CorrectionPreview, 10분)
 
     # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)

@@ -77,6 +77,25 @@ PYTHONPATH=. ~/miniforge3/envs/wfg-elm/bin/python -X utf8 -m demo.uiseong.verify
 보정 방법 비교(ELMFIRE만, 약 5분): `python -m demo.uiseong.backtest --input … --elmfire … --out <결과>`.
 뷰어(로컬): `uv run python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <demo-uiseong/input> --out viewer.html`.
 
+### EC2로 넘기기(GPU 결과 → 파일 → DB)
+
+회차마다 `round_k/01_spread/`의 두 파일이 EC2 서버 file 예측(`app/predict/file.py`)의 입력이다. `--spread-only`로도 생긴다.
+
+| 파일 | 내용 |
+|---|---|
+| `ranges_4326.geojson` | P0 ~ P8, 피처마다 `properties.hour` 0 ~ 8(0 = 관측 k보 화선). file 예측은 1 ~ 8만 읽는다 |
+| `weather.json` | 이 예측에 쓴 기상(`predictions.weather` 모양, 0시 = 회차 시각을 내림한 정시부터 9개, `demo/uiseong/prediction_weather.py`). 풍향 · 풍속 = ELMFIRE가 읽은 바람 래스터(11/9 덱은 `ws_gust` 돌풍)를 발화점 칸에서, 기온 · 습도 · 강수 = ASOS 의성(278). 입력에 `risk/weather_hourly.csv`가 없으면 만들지 않는다 |
+
+EC2에서(산불의 현재 화선 = 같은 k보 화선이어야 한다 — 저장 검사가 P0 ⊆ P1을 본다):
+
+```bash
+python -m app.services predict --incident <id> --predictor file \
+  --path round_k/01_spread/ranges_4326.geojson --weather round_k/01_spread/weather.json
+```
+
+이 명령은 예측만 저장한다. 예측 요청(PRED-01) 흐름으로 제안서까지 만들려면 설정 `PREDICTOR=file` ·
+`PREDICTOR_PATH` · `PREDICTOR_WEATHER`가 이 두 파일을 가리켜야 하는데, 경로가 하나라 회차 하나만 된다.
+
 ## LLM 대응 생성(agent/, 11/8 재설계)
 
 - **넘기는 것:** 규칙 엔진 항목의 판정만 — `finding` · `facts` · `withheld` · `do_not_state` · 조립기 목록 · 표 · ※(`agent/judgment.py`).

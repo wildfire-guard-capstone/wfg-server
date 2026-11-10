@@ -166,8 +166,13 @@ def run_spread(
     )
 
 
-def save(r: SpreadResult, folder: Path) -> None:
-    """01_spread/: spread.json(다시 쓰기용 EPSG:5179 WKT 포함) · ranges_4326.geojson(지도 확인용)."""
+def save(r: SpreadResult, folder: Path, weather: dict | None = None) -> None:
+    """01_spread/: spread.json(다시 쓰기용 EPSG:5179 WKT 포함) · ranges_4326.geojson · weather.json.
+
+    ranges_4326.geojson = 지도 확인용이자 EC2 서버 file 예측(app.predict.file)의 입력 — 피처마다
+    properties.hour(0 ~ 8, 0 = P0 관측 화선. file 예측은 1 ~ 8만 읽는다). weather.json = 이 예측에 쓴
+    기상(predictions.weather 모양, demo/uiseong/prediction_weather.py) — 주면 쓴다.
+    """
     folder.mkdir(parents=True, exist_ok=True)
     out = {
         "calibration": r.calibration,
@@ -187,7 +192,7 @@ def save(r: SpreadResult, folder: Path) -> None:
         "features": [
             {
                 "type": "Feature",
-                "properties": {"range": f"P{i}", "area_ha": a},
+                "properties": {"range": f"P{i}", "hour": i, "area_ha": a},
                 "geometry": mapping(to4326(g)),
             }
             for i, (g, a) in enumerate(zip(r.ranges, r.areas_ha, strict=True))
@@ -196,6 +201,10 @@ def save(r: SpreadResult, folder: Path) -> None:
     (folder / "ranges_4326.geojson").write_text(
         json.dumps(fc, ensure_ascii=False), encoding="utf-8"
     )
+    if weather is not None:
+        (folder / "weather.json").write_text(
+            json.dumps(weather, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
 
 
 def load(folder: Path) -> SpreadResult:

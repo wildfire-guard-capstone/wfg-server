@@ -16,6 +16,9 @@ dependencies = [
     # rules/ geometry (also used by spread/). The worker installs with --no-deps and
     # gets shapely from its conda env.
     "shapely>=2.0",
+    # risk/ grading (RISK-01 in the API, demo step 1b). Raster files need rasterio, which is
+    # imported only when a region grid is configured (RISK_GRID_DIR).
+    "numpy>=1.26",
     # app/ coordinate transforms (EPSG:5179 <-> 4326): file predictor, engine inputs, API.
     "pyproj>=3.6",
     # API auth: JWT access tokens, password hashing.
@@ -47,7 +50,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app", "spread", "evaluation", "rules", "agent", "assistant"]
+packages = ["app", "spread", "evaluation", "rules", "risk", "agent", "assistant"]
 
 [tool.ruff]
 line-length = 100

@@ -11,6 +11,7 @@ Wildfire Guard 백엔드 — API 서버, 확산 예측(ELMFIRE), 평가 하네�
 | `app/` | FastAPI (Router / Service / Adapter). 웹 요청 처리 |
 | `spread/` | 확산 예측 패키지. **FastAPI에 의존하지 않음** — 서버와 평가가 같은 코드를 호출 |
 | `rules/` | 규칙 엔진(대응단계 · 지휘권자 등 판정). 순수 함수만, **FastAPI · DB · `spread`에 의존하지 않음** |
+| `risk/` | 산불 위험도: P5 범위의 23개 변수 등급을 CSV 가중치로 평균한 R(1.00 ~ 5.00). 설계 결정은 [`risk/README.md`](risk/README.md) |
 | `agent/` | 대응 제안 생성: 규칙 엔진 판정 → 근거 검색(RAG) → EXAONE → 검사 → 근거 표기 · 조립 |
 | `assistant/` | AI 어시스턴트(질의응답 · 상황 정정): 입력 구분 → 도구 고르기 → 도구 실행 → EXAONE 답 → 출처 검사 / 정정 확인안 |
 | `demo/uiseong/` | 의성 산불(2025-03-22) 데모: 입력 → 확산 예측 → 규칙 판정 → LLM 대응 생성 → 출력, 뷰어 · 검증 |

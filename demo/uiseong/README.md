@@ -1,13 +1,14 @@
 # 의성 데모: 확산 예측부터 AI 제안 생성까지
 
 2025-03-22 의성 산불(안평면 괴산리)을 상황도 화선 보고 4번(12:50 · 13:10 · 13:45 · 14:20)마다
-**입력 → 1 확산 예측(ELMFIRE) → 2 규칙 판정 → 3 LLM 대응 생성(EXAONE + RAG) → 출력** 순서로 실제로 돌려
+**입력 → 1 확산 예측(ELMFIRE) → 1b 위험도 → 2 규칙 판정 → 3 LLM 대응 생성(EXAONE + RAG) → 출력** 순서로 실제로 돌려
 회차별 제안서를 만든다. 결과는 한 장짜리 뷰어 HTML로 본다. **코드 · 데이터 구조와 디버깅 방법은
 [`docs/의성-데모-구조서.md`](../../docs/의성-데모-구조서.md)**, 입력 데이터는 `demo-uiseong/input/README.md`.
 
 ```
 input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
   → step1_spread.py  8시간 예측(덱 그대로, 11/10 A′)   → P0 ~ P8 · 뒤 상황도 검증            → round_k/01_spread/
+  → step1b_risk.py   P5 + 현재 화선 → 23개 변수 등급 → 위험도 R(risk/)                    → round_k/01b_risk/
   → step2_rules.py   rules.Inputs → build_llm_input(판정 16묶음 + 12개 항목)              → round_k/02_rules/
   → step3_agent.py   항목마다: 판정만 → 근거 검색(질의 3개 + 판정 근거) → EXAONE 제안
                      → 검사(판정 값 · 근거 · 권한 · 형식) → 1회 다시 → 근거 표기 · 조립     → round_k/03_rag · 04_llm · 05_output/
@@ -76,6 +77,12 @@ PYTHONPATH=. ~/miniforge3/envs/wfg-elm/bin/python -X utf8 -m demo.uiseong.verify
 ```
 
 보정 방법 비교(ELMFIRE만, 약 5분): `python -m demo.uiseong.backtest --input … --elmfire … --out <결과>`.
+
+위험도(1b, 11/8 추가): `run_demo`가 확산 예측 바로 뒤에 계산한다(`--risk-mode mean_0_5|at_p5`, `--no-risk`). 입력 준비는 한 번
+`python -m demo.uiseong.prepare_risk_data --input <input> --asos <asos_278_20250312_20250322.csv> --sgis-zip <SGIS zip>`
+(`<input>/risk/`: 시간별 기상 · 읍면동 취약계층 비율). 지역 격자(지형 · 연료 13개 등급, `<input>/risk/grid/`)는 처음 돌 때 만든다(약 1분).
+앞 결과에 위험도만 더하기(ELMFIRE · LLM 없이 로컬): `python -m demo.uiseong.step1b_risk --input <input> --runs <결과 폴더>`.
+의성 4회차(`tune10`의 P5): R 3.11 · 3.11 · 3.08 · 3.09. 변수 정의 · 자료 · 설계 결정은 [`risk/README.md`](../../risk/README.md).
 뷰어(로컬): `uv run python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <demo-uiseong/input> --out viewer.html`.
 
 ## LLM 대응 생성(agent/, 11/8 재설계)

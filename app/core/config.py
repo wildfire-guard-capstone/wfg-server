@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # elmfire면 PREDICTOR_DECK(덱 폴더, demo/uiseong/deck 모양) · ELMFIRE_BIN · PREDICTOR_WORK_DIR
     predictor_deck: str | None = None
     predictor_work_dir: str | None = None
+    # elmfire 기상: point(기준점 한 곳, 기본) · stations(관측소 여러 곳 매분자료 + 예보 × 돌풍 비율,
+    # 의성 시연 방식). stations는 KMA_API_KEY · DATA_GO_KR_API_KEY가 필요하다
+    predictor_weather_field: str = "point"
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
     proposal_writer: str = "fake"
     # 위험도(RISK-01) 지형 7 · 연료 6 변수의 지역 격자 폴더(risk.grid: grades.tif · values.tif ·

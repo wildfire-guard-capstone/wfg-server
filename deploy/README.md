@@ -1,14 +1,15 @@
 # EC2 배포
 
-API 서버 컨테이너(`wfg-api`)를 EC2에 올린다. DB 컨테이너(`wfg-db`)는 따로 떠 있고 이 배포가 건드리지 않는다.
+API 서버 컨테이너(`wfg-api`)와 ELMFIRE worker 컨테이너(`wfg-worker`)를 EC2에 올린다. DB 컨테이너(`wfg-db`)는 따로 떠 있고 이 배포가 건드리지 않는다.
 
 ```
 EC2 /home/ubuntu/wfg/
 ├── compose.yml   ← deploy/compose.ec2.yml (배포 때마다 복사됨)
-├── .env          ← API_IMAGE=…:<커밋> (배포가 씀, 지금 떠 있는 버전)
+├── .env          ← API_IMAGE · WORKER_IMAGE=…:<커밋> (배포가 씀, 지금 떠 있는 버전)
 ├── db.env        ← POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (wfg-db와 같이 씀, 비공개)
 ├── api.env       ← API 설정(없으면 배포가 빈 파일로 만듦, 덮어쓰지 않음) — 「GPU 서버 연결」
-└── data/base/    ← 바탕 데이터 적재 파일 6개 (컨테이너 /data/base, 읽기 전용)
+├── data/base/    ← 바탕 데이터 적재 파일 6개 (컨테이너 /data/base, 읽기 전용)
+└── deck/elmfire_deck/  ← ELMFIRE 덱(릴리스 deck-20261110) — api · worker 둘 다 /deck에 읽기 전용
 ```
 
 - 앱은 `db.env`의 값과 `DB_HOST=wfg-db`로 DB 접속 주소를 만든다(`app/core/config.py`). 비밀번호는 `db.env`에만 있다
@@ -19,8 +20,8 @@ EC2 /home/ubuntu/wfg/
 `main`에 머지되면 `.github/workflows/deploy.yml`이 돈다(서버 파일이 바뀐 경우만, Actions 화면에서 수동 실행도 됨).
 
 ```
-lint · 테스트 → 이미지 빌드(x86) → GHCR(ghcr.io/wildfire-guard-capstone/wfg-api) → EC2 SSH
-→ compose.yml 복사 → 이미지 받기 → 재시작 → /health 확인
+lint · 테스트 → 이미지 빌드(x86): wfg-api · wfg-worker(elmfire-image.yml) → GHCR → EC2 SSH
+→ compose.yml 복사 → 두 이미지 받기 → 재시작 → api /health · worker /health 확인
 ```
 
 - **마이그레이션과 바탕 데이터 적재는 하지 않는다.** 아래 명령으로 직접 한다
@@ -38,7 +39,7 @@ docker exec wfg-api alembic upgrade head                   # 테이블 구조를
 docker exec wfg-api python -m app.db.seed.base             # 바탕 데이터: 대상 DB · 할 일만 확인
 docker exec wfg-api python -m app.db.seed.base --yes       # 바탕 데이터: 모두 지우고 다시 넣기
 
-docker compose logs --tail 100 api                         # 로그
+docker compose logs --tail 100 api                         # 로그(worker도 같은 방식)
 docker compose up -d api                                   # 같은 버전으로 다시 켜기
 ```
 
@@ -49,6 +50,35 @@ rsync -az "<capston-data>/data/지도자원/적재/" wfg-ec2:/home/ubuntu/wfg/da
 ```
 
 API를 내 컴퓨터에서 보려면 터널: `ssh -N -L 8000:127.0.0.1:8000 wfg-ec2` → http://localhost:8000/health
+
+## ELMFIRE 예측 (worker, 구조 B)
+
+ELMFIRE는 worker 컨테이너에서만 돈다. API는 예측 요청 때 기상 입력(관측소 격자 · 발화점 칸 9시간)을
+만들어 worker에 보내고, worker가 P1 ~ P8을 돌려준다(`app/predict/worker_server.py`, docs/ELMFIRE-기상.md).
+
+```
+wfg-api ── 기상 입력(npz) ──▶ http://wfg-worker:8100/run ── ELMFIRE(약 20초 · 1.1 GB) ──▶ P1 ~ P8
+           (wfg-net 안에서만, worker 포트는 밖에 열지 않음)
+```
+
+- worker는 늘 떠 있고 한 번에 1회씩 돌린다(뒤 요청은 기다림). 메모리 상한 1.3 GB(+ 스왑 약 0.7 GB),
+  ELMFIRE 1회 5분 제한. 넘치면 그 예측만 실패하고 api · db는 그대로
+- 덱은 처음 한 번 받아 둔다: 릴리스 `deck-20261110`의 `elmfire_deck_a.zip`을 `deck/`에 풀기
+- **켜기**(`api.env`, 키는 화면에 찍지 않는다):
+
+```bash
+cat >> /home/ubuntu/wfg/api.env <<'ENV'
+PREDICTOR=elmfire
+PREDICTOR_WEATHER_FIELD=stations   # 실시간(관측소 매분자료 + 단기예보). 시연은 deck + WEATHER=asos
+KMA_API_KEY=…                      # API허브(매분자료 · 지상관측)
+DATA_GO_KR_API_KEY=…               # 공공데이터포털(단기예보)
+ENV
+cd /home/ubuntu/wfg && docker compose up -d api
+```
+
+- 확인: `docker compose logs --tail 20 worker` · `docker exec wfg-api python -c "import urllib.request as u; print(u.urlopen('http://wfg-worker:8100/health').read())"`
+- 끄기: `api.env`에서 `PREDICTOR` 줄을 지우고 `docker compose up -d api`(가짜 예측 synthetic으로 돌아감)
+- 관측소 기상을 못 받으면(3곳 미만) 예측 요청이 503 `WEATHER_UNAVAILABLE` — 다른 기상으로 대신하지 않는다
 
 ## GPU 서버 연결 (제안서 · AI 어시스턴트를 EXAONE으로)
 

@@ -149,6 +149,10 @@ def predictor_from_settings() -> Predictor:
         if s.predictor_weather:
             options["weather_path"] = s.predictor_weather
     elif s.predictor == "elmfire":
+        if s.elmfire_worker_url:  # 구조 B: ELMFIRE는 worker 컨테이너(EC2), API는 입력만 보낸다
+            from app.predict.elmfire_remote import ElmfireWorker
+
+            return ElmfireWorker(s.elmfire_worker_url, s.elmfire_worker_timeout_s)
         if not s.predictor_deck:
             raise ValueError("PREDICTOR=elmfire에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
         options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}

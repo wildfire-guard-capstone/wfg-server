@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     #   stations = 실시간(기본) — 관측소 매분자료 + 단기예보, KMA_API_KEY · DATA_GO_KR_API_KEY 필요
     #   deck = 시연 — 덱에 든 의성 관측 기상, WEATHER=asos(기온 · 습도)와 같이 쓴다
     predictor_weather_field: str = "stations"
+    # 구조 B(EC2): ELMFIRE는 worker 컨테이너에서(app.predict.worker_server).
+    # 주소가 있으면 API는 기상 입력만 만들어 보내고, 없으면 같은 프로세스에서 돌린다(GPU 서버).
+    # 시간 제한 = 앞 실행을 기다리는 시간 포함
+    elmfire_worker_url: str | None = None
+    elmfire_worker_timeout_s: float = 900
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose): fake(테스트 문장, 기본) · agent(EXAONE +
     # 근거 검색). agent는 아래 LLM_URL · EVIDENCE_URL(GPU 서버 터널 주소)이 필요하다
     proposal_writer: str = "fake"

@@ -66,6 +66,7 @@ class ElmfirePredictor:
     keep_runs: bool = False  # 실행 폴더를 남길지(확인용)
     adj: float = 1.0  # 확산속도 배율(A′ 덱 = 1, 보정 없음)
     env: dict = field(default_factory=dict)  # PATH · PROJ_DATA · GDAL_DATA
+    timeout_s: float | None = None  # ELMFIRE 1회 시간 제한(넘으면 TimeoutError). None = 제한 없음
     name: str = "elmfire"
 
     def _runs(self) -> Path:
@@ -105,6 +106,7 @@ class ElmfirePredictor:
                 self.adj,
                 own_inputs=own,
                 namelist=weather_namelist(band1),
+                timeout_s=self.timeout_s,
             )
             slices = pr.ranges(res, request.start, HOURS)[1:]  # 4
         finally:

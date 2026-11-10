@@ -181,6 +181,7 @@ def run(
     extra_ignitions: tuple[tuple[float, float, float], ...] = (),
     own_inputs: dict[str, tuple[np.ndarray, dict]] | None = None,
     namelist: dict[str, str] | None = None,
+    timeout_s: float | None = None,
 ) -> RunResult:
     """One ELMFIRE run from `start` (Polygon = perimeter, Point = ignition) for `hours`.
 
@@ -188,6 +189,7 @@ def run(
     own_inputs = {name: (bands, rasterio profile)} written as inputs/<name>.tif for this run
       only (e.g. the request's weather instead of the deck's), never into the deck.
     namelist = {KEY: value} set after the time window (e.g. WS_FILENAME, HOUR_OF_YEAR).
+    timeout_s = stop ELMFIRE after this many seconds (TimeoutError); None = no limit.
     """
     import rasterio
 
@@ -225,9 +227,17 @@ def run(
     (run_dir / "elmfire.data").write_text(text, encoding="utf-8")
     env = {**os.environ, **deck.env}
     t0 = time.time()
-    proc = subprocess.run(
-        [deck.elmfire, "elmfire.data"], cwd=run_dir, env=env, capture_output=True, text=True
-    )
+    try:
+        proc = subprocess.run(
+            [deck.elmfire, "elmfire.data"],
+            cwd=run_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"ELMFIRE가 {timeout_s:g}초 안에 끝나지 않았습니다({run_dir})") from None
     wall = time.time() - t0
     (run_dir / "elmfire.log").write_text(proc.stdout + proc.stderr, encoding="utf-8")
     if proc.returncode != 0 or "successfully" not in proc.stdout:

@@ -4,6 +4,7 @@
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from pathlib import Path
 
 from geoalchemy2.shape import to_shape
 from sqlalchemy.orm import Session
@@ -25,6 +26,14 @@ from app.services.engine import run_engine
 from app.services.risk import compute_risk
 from app.weather import Weather, WeatherProvider, WeatherRequest
 from app.weather.base import check_weather
+from app.weather.elmfire_input import (
+    SOURCES,
+    ElmfireWeatherInput,
+    ElmfireWeatherRequest,
+    ElmfireWeatherSource,
+    check_input,
+    deck_weather_profile,
+)
 
 log = logging.getLogger(__name__)
 PROPOSAL_STAGES = ("RULES", "PROPOSAL_GENERATION")
@@ -42,6 +51,59 @@ def fetch_weather(session: Session, incident_id: int, provider: WeatherProvider)
     return check_weather(provider.fetch(request))
 
 
+def elmfire_source_from_settings(name: str | None = None) -> ElmfireWeatherSource:
+    """ELMFIRE 기상 출처를 고른다 — 실시간(stations) ↔ 시연(deck)을 갈아 끼우는 자리.
+
+    name이 없으면 설정 PREDICTOR_WEATHER_FIELD. 예측마다 다른 출처를 쓰려면 이름을 넘긴다
+    (나중에 PRED-01 options.weather가 여기로 온다). spread는 쓸 때만 불러온다(API 이미지).
+    """
+    s = get_settings()
+    name = name or s.predictor_weather_field
+    if name == "stations":
+        if not (s.kma_api_key and s.data_go_kr_api_key):
+            raise ValueError("기상 출처 stations에는 KMA_API_KEY · DATA_GO_KR_API_KEY가 필요합니다")
+        from app.weather.field import station_field
+
+        return station_field(s.kma_api_key, s.data_go_kr_api_key)
+    if name == "deck":
+        if not s.predictor_deck:
+            raise ValueError("기상 출처 deck에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
+        from app.weather.deck import DeckWeather
+
+        return DeckWeather(Path(s.predictor_deck))
+    raise ValueError(f"모르는 기상 출처: {name} (가능: {' · '.join(SOURCES)})")
+
+
+def build_elmfire_weather(
+    session: Session,
+    incident_id: int,
+    source: ElmfireWeatherSource,
+    provider: WeatherProvider | None = None,
+) -> ElmfireWeatherInput:
+    """현재 화선 기준 ELMFIRE 기상 입력 — 예측 요청 때 만든다(못 만들면 요청이 503).
+
+    1. 0시 = 화선 관측 시각, 발화점 = 저장 · 판정용 9시간을 꺼낼 칸, 격자 = 덱 기상 격자
+    2. 출처가 서버 기상을 쓰면(deck: 기온 · 습도 · 강수) provider로 먼저 받는다
+    3. 출처로 입력을 만들고 모양을 검사한다
+    받지 못하면 WeatherUnavailable, 설정 · 모양이 틀리면 ValueError.
+    """
+    deck = get_settings().predictor_deck
+    if not deck:
+        raise ValueError("PREDICTOR=elmfire에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
+    incident = incidents.get_incident(session, incident_id)  # 1
+    perimeter = incidents.current_perimeter(session, incident_id)
+    base_at = perimeter.observed_at.astimezone(KST)
+    site = site_of(to_shape(incident.ignition_point))
+    server = None
+    if source.uses_server_weather:  # 2
+        if provider is None:
+            raise ValueError(f"기상 출처 {source.name}에는 서버 기상(WEATHER)이 필요합니다")
+        server = fetch_weather(session, incident_id, provider)
+    profile = deck_weather_profile(Path(deck))
+    inp = source.build(ElmfireWeatherRequest(base_at, site, profile, server))  # 3
+    return check_input(inp, profile)
+
+
 def run_prediction(
     session: Session,
     *,
@@ -49,12 +111,14 @@ def run_prediction(
     predictor: Predictor,
     requested_by: int,
     weather: Weather | None = None,
+    elmfire_weather: ElmfireWeatherInput | None = None,
 ) -> int:
     """예측 id를 돌려준다. 커밋은 부르는 쪽이 한다.
 
     1. 현재 화선(없으면 v0 발화점) = P0, 그 관측 시각 = 0시
     2. 예측 제공자에 넘긴다 — 어떤 예측이든 같은 약속(app.predict.base). 받은 기상(weather)이
-       있으면 같이 넘겨 그 기상으로 계산한다(없으면 예측 제공자의 고정값 — 시험 · 개발 명령)
+       있으면 같이 넘겨 그 기상으로 계산한다(없으면 예측 제공자의 고정값 — 시험 · 개발 명령).
+       ELMFIRE는 요청 때 만든 기상 입력(elmfire_weather)을 쓴다
     3. 검사(8개 · 면 · 누적) 후 저장. 기상은 예측에 실제로 쓴 값(결과의 weather) →
        규칙 엔진 · 제안서가 예측과 같은 기상을 쓴다
     """
@@ -63,7 +127,8 @@ def run_prediction(
     start = to_shape(perimeter.geom)
     base_at = perimeter.observed_at.astimezone(KST)
     site = site_of(to_shape(incident.ignition_point))
-    result = predictor.predict(PredictionRequest(start, base_at, site, weather))  # 2
+    request = PredictionRequest(start, base_at, site, weather, elmfire_weather)
+    result = predictor.predict(request)  # 2
     return predictions.save_prediction(  # 3
         session,
         incident_id=incident_id,
@@ -89,17 +154,6 @@ def predictor_from_settings() -> Predictor:
         options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
         if s.predictor_work_dir:
             options["work_dir"] = s.predictor_work_dir
-        if s.predictor_weather_field == "stations":
-            from app.weather.field import station_field  # spread가 있는 곳(GPU 서버)에서만
-
-            if not (s.kma_api_key and s.data_go_kr_api_key):
-                raise ValueError(
-                    "PREDICTOR_WEATHER_FIELD=stations에는 KMA_API_KEY · "
-                    "DATA_GO_KR_API_KEY가 필요합니다"
-                )
-            options["field_provider"] = station_field(s.kma_api_key, s.data_go_kr_api_key)
-        elif s.predictor_weather_field != "point":
-            raise ValueError(f"모르는 PREDICTOR_WEATHER_FIELD: {s.predictor_weather_field}")
     return get_predictor(s.predictor, **options)
 
 
@@ -167,10 +221,12 @@ def run_prediction_operation(
     perimeter_id: int,
     session_factory: SessionFactory,
     weather: Weather | None = None,
+    elmfire_weather: ElmfireWeatherInput | None = None,
 ) -> None:
     """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
-    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT). 기상(weather)은 예측 요청 때 받아 넘긴다
-    (못 받으면 요청이 503 WEATHER_UNAVAILABLE — 명세 v0.4 그대로, 작업은 시작하지 않음).
+    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT). 기상(weather · ELMFIRE면 elmfire_weather)은
+    예측 요청 때 받아 넘긴다(못 받으면 요청이 503 WEATHER_UNAVAILABLE — 명세 v0.4 그대로,
+    작업은 시작하지 않음).
 
     예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
     제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
@@ -185,6 +241,7 @@ def run_prediction_operation(
                 predictor=predictor_from_settings(),
                 requested_by=op.user_id,
                 weather=weather,
+                elmfire_weather=elmfire_weather,
             )
             operations.update(op, stage="RISK")
             _risk_check(db, pid)

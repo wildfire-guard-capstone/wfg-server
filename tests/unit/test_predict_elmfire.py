@@ -1,5 +1,6 @@
-"""ELMFIRE 예측(app.predict.elmfire)과 결과 GeoJSON(app.predict.geojson).
+"""ELMFIRE 예측(app.predict.elmfire) · 시연 기상 출처(app.weather.deck) · 결과 GeoJSON.
 
+예측은 기상 입력(app.weather.elmfire_input)만 받는다 — 시험은 그 약속대로 만든 가짜 입력을 넘긴다.
 전체 흐름 시험은 진짜 ELMFIRE 대신 작은 가짜 실행 파일을 쓴다: 실행 폴더의 namelist ·
 기상 래스터를 읽어 확인하고, 화선에서 동쪽으로 10분에 한 칸씩 번지는 도달시간을 쓴다.
 rasterio · scipy가 없으면(API 이미지) 그 시험만 건너뛴다.
@@ -11,6 +12,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 from pyproj import Transformer
 from shapely.geometry import Point, box, shape
@@ -18,19 +20,42 @@ from shapely.ops import transform
 
 from app.predict import get_predictor
 from app.predict.base import HOURS, PredictionRequest
-from app.predict.elmfire import ElmfirePredictor, namelist_value, weather_namelist
+from app.predict.elmfire import ElmfirePredictor, weather_namelist
 from app.predict.geojson import slices_geojson
-from app.weather.base import WeatherRequest
+from app.weather.base import KST, WeatherRequest, WeatherUnavailable
+from app.weather.deck import DeckWeather
+from app.weather.elmfire_input import (
+    ElmfireWeatherInput,
+    ElmfireWeatherRequest,
+    check_input,
+    deck_weather_profile,
+    floor_hour,
+    namelist_value,
+)
 from app.weather.fixed import FixedWeather
-from spread.weather_input import to_elmfire
+from spread.units import MPH_PER_MS
 
-BASE_AT = datetime.fromisoformat("2025-03-22T12:50:00+09:00")
+BASE_AT = datetime.fromisoformat("2025-03-22T12:50:00+09:00")  # 덱 기상 밴드 2(12:00)
 X0, Y1, CELL, W, H = 1_100_000.0, 1_820_000.0, 30.0, 120, 40  # 3.6 km × 1.2 km
 START = box(X0 + 300, Y1 - 690, X0 + 600, Y1 - 510)  # 10 × 6칸
+_lon, _lat = Transformer.from_crs(5179, 4326, always_xy=True).transform(X0 + 1500, Y1 - 300)
+SITE = (_lat, _lon)  # 발화점 — 덱 기상 격자(600 m, 6 × 2칸)의 칸(0, 2)
+MS_PER_MPH = 1 / MPH_PER_MS
+DECK_FILES = ["adj.tif", "m100_obs.tif", "m10_obs.tif", "m1_obs.tif", "wd_obs.tif", "ws.tif"]
+DECK_FILES = sorted([*DECK_FILES, "ws_gust.tif"])
 
 
-def weather():
-    return FixedWeather(wind_ms=4.0).fetch(WeatherRequest((36.36, 128.60), BASE_AT))
+def server_weather(base_at=BASE_AT):
+    return FixedWeather(wind_ms=4.0).fetch(WeatherRequest(SITE, base_at))
+
+
+def fake_input(ws_ms=4.0, base_at=BASE_AT, shape=(9, 2, 6)):
+    """약속(ElmfireWeatherInput)대로 만든 가짜 입력 — 예측은 출처를 모른다."""
+    values = {"ws": ws_ms * MPH_PER_MS, "wd": 270.0, "m1": 6.0, "m10": 8.0, "m100": 10.0}
+    grids = {k: np.full(shape, v, "float32") for k, v in values.items()}
+    return ElmfireWeatherInput(
+        floor_hour(base_at), grids, server_weather(base_at), {"source": "test"}
+    )
 
 
 def test_namelist_value_and_weather_keys():
@@ -38,8 +63,7 @@ def test_namelist_value_and_weather_keys():
     assert namelist_value(text, "WS_FILENAME") == "ws_gust"
     with pytest.raises(KeyError):
         namelist_value(text, "M1_FILENAME")
-    wx = to_elmfire(weather())
-    nl = weather_namelist(wx, wx.t0)
+    nl = weather_namelist(floor_hour(BASE_AT))
     assert nl["WS_FILENAME"] == "'wx_ws'" and nl["M100_FILENAME"] == "'wx_m100'"
     assert nl["HOUR_OF_YEAR"] == "1932" and nl["CURRENT_YEAR"] == "2025"  # 12:00
 
@@ -122,8 +146,18 @@ def fake_deck(tmp_path):
         "count": 151,
         "transform": from_origin(X0, Y1, 600, 600),
     }
-    with rasterio.open(deck / "inputs" / "ws_gust.tif", "w", **wxp) as w:
-        w.write(np.full((151, 2, 6), 99.0, "float32"))
+    bands = np.arange(1, 152, dtype="float32")[:, None, None] * np.ones((1, 2, 6), "float32")
+    rasters = {
+        "ws_gust": 10.0 + bands,  # 1분 최대(mph): 밴드 b = 10 + b
+        "ws": 5.0 + bands,  # 시간평균(mph): 밴드 b = 5 + b
+        "wd_obs": np.full((151, 2, 6), 270.0, "float32"),
+        "m1_obs": np.full((151, 2, 6), 6.0, "float32"),
+        "m10_obs": np.full((151, 2, 6), 8.0, "float32"),
+        "m100_obs": np.full((151, 2, 6), 10.0, "float32"),
+    }
+    for name, a in rasters.items():
+        with rasterio.open(deck / "inputs" / f"{name}.tif", "w", **wxp) as w:
+            w.write(a.astype("float32"))
     (deck / "elmfire.data").write_text(
         "&INPUTS\nFUELS_AND_TOPOGRAPHY_DIRECTORY = './inputs'\nWEATHER_DIRECTORY = './inputs'\n"
         "WS_FILENAME = 'ws_gust'\nWD_FILENAME = 'wd_obs'\nM1_FILENAME = 'm1_obs'\n"
@@ -141,18 +175,19 @@ def fake_deck(tmp_path):
     return deck, str(exe)
 
 
-def test_predict_writes_request_weather_and_cuts_hourly_ranges(fake_deck, tmp_path):
+def test_predict_writes_input_grids_and_cuts_hourly_ranges(fake_deck, tmp_path):
     deck, exe = fake_deck
     pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True)
-    w = weather()
-    result = pred.predict(PredictionRequest(START, BASE_AT, (36.36, 128.60), w))
+    inp = fake_input()
+    result = pred.predict(PredictionRequest(START, BASE_AT, SITE, None, inp))
 
     seen = json.loads((tmp_path / "runs").glob("pred_*/seen.json").__next__().read_text())
     assert seen["WS_FILENAME"] == "wx_ws" and seen["M1_FILENAME"] == "wx_m1"
-    assert seen["ws_bands"] == 9 and seen["ws0"] == pytest.approx(4.0 * 2.23694, abs=1e-3)
+    assert seen["ws_bands"] == 9 and seen["ws0"] == pytest.approx(4.0 * MPH_PER_MS, abs=1e-3)
     assert seen["HOUR_OF_YEAR"] == "1932" and seen["NUM_IGNITIONS"] == "0"
     assert result.meta["t_start_s"] == 3000.0  # 12:50 − 12:00
-    assert result.weather is w and result.source == "elmfire"
+    assert result.meta["weather_input"] == {"source": "test"}
+    assert result.weather is inp.weather and result.source == "elmfire"
 
     assert len(result.slices) == HOURS
     for small, big in zip([START, *result.slices], result.slices, strict=False):
@@ -161,57 +196,71 @@ def test_predict_writes_request_weather_and_cuts_hourly_ranges(fake_deck, tmp_pa
     assert result.slices[0].bounds[2] == pytest.approx(START.bounds[2] + 180, abs=CELL)
     assert result.slices[1].area > result.slices[0].area
     # 덱 원본은 그대로(실행 폴더에만 썼다)
-    assert sorted(p.name for p in (deck / "inputs").iterdir()) == ["adj.tif", "ws_gust.tif"]
+    assert sorted(p.name for p in (deck / "inputs").iterdir()) == DECK_FILES
 
 
-def test_predict_removes_run_dir_and_rejects_outside_or_mismatched(fake_deck, tmp_path):
+def test_predict_needs_input_and_rejects_outside_mismatched_or_bad_grid(fake_deck, tmp_path):
     deck, exe = fake_deck
     pred = ElmfirePredictor(deck, exe, tmp_path / "runs")
-    pred.predict(PredictionRequest(Point(X0 + 450, Y1 - 600), BASE_AT, (36.4, 128.6), weather()))
+    pred.predict(PredictionRequest(Point(X0 + 450, Y1 - 600), BASE_AT, SITE, None, fake_input()))
     assert not list((tmp_path / "runs").glob("pred_*"))
 
+    with pytest.raises(ValueError, match="기상 입력이 없습니다"):
+        pred.predict(PredictionRequest(START, BASE_AT, SITE))
     far = box(X0 - 5000, Y1 - 600, X0 - 4000, Y1 - 300)
     with pytest.raises(ValueError, match="덱 범위"):
-        pred.predict(PredictionRequest(far, BASE_AT, (36.4, 128.6), weather()))
+        pred.predict(PredictionRequest(far, BASE_AT, SITE, None, fake_input()))
     late = BASE_AT + timedelta(hours=2)
     with pytest.raises(ValueError, match="맞지 않습니다"):
-        pred.predict(PredictionRequest(START, late, (36.4, 128.6), weather()))
+        pred.predict(PredictionRequest(START, late, SITE, None, fake_input()))
+    with pytest.raises(ValueError, match="격자가"):
+        pred.predict(PredictionRequest(START, BASE_AT, SITE, None, fake_input(shape=(9, 3, 6))))
 
 
-class _Field:
-    """관측소 기상 격자 대신: 풍속 7 m/s 격자를 주거나(ok) 실패한다."""
-
-    def __init__(self, ok=True):
-        self.ok, self.calls = ok, []
-
-    def build(self, base_at, profile):
-        import numpy as np
-
-        from app.weather.base import WeatherUnavailable
-
-        self.calls.append((base_at, profile["width"], profile["height"]))
-        if not self.ok:
-            raise WeatherUnavailable("관측소 0곳")
-        shape = (9, profile["height"], profile["width"])
-        grids = {k: np.full(shape, 5.0, "float32") for k in ("wd", "m1", "m10", "m100")}
-        grids["ws"] = np.full(shape, 7.0 * 2.23694, "float32")
-        return grids, {"stations": ["278"], "kinds": {"관측": 1, "예보": 8}}
-
-
-def test_predict_uses_station_field_on_weather_grid_or_falls_back(fake_deck, tmp_path):
+def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):
+    """시연 출처: 덱 기상에서 화선 시각부터 9밴드, 발화점 칸 바람 + 서버 기상의 기온 · 습도."""
     deck, exe = fake_deck
-    f = _Field()
-    pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True, field_provider=f)
-    result = pred.predict(PredictionRequest(START, BASE_AT, (36.36, 128.60), weather()))
-    assert f.calls == [(BASE_AT, 6, 2)]  # 덱 기상 격자(600 m) 크기로 부른다
-    assert result.meta["weather_field"]["mode"] == "stations"
-    seen = json.loads(next(Path(result.meta["run_dir"]).glob("seen.json")).read_text())
-    assert seen["ws0"] == pytest.approx(7.0 * 2.23694, abs=1e-3)  # 격자 값이 들어갔다
+    profile = deck_weather_profile(deck)
+    server = server_weather()
+    inp = DeckWeather(deck).build(ElmfireWeatherRequest(BASE_AT, SITE, profile, server))
+    check_input(inp, profile)
+    assert inp.t0 == datetime(2025, 3, 22, 12, tzinfo=KST)  # 덱 시작 11:00 → 밴드 2부터
+    assert inp.meta["bands"] == [2, 10] and inp.meta["temp_humidity_from"] == "FIXED"
+    assert inp.grids["ws"][:, 0, 0].tolist() == [10.0 + b for b in range(2, 11)]
+    w, h0, h8 = inp.weather, inp.weather["hours"][0], inp.weather["hours"][8]
+    assert w["source"] == "AWS_OBS" and {h["kind"] for h in w["hours"]} == {"관측"}
+    assert h0["wind_max_1min"] == pytest.approx(12.0 * MS_PER_MPH, abs=0.01)  # 밴드 2 = 12 mph
+    assert h0["wind_speed"] == pytest.approx(7.0 * MS_PER_MPH, abs=0.01)  # ws.tif 밴드 2 = 7 mph
+    assert h8["wind_max_1min"] == pytest.approx(20.0 * MS_PER_MPH, abs=0.01)
+    assert h0["wind_dir"] == 270.0 and h0["temp"] == server["hours"][0]["temp"]
 
-    bad = ElmfirePredictor(deck, exe, tmp_path / "runs2", field_provider=_Field(ok=False))
-    result = bad.predict(PredictionRequest(START, BASE_AT, (36.36, 128.60), weather()))
-    assert result.meta["weather_field"]["mode"] == "point"
-    assert "관측소 0곳" in result.meta["weather_field"]["fallback"]
+    # 이 입력으로 돌리면 덱 밴드 2가 ELMFIRE 0시로 들어가고, 결과 기상 = 발화점 칸 9시간
+    pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True)
+    result = pred.predict(PredictionRequest(START, BASE_AT, SITE, None, inp))
+    seen = json.loads(next(Path(result.meta["run_dir"]).glob("seen.json")).read_text())
+    assert seen["ws0"] == 12.0 and seen["ws_bands"] == 9
+    assert result.weather is w and result.meta["weather_input"]["source"] == "deck"
+
+
+def test_deck_weather_outside_time_or_without_server_weather(fake_deck):
+    """덱에 없는 시각 · 서버 기상 없음은 WeatherUnavailable(요청 503) — 다른 기상으로 대신 안 함."""
+    deck, _ = fake_deck
+    profile = deck_weather_profile(deck)
+    src = DeckWeather(deck)
+    early = datetime(2025, 3, 22, 10, 30, tzinfo=KST)  # 덱은 11:00부터
+    late = datetime(2025, 3, 28, 10, 0, tzinfo=KST)  # 끝(3/28 17:00)까지 9시간이 안 됨
+    for at in (early, late):
+        with pytest.raises(WeatherUnavailable, match="시연 기상"):
+            src.build(ElmfireWeatherRequest(at, SITE, profile, server_weather(at)))
+    with pytest.raises(WeatherUnavailable, match="서버 기상"):
+        src.build(ElmfireWeatherRequest(BASE_AT, SITE, profile, None))
+
+
+def test_weather_sources_are_stations_and_deck_only():
+    from app.services.prediction import elmfire_source_from_settings
+
+    with pytest.raises(ValueError, match="모르는 기상 출처"):
+        elmfire_source_from_settings("point")
 
 
 def test_api_starts_without_spread_package():

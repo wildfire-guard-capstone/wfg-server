@@ -23,6 +23,7 @@ from assistant.context import (
     ITEM_NAMES,
     Context,
     paragraphs,
+    slot_value,
 )
 
 
@@ -442,7 +443,10 @@ class ToolBox:
             g = dep.get(group)
             if not g:
                 continue
-            by = " · ".join(f"{labels[k]} {num(v)}" for k, v in g.items() if k in labels and v)
+            # 합계만 보고된 남는 몫도 미상 · 기타로 보인다(엔진 입력과 같은 규칙)
+            by = " · ".join(
+                f"{labels[k]} {num(v)}" for k in labels if (v := slot_value(g, group, k))
+            )
             unit = GROUP_UNITS[group]
             r.facts.append(
                 Fact(

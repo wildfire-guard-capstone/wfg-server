@@ -122,6 +122,10 @@ def test_total_only_report_counts_as_unknown_everywhere():
     assert items == {"helicopter.unknown": (5, 4), "helicopter.total": (25, 24)}
     assert all(_current(ctx.situation, c) == c["before"] for c in out["changes"])
     assert dict(deployed_of(ctx.situation).helicopter) == {"산림청": 20, "미상": 5}
+    from assistant.tools import ToolBox  # 질문 답에도 미상 몫이 보인다
+
+    heli = ToolBox(ctx).run("resources", "").facts[0]
+    assert heli.value == "25대(산림청 20 · 미상 5)"
 
 
 def test_crew_without_agency_goes_to_other_with_note():

@@ -145,8 +145,8 @@ def test_correction_rejections(client, login, reported):
     assert r.json()["data"]["type"] == "UNSUPPORTED"
     r = ask(client, reported, cmd, "없는마을리 대피 완료")
     assert (r.status_code, r.json()["error"]["code"]) == (422, "TARGET_NOT_FOUND")
-    r = ask(client, reported, cmd, "헬기 2대 철수")  # 뺄 미상 헬기가 없음 → 어느 기관인지 묻기
-    assert r.json()["data"]["type"] == "UNSUPPORTED" and "어느 기관" in r.json()["data"]["reason"]
+    r = ask(client, reported, cmd, "헬기 2대 철수")  # 투입 기록이 없는데 줄이면 0 아래 → 422
+    assert (r.status_code, r.json()["error"]["code"]) == (422, "INVALID_COUNT")
     bad = client.post(
         f"{URL}/{reported['id']}/corrections",
         json={"confirmation_token": "not-a-token-at-all"},

@@ -7,7 +7,7 @@
 
 ```
 input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
-  → step1_spread.py  8시간 예측(덱 고정 보정, 11/9) → P0 ~ P8 · 뒤 상황도 검증            → round_k/01_spread/
+  → step1_spread.py  8시간 예측(덱 그대로, 11/10 A′)   → P0 ~ P8 · 뒤 상황도 검증            → round_k/01_spread/
   → step2_rules.py   rules.Inputs → build_llm_input(판정 16묶음 + 12개 항목)              → round_k/02_rules/
   → step3_agent.py   항목마다: 판정만 → 근거 검색(질의 3개 + 판정 근거) → EXAONE 제안
                      → 검사(판정 값 · 근거 · 권한 · 형식) → 1회 다시 → 근거 표기 · 조립     → round_k/03_rag · 04_llm · 05_output/
@@ -26,8 +26,9 @@ input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
 | 3 | v3.1 | 13:45 3보 | 의성군수 | ① 2보 → 3보 · ② 3보 + 발화 뒤 평균 |
 | 4 | v4.1 | 14:20 4보 | 경상북도지사 | ① 3보 → 4보 · ② 4보 + 발화 뒤 평균 |
 
-**확산 예측 최종 설정(11/9):** 덱을 최종 설정으로 바꾸고 보정 기본값을 `fixed`(회차마다 배율을 찾지 않음,
-덱 `adj.tif` = 산림 칸 ×2)로 바꿨다. 덱 내용 · 바꾼 것 · 근거(의성 1 ~ 6보 19쌍 F2 0.580 → 0.640)는
+**확산 예측 최종 설정(11/10, A′):** 보정 기본값은 `fixed`(회차마다 배율을 찾지 않음). 덱은 국내 연료 특성값
+(침엽 SAV 200 cm⁻¹ · 활엽 124 cm⁻¹ · 연료층 깊이 = 1시간 연료량 ÷ 20 kg/m³)에 확산속도 보정 없음(`adj.tif` = 1).
+11/9 덱(미국 특성값 + 산림 ×2)에서 바꿨다. 덱 내용 · 근거(의성 1 ~ 6보 19쌍 F2 0.580 → 0.640 → 0.654, IoU 0.454)는
 [`deck/README.md`](deck/README.md). 아래 회차 표의 배율 열과 blend 설명은 11/8까지의 기록이다
 (`--calibration blend`로 그대로 돌릴 수 있다).
 
@@ -35,7 +36,7 @@ input/(scenario.json · 화선 · 지도 · ELMFIRE 입력)
 그것을, 없으면 덱 namelist의 `WS_FILENAME` · `WD_FILENAME`을 쓴다. 최종 덱은 `ws_gust`(시간 안 가장 센 1분 풍속)라
 그대로면 평균풍속보다 크게 들어가 대응단계의 풍속 기준 판정이 올라갈 수 있다 — 이때 실행 기록에 「! 규칙 엔진 바람: … 돌풍 값」을
 찍고 `round_k.json`의 `weather.wind_source`에 남긴다. 평균풍속으로 판정하려면 최종 덱 `inputs/`에 시간평균 `ws.tif` · `wd.tif`를
-함께 둔다(ELMFIRE는 namelist의 `ws_gust` · `wd_obs`를 그대로 쓴다). 11/9 서버 실행 `runs/e45-1109`는 11/1 덱의 시간평균
+함께 둔다(ELMFIRE는 namelist의 `ws_gust` · `wd_obs`를 그대로 쓴다). 11/10 A′ 덱에는 `ws` · `wd`가 들어 있다. 11/9 서버 실행 `runs/e45-1109`는 11/1 덱의 시간평균
 `ws` · `wd`(시간 기준 같음: 밴드 1 = 3/22 11:00)를 넣은 `~/wfg/demo/deck_e45`로 돌렸다.
 
 **보정 방법 바꾼 이유(11/8, 사용자 결정):** 11/7에는 ①(직전 구간)만 썼는데 배율이 2.75 ~ 7.0으로 흔들렸다

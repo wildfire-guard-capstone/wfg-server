@@ -4,9 +4,10 @@
     res = run_spread(deck, work, md, rd, sc, method)   # ELMFIRE 실행(GPU 서버, CPU로 돈다)
     save(res, folder) / load(folder)                    # 01_spread/spread.json (다음 실행에서 --reuse-spread)
 
-보정(11/9 최종 설정, 기본 fixed): 회차마다 배율을 찾지 않고 덱의 adj(산림 칸 ×2)를 그대로 쓴다(배율 1).
-  덱 = 관측소 22곳 돌풍 · 관측 연료수분 · CROWN_RATIO 0.02 · 엽수분 85 % · 비화 끔(demo/uiseong/deck/README.md).
-  의성 1 ~ 6보 재시작 19쌍 F2 0.640(blend 0.580, 최종 덱 + blend 0.601) — 근거는 deck/README.md.
+보정(기본 fixed): 회차마다 배율을 찾지 않고 덱의 adj를 그대로 쓴다(배율 1).
+  11/10 최종 덱 A′ = 국내 연료 특성값(침엽 SAV 200 cm⁻¹ · 활엽 124 cm⁻¹ · 깊이 = 1시간 연료량 ÷ 20 kg/m³), adj 1(보정 없음),
+  관측소 22곳 돌풍 · 관측 연료수분 · CROWN_RATIO 0.02 · 엽수분 85 % · 비화 끔(demo/uiseong/deck/README.md).
+  의성 1 ~ 6보 재시작 19쌍 F2 0.654 · IoU 0.454(11/9 덱 0.640, 11/1 덱 + blend 0.580).
 이전 방법(11/7 · 11/8): 두 배율의 기하평균(blend)
   ① k−1보 화선 → k보 화선 면적 맞춤 ② k보 화선에서 발화 뒤 평균 성장 속도를 1시간 잇기. 1회차는 ②만.
 """
@@ -26,7 +27,7 @@ from demo.uiseong.rounds import Round, Scenario
 from spread import perimeter_run as pr
 
 CAL_METHODS = {
-    "fixed": "덱의 확산속도 보정(산림 칸 ×2)을 그대로 씀, 배율 1(11/9 최종 설정, 기본)",
+    "fixed": "덱의 확산속도 보정(adj.tif)을 그대로 씀, 배율 1(기본 — 11/10 A′ 덱은 보정 없음)",
     "blend": "직전 구간 배율과 발화 뒤 평균 속도 배율의 기하평균(11/8 사용자 결정, 기본)",
     "interval": "직전 구간(k−1보 화선 → k보 화선) 면적 맞춤(11/7)",
     "rate": "발화 뒤 평균 성장 속도 유지(k보 화선 + 1시간 = 면적 ÷ 발화 뒤 시간)",

@@ -92,6 +92,7 @@ jobs:
           set -e
           cd /home/ubuntu/wfg
           echo "API_IMAGE=${IMAGE}:${GITHUB_SHA}" > .env   # compose reads it; pins this version
+          touch api.env   # optional API settings, edited by hand on EC2; never overwritten
           docker compose pull api
           docker logout ghcr.io >/dev/null
           docker compose up -d api

@@ -226,3 +226,18 @@ def bases(session: Session, incident_id: int) -> list[Base]:
             )
         )
     return out
+
+
+def known_names(session: Session) -> set[str]:
+    """바탕 데이터의 고유 이름(리 · 읍면동 · 시군구 · 시설 · 기지, 두 글자 이상) —
+    에이전트 작성기가 제안 문장에 나온 이름이 판정 · 근거에 있는지 검사할 때 쓴다
+    (의성 시연의 demo.uiseong.step3_agent.known_names와 같은 범위)."""
+    rows = session.execute(
+        text(
+            "SELECT name FROM villages"
+            " UNION SELECT name FROM admin_areas WHERE parent_id IS NOT NULL"
+            " UNION SELECT name FROM facilities"
+            " UNION SELECT name FROM resource_bases"
+        )
+    ).scalars()
+    return {n for n in rows if n and len(n) >= 2}

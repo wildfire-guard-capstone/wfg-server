@@ -157,3 +157,32 @@ def test_predictor_from_settings_uses_worker_when_url_given(monkeypatch):
     p = prediction.predictor_from_settings()
     assert isinstance(p, ElmfireWorker) and p.url == "http://wfg-worker:8100"
     assert p.timeout_s == 600.0 and p.name == "elmfire"
+
+
+def test_prediction_mode_field_accepts_live_and_demo_only():
+    from pydantic import ValidationError
+
+    from app.schemas.prediction import PredictionRequestIn
+
+    assert PredictionRequestIn(expected_perimeter_id=1).mode is None  # 없으면 서버 기본
+    assert PredictionRequestIn(expected_perimeter_id=1, mode="LIVE").mode == "LIVE"
+    assert PredictionRequestIn(expected_perimeter_id=1, mode="DEMO_ELMFIRE").mode == "DEMO_ELMFIRE"
+    for bad in ("DEMO_REPLAY", "live", "ELMFIRE"):  # 시연 2는 아직 없음
+        with pytest.raises(ValidationError):
+            PredictionRequestIn(expected_perimeter_id=1, mode=bad)
+
+
+def test_mode_picks_elmfire_even_when_default_is_synthetic(monkeypatch):
+    from app.services import prediction
+
+    settings = SimpleNamespace(
+        predictor="synthetic",
+        elmfire_worker_url="http://wfg-worker:8100",
+        elmfire_worker_timeout_s=900.0,
+        predictor_deck="/deck",
+    )
+    monkeypatch.setattr(prediction, "get_settings", lambda: settings)
+    assert prediction.predictor_from_settings().name == "synthetic"  # 모드 없음 = 서버 기본
+    for mode in ("LIVE", "DEMO_ELMFIRE"):
+        assert isinstance(prediction.predictor_from_settings(mode), ElmfireWorker)
+    assert prediction.MODE_SOURCES == {"LIVE": "stations", "DEMO_ELMFIRE": "deck"}

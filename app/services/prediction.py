@@ -4,6 +4,7 @@
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from pathlib import Path
 
 from geoalchemy2.shape import to_shape
@@ -112,8 +113,9 @@ def run_prediction(
     requested_by: int,
     weather: Weather | None = None,
     elmfire_weather: ElmfireWeatherInput | None = None,
+    mode: str | None = None,
 ) -> int:
-    """예측 id를 돌려준다. 커밋은 부르는 쪽이 한다.
+    """예측 id를 돌려준다. 커밋은 부르는 쪽이 한다. mode(PRED-01)는 이벤트 로그에 남긴다.
 
     1. 현재 화선(없으면 v0 발화점) = P0, 그 관측 시각 = 0시
     2. 예측 제공자에 넘긴다 — 어떤 예측이든 같은 약속(app.predict.base). 받은 기상(weather)이
@@ -129,6 +131,8 @@ def run_prediction(
     site = site_of(to_shape(incident.ignition_point))
     request = PredictionRequest(start, base_at, site, weather, elmfire_weather)
     result = predictor.predict(request)  # 2
+    if mode:
+        result = replace(result, meta={**result.meta, "mode": mode})
     return predictions.save_prediction(  # 3
         session,
         incident_id=incident_id,
@@ -140,24 +144,40 @@ def run_prediction(
     )
 
 
-def predictor_from_settings() -> Predictor:
-    """설정(PREDICTOR · PREDICTOR_PATH …)으로 예측 제공자를 고른다 — 팀원이 갈아 끼우는 자리."""
+# 예측 모드(PRED-01 mode, app.schemas.prediction.PredictionMode) → ELMFIRE 기상 출처.
+# 모드가 없으면 서버 기본 설정(PREDICTOR · WEATHER · PREDICTOR_WEATHER_FIELD)을 따른다.
+MODE_SOURCES = {"LIVE": "stations", "DEMO_ELMFIRE": "deck"}
+
+
+def elmfire_predictor_from_settings() -> Predictor:
+    """ELMFIRE 예측. 구조 B(EC2): ELMFIRE_WORKER_URL이 있으면 worker 컨테이너로 보내고,
+    없으면 같은 프로세스에서 돌린다(GPU 서버 — PREDICTOR_DECK · ELMFIRE_BIN)."""
     s = get_settings()
+    if s.elmfire_worker_url:
+        from app.predict.elmfire_remote import ElmfireWorker
+
+        return ElmfireWorker(s.elmfire_worker_url, s.elmfire_worker_timeout_s)
+    if not s.predictor_deck:
+        raise ValueError("ELMFIRE 예측에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
+    options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
+    if s.predictor_work_dir:
+        options["work_dir"] = s.predictor_work_dir
+    return get_predictor("elmfire", **options)
+
+
+def predictor_from_settings(mode: str | None = None) -> Predictor:
+    """예측 제공자를 고른다 — 팀원이 갈아 끼우는 자리.
+
+    모드(LIVE · DEMO_ELMFIRE)가 있으면 ELMFIRE, 없으면 설정(PREDICTOR · PREDICTOR_PATH …).
+    """
+    s = get_settings()
+    if mode in MODE_SOURCES or s.predictor == "elmfire":
+        return elmfire_predictor_from_settings()
     options = {}
     if s.predictor == "file":
         options = {"path": s.predictor_path, "crs": s.predictor_crs}
         if s.predictor_weather:
             options["weather_path"] = s.predictor_weather
-    elif s.predictor == "elmfire":
-        if s.elmfire_worker_url:  # 구조 B: ELMFIRE는 worker 컨테이너(EC2), API는 입력만 보낸다
-            from app.predict.elmfire_remote import ElmfireWorker
-
-            return ElmfireWorker(s.elmfire_worker_url, s.elmfire_worker_timeout_s)
-        if not s.predictor_deck:
-            raise ValueError("PREDICTOR=elmfire에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
-        options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
-        if s.predictor_work_dir:
-            options["work_dir"] = s.predictor_work_dir
     return get_predictor(s.predictor, **options)
 
 
@@ -226,26 +246,32 @@ def run_prediction_operation(
     session_factory: SessionFactory,
     weather: Weather | None = None,
     elmfire_weather: ElmfireWeatherInput | None = None,
+    mode: str | None = None,
 ) -> None:
     """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
     → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT). 기상(weather · ELMFIRE면 elmfire_weather)은
     예측 요청 때 받아 넘긴다(못 받으면 요청이 503 WEATHER_UNAVAILABLE — 명세 v0.4 그대로,
-    작업은 시작하지 않음).
+    작업은 시작하지 않음). mode(LIVE · DEMO_ELMFIRE · 없음 = 서버 기본)로 예측을 고르고,
+    성공하면 result에 쓴 모드 · 예측 이름을 남긴다.
 
     예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
     제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
     근거 검색은 작성기 안에서 하므로 EVIDENCE 단계는 따로 두지 않는다.
     """
     operations.update(op, status="RUNNING", stage="SPREAD")
+    predictor_name = None
     with session_factory() as db:
         try:
+            predictor = predictor_from_settings(mode)
+            predictor_name = predictor.name
             pid = run_prediction(
                 db,
                 incident_id=op.incident_id,
-                predictor=predictor_from_settings(),
+                predictor=predictor,
                 requested_by=op.user_id,
                 weather=weather,
                 elmfire_weather=elmfire_weather,
+                mode=mode,
             )
             operations.update(op, stage="RISK")
             _risk_check(db, pid)
@@ -280,5 +306,10 @@ def run_prediction_operation(
     operations.update(
         op,
         status="SUCCEEDED",
-        result={"prediction_id": str(pid), "proposal_id": str(proposal_id)},
+        result={
+            "prediction_id": str(pid),
+            "proposal_id": str(proposal_id),
+            "mode": mode,  # 요청한 모드, null = 서버 기본 설정
+            "predictor": predictor_name,  # 실제로 쓴 예측(synthetic · file · elmfire)
+        },
     )

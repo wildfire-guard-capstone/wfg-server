@@ -92,7 +92,10 @@ def main() -> None:
     risk_data = None
     if not a.no_risk:
         if (a.input / "risk" / "weather_hourly.csv").exists():
-            risk_data = step1b_risk.RiskData.load(a.input, deck_dir)
+            try:  # 자료 · 패키지(rasterio · scipy)가 덜 갖춰졌으면 위험도만 빼고 계속
+                risk_data = step1b_risk.RiskData.load(a.input, deck_dir)
+            except Exception as exc:  # noqa: BLE001
+                print(f"위험도: 준비하지 못해 건너뜀 — {type(exc).__name__}: {exc}", flush=True)
         else:
             print("위험도: <input>/risk/가 없어 건너뜀(prepare_risk_data.py로 만든다)", flush=True)
     wanted = {int(x) for x in a.rounds.split(",") if x.strip()} or {r.no for r in sc.rounds}

@@ -159,6 +159,6 @@ def get_weather(
 def get_risk(
     incident_id: IncidentId, prediction_id: PredictionId, request: Request, user: Analyst, db: Db
 ):
-    """RISK-01. ⚠ 가짜 위험도(method_version = fake-0) — 계산은 services.risk.grade_factors."""
+    """RISK-01. 계산은 services.risk(risk/ 패키지) — 못 구한 변수는 빼고 PARTIAL."""
     p = load_prediction(db, user, incident_id, prediction_id)
     return ok(request, compute_risk(db, p))

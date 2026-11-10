@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     predictor_weather: str | None = None
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
     proposal_writer: str = "fake"
+    # 위험도(RISK-01) 지형 7 · 연료 6 변수의 지역 격자 폴더(risk.grid: grades.tif · values.tif ·
+    # meta.json, rasterio 필요). 비우면 그 13개는 빼고 나머지 변수로 계산한다
+    risk_grid_dir: Path | None = None
 
     # AI 어시스턴트(AI-01): rules = LLM 없이 규칙만(개발 · 시험), exaone = vLLM(EXAONE) + 근거 서버.
     # GPU 서버의 vLLM · 근거 서버는 127.0.0.1에서만 열리므로 API 서버에서는 터널 주소를 넣는다.

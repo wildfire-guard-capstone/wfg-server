@@ -12,7 +12,7 @@ class RiskFactorOut(BaseModel):
     name: str
     axis: str
     raw_value: float | str | None
-    grade: int | None
+    grade: float | None  # 1 ~ 5. 면적 · 시각 평균이라 소수일 수 있음(명세는 integer — 협의 필요)
     weight: float
     included: bool
     contribution: float | None

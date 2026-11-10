@@ -40,6 +40,7 @@ from app.weather.elmfire_input import (
     NAMELIST_KEYS,
     check_input,
     deck_weather_profile,
+    elmfire_bands,
 )
 from spread import perimeter_run as pr
 from spread.weather_input import hour_of_year
@@ -86,11 +87,12 @@ class ElmfirePredictor:
         check_inside(request.start, profile)
         wx_profile = deck_weather_profile(Path(self.deck))  # 1
         check_input(inp, wx_profile)
-        t_start_s = (base_at - inp.t0).total_seconds()
-        if not 0 <= t_start_s < 3600:
+        if not 0 <= (base_at - inp.t0).total_seconds() < 3600:
             raise ValueError(f"기상 0시({inp.t0})와 화선 시각({base_at})이 맞지 않습니다")
+        bands, band1 = elmfire_bands(inp)  # 앞 밴드가 있으면 밴드 1 = 0시 − 1시간
+        t_start_s = (base_at - band1).total_seconds()
         wx_profile.update(compress="deflate")
-        own = {f"wx_{k}": (inp.grids[k], wx_profile) for k in GRID_KEYS}  # 2
+        own = {f"wx_{k}": (bands[k], wx_profile) for k in GRID_KEYS}  # 2
 
         run_dir = self._runs() / f"pred_{base_at:%Y%m%d_%H%M}_{uuid.uuid4().hex[:8]}"
         try:
@@ -102,7 +104,7 @@ class ElmfirePredictor:
                 request.start,
                 self.adj,
                 own_inputs=own,
-                namelist=weather_namelist(inp.t0),
+                namelist=weather_namelist(band1),
             )
             slices = pr.ranges(res, request.start, HOURS)[1:]  # 4
         finally:
@@ -112,6 +114,7 @@ class ElmfirePredictor:
             "deck": str(self.deck),
             "adj": self.adj,
             "t_start_s": t_start_s,
+            "lead_band": inp.lead is not None,
             "wall_s": round(res.wall_s, 1),
             "weather_input": inp.meta,  # 출처 · 관측소 · 덱 밴드
         }

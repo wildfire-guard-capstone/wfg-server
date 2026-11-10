@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from pyproj import Transformer
 
 from app.weather.aws_minute import AwsMinute, hours_back
@@ -39,7 +40,14 @@ from app.weather.elmfire_input import (
 )
 from app.weather.kma import KmaForecast, grid
 from spread.units import MPH_PER_MS
-from spread.weather_field import GUST_HOURS, Station, blend_at, interpolate, station_series
+from spread.weather_field import (
+    GUST_HOURS,
+    Station,
+    StationSeries,
+    blend_at,
+    interpolate,
+    station_series,
+)
 
 STATIONS_CSV = Path(__file__).resolve().parents[2] / "config" / "weather_stations.csv"
 _TO_5179 = Transformer.from_crs(4326, 5179, always_xy=True).transform
@@ -133,6 +141,7 @@ class StationField:
             )
 
         grids = interpolate(used, series, profile)  # 4
+        lead, lead_obs = lead_band(used, series, {st.id: obs[st.id][0] for st in used}, t0, profile)
         row, col = site_cell(profile, request.site)
         mix = blend_at(used, series, *cell_centre(profile, row, col))
         hours = []
@@ -173,10 +182,35 @@ class StationField:
             },
             "forecast_grids": len(sites),
             "hour0_observed_share": round(mix["obs_share0"], 3),
+            "lead_observed": lead_obs,  # 0시 1시간 앞 밴드를 관측으로 채운 관측소 수
             "site_cell": [row, col],
             "fetch_s": fetch_s,
         }
-        return ElmfireWeatherInput(t0, grids, weather, meta)
+        return ElmfireWeatherInput(t0, grids, weather, meta, lead)
+
+
+def lead_band(
+    stations: list[Station],
+    series: list[StationSeries],
+    observed: Mapping[str, Mapping[datetime, Mapping] | None],
+    t0: datetime,
+    profile: Mapping,
+) -> tuple[dict[str, np.ndarray], int]:
+    """0시 1시간 앞 밴드(ElmfireWeatherInput.lead) — 시연 덱과 같은 ELMFIRE 계산을 위해.
+
+    관측소마다 1시간 전 관측(가장 센 1분 풍속 · 풍향)을 쓰고, 없으면 그 관측소 0시 값.
+    연료수분은 0시 값(1시간 차이는 결과에 거의 영향이 없다). 격자는 0시와 같은 보간.
+    """
+    prev, n_obs, one = t0 - timedelta(hours=1), 0, []
+    for st, s in zip(stations, series, strict=True):
+        o = (observed.get(st.id) or {}).get(prev) or {}
+        if o.get("gust") is not None and o.get("wd") is not None:
+            ws, wd, n_obs = o["gust"], o["wd"], n_obs + 1
+        else:
+            ws, wd = s.ws[0], s.wd[0]
+        one.append(StationSeries(ws=[ws], wd=[wd], m1=[s.m1[0]], m10=[s.m10[0]], m100=[s.m100[0]]))
+    grids = interpolate(stations, one, profile)
+    return {k: a[0] for k, a in grids.items()}, n_obs
 
 
 def kma_forecast(service_key: str) -> Callable[[tuple[float, float], datetime], dict]:

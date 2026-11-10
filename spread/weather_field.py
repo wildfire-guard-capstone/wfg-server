@@ -65,6 +65,12 @@ class StationSeries:
     m100: list[float] = field(default_factory=list)
     kind: list[str] = field(default_factory=list)
     gust_factor: float = 1.0
+    # 저장 · 판정용(ELMFIRE 격자에는 안 들어감): 평균풍속 m/s · 기온 · 습도 · 1시간 강수.
+    # 없으면 None
+    mean: list[float | None] = field(default_factory=list)
+    ta: list[float | None] = field(default_factory=list)
+    hm: list[float | None] = field(default_factory=list)
+    rn: list[float | None] = field(default_factory=list)
 
 
 def _emc(h: Mapping[str, float | None]) -> float | None:
@@ -85,35 +91,41 @@ def station_series(
     """관측(0시까지) · 예보(1시간 뒤부터) → 9시간.
 
     풍속: 0시 = 관측 돌풍, 뒤 = 예보 × 돌풍 비율(0시까지 최근 3시간). 0시 관측이 없으면 예보 × 비율.
+    평균풍속(저장 · 판정용): 0시 = 관측 평균, 뒤 = 예보 그대로.
     연료수분: 0시 값 = moisture0, 없으면 관측 기록으로 쌓고(시작 = 첫 평형수분), 그것도 없으면
     0시 평형수분. 뒤는 시간마다 평형수분 쪽으로 1 · 10 · 100시간 지연.
     """
     s = StationSeries(gust_factor=gust_factor(obs, t0))
-    prev: dict[str, float | None] = {"ws": None, "wd": None, "ta": None, "hm": None, "rn": 0.0}
+    keys = ("ws", "mean", "wd", "ta", "hm", "rn")
+    prev: dict[str, float | None] = {k: None for k in keys} | {"rn": 0.0}
     rows = []
     for h in range(hours + 1):
         t = t0 + timedelta(hours=h)
         o, f = obs.get(t) or {}, fc.get(t) or {}
         if h == 0 and o.get("gust") is not None and o.get("wd") is not None:
-            row = {"ws": o["gust"], "wd": o["wd"], "ta": o.get("ta"), "hm": o.get("hm"),
-                   "rn": o.get("rn"), "kind": "관측"}  # fmt: skip
+            row = {"ws": o["gust"], "mean": o.get("mean"), "wd": o["wd"], "ta": o.get("ta"),
+                   "hm": o.get("hm"), "rn": o.get("rn"), "kind": "관측"}  # fmt: skip
         elif f.get("ws") is not None and f.get("wd") is not None:
-            row = {"ws": f["ws"] * s.gust_factor, "wd": f["wd"], "ta": f.get("ta"),
-                   "hm": f.get("hm"), "rn": f.get("rn"), "kind": "예보"}  # fmt: skip
+            row = {"ws": f["ws"] * s.gust_factor, "mean": f["ws"], "wd": f["wd"],
+                   "ta": f.get("ta"), "hm": f.get("hm"), "rn": f.get("rn"),
+                   "kind": "예보"}  # fmt: skip
         else:
             row = {**prev, "kind": "지속"}
         for k in ("ta", "hm"):  # 기온 · 습도만 빠지면 앞 값
             if row[k] is None:
                 row[k] = prev[k]
-        prev = {k: row[k] for k in ("ws", "wd", "ta", "hm", "rn")}
+        prev = {k: row[k] for k in keys}
         rows.append(row)
     if rows[0]["ws"] is None:
         raise ValueError("0시 풍속이 관측에도 예보에도 없습니다")
 
-    # 연료수분
     s.ws = [round(float(r["ws"]), 3) for r in rows]
     s.wd = [float(r["wd"]) % 360 for r in rows]
     s.kind = [r["kind"] for r in rows]
+    for k in ("mean", "ta", "hm", "rn"):  # 저장 · 판정용 값
+        setattr(s, k, [None if r[k] is None else float(r[k]) for r in rows])
+
+    # 연료수분
     emcs = [_emc(r) for r in rows]
     known = [e for e in emcs if e is not None]
     if not known:  # 기온 · 습도가 하나도 없으면 0시 수분을 그대로 둔다
@@ -171,6 +183,41 @@ def idw_weights(
     d = np.hypot(gx[..., None] - px, gy[..., None] - py)
     w = 1.0 / np.maximum(d, min_m) ** power
     return w / w.sum(-1, keepdims=True)
+
+
+def point_weights(
+    stations: Sequence[Station], x: float, y: float, power: float = IDW_POWER,
+    min_m: float = IDW_MIN_M,
+) -> np.ndarray:  # fmt: skip
+    """한 점(EPSG:5179)의 관측소별 가중치, 합 1. 칸 가운데를 주면 idw_weights의 그 칸과 같다."""
+    d = np.hypot(np.array([s.x for s in stations]) - x, np.array([s.y for s in stations]) - y)
+    w = 1.0 / np.maximum(d, min_m) ** power
+    return w / w.sum()
+
+
+def blend_at(
+    stations: Sequence[Station], series: Sequence[StationSeries], x: float, y: float
+) -> dict[str, list[float | None] | float]:
+    """한 점의 시간별 평균풍속 · 기온 · 습도 · 강수(격자와 같은 거리 가중)와 0시 관측 비중.
+
+    1. 가중치 = point_weights(격자와 같은 식)
+    2. 시간마다 값이 있는 관측소만 섞고 그 가중치로 다시 나눈다. 하나도 없으면 None
+    3. obs_share0 = 0시가 관측인 관측소의 가중치 합(0 ~ 1)
+    """
+    w = point_weights(stations, x, y)  # 1
+    out: dict[str, list[float | None] | float] = {}
+    for k in ("mean", "ta", "hm", "rn"):  # 2
+        hours = []
+        for h in range(len(series[0].kind)):
+            pairs = [(wi, getattr(s, k)[h]) for wi, s in zip(w, series, strict=True)]
+            pairs = [(wi, v) for wi, v in pairs if v is not None]
+            total = sum(wi for wi, _ in pairs)
+            hours.append(sum(wi * v for wi, v in pairs) / total if pairs else None)
+        out[k] = hours
+    out["obs_share0"] = float(
+        sum(wi for wi, s in zip(w, series, strict=True) if s.kind[0] == "관측")
+    )
+    return out
 
 
 def interpolate(

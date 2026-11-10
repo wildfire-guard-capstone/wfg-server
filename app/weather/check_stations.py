@@ -58,17 +58,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {t:%m-%d %H}시 {h}")
 
     if a.deck:
-        import rasterio
+        from app.weather.elmfire_input import ElmfireWeatherRequest, deck_weather_profile
 
-        from app.predict.elmfire import namelist_value
-        from spread.perimeter_run import Deck
-
-        deck = Deck(a.deck, "elmfire")
-        ws = namelist_value(deck.namelist, "WS_FILENAME")
-        with rasterio.open(a.deck / "inputs" / f"{ws}.tif") as r:
-            prof = r.profile.copy()
-        print(f"\n== 3. 격자 {prof['width']}×{prof['height']} (덱 {a.deck})")
-        grids, meta = station_field(s.kma_api_key, s.data_go_kr_api_key).build(now, prof)
+        prof = deck_weather_profile(a.deck)
+        print(f"\n== 3. 격자 {prof['width']}×{prof['height']} (덱 {a.deck}) · 발화점 칸 {site}")
+        inp = station_field(s.kma_api_key, s.data_go_kr_api_key).build(
+            ElmfireWeatherRequest(now, site, prof)
+        )
+        grids, meta = inp.grids, inp.meta
+        print(f"관측소 {len(meta['stations'])}곳 받는 데 {meta['fetch_s']}초(동시 호출)")
         print("쓴 관측소", meta["stations"])
         print("뺀 관측소", meta["skipped"])
         print("시간 종류", meta["kinds"], "· 예보 격자", meta["forecast_grids"])
@@ -79,6 +77,13 @@ def main(argv: list[str] | None = None) -> None:
                 f"  +{h}시간 풍속 {w.min():.1f} ~ {w.max():.1f} m/s · 풍향 "
                 f"{grids['wd'][h].min():.0f} ~ {grids['wd'][h].max():.0f}° · "
                 f"m1 {grids['m1'][h].mean():.1f} %"
+            )
+        print("발화점 칸 9시간(저장 · 판정용):")
+        for h in inp.weather["hours"]:
+            print(
+                f"  {h['at'][11:16]} {h['kind']} 풍향 {h['wind_dir']:.0f}° · 평균 "
+                f"{h['wind_speed']:.1f} · 1분 최대 {h['wind_max_1min']:.1f} m/s · "
+                f"{h['temp']:.1f} ℃ · {h['humidity']:.0f} %"
             )
 
 

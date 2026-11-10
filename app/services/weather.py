@@ -23,6 +23,15 @@ from rules.core.direction import compass16
 
 log = logging.getLogger(__name__)
 REFRESH_DELAY = timedelta(hours=1, minutes=40)  # 다음 정시 자료가 나오는 때 = 정시 + 1시간 40분
+# 예측 기상(predictions.weather)에 저장만 하고 PRED-04 응답에서는 빼는 시간별 칸.
+# wind_max_1min = 시간 안 가장 센 1분 풍속(ELMFIRE 입력 기록) — 화면 · 판정에는 평균 wind_speed만
+STORED_ONLY = ("wind_max_1min",)
+
+
+def prediction_weather_out(w: dict[str, Any]) -> dict[str, Any]:
+    """PRED-04 응답: 저장된 예측 기상에서 저장 전용 칸(STORED_ONLY)을 뺀 명세 Weather 모양."""
+    hours = [{k: v for k, v in h.items() if k not in STORED_ONLY} for h in w.get("hours") or []]
+    return {**w, "hours": hours}
 
 
 def provider_from_settings() -> WeatherProvider:

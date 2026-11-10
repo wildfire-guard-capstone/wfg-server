@@ -117,6 +117,37 @@ def test_weather_failure_keeps_nothing(client, login, reported, db, monkeypatch)
     assert n == 0
 
 
+def test_elmfire_weather_failure_is_503_too(client, login, reported, db, monkeypatch):
+    """ELMFIRE 기상 입력을 못 만들면(관측소 3곳 미만 · 덱에 없는 시각) 같은 503.
+    다른 기상으로 대신하지 않고 작업도 만들지 않는다."""
+    from types import SimpleNamespace
+
+    def no_input(*args, **kwargs):
+        raise WeatherUnavailable("기상 격자에 쓸 관측소가 2곳뿐입니다(최소 3)")
+
+    monkeypatch.setattr(
+        "app.routers.predictions.get_settings", lambda: SimpleNamespace(predictor="elmfire")
+    )
+    monkeypatch.setattr(
+        "app.routers.predictions.elmfire_source_from_settings",
+        lambda name=None: SimpleNamespace(name="stations", uses_server_weather=False),
+    )
+    monkeypatch.setattr("app.routers.predictions.build_elmfire_weather", no_input)
+    cmd = login("t_cmd7", "COMMANDER")
+    r = client.post(
+        f"{URL}/{reported['id']}/predictions",
+        json={"expected_perimeter_id": reported["current_perimeter_id"]},
+        headers=cmd,
+    )
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WEATHER_UNAVAILABLE"
+    assert "관측소가 2곳" in r.json()["error"]["message"]
+    assert not operations.is_running(int(reported["id"]))
+    n = db.scalar(
+        text("SELECT count(*) FROM predictions WHERE incident_id = :i"), {"i": int(reported["id"])}
+    )
+    assert n == 0
+
+
 def test_predict_also_saves_proposal_and_stage(client, login, reported, db):
     """예측 → 규칙 엔진 → 가짜 작성기 → 제안서 저장까지 한 작업으로. 산불 대응단계 = 엔진 판정."""
     cmd = login("t_cmd5", "COMMANDER")

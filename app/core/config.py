@@ -46,9 +46,10 @@ class Settings(BaseSettings):
     # elmfire면 PREDICTOR_DECK(덱 폴더, demo/uiseong/deck 모양) · ELMFIRE_BIN · PREDICTOR_WORK_DIR
     predictor_deck: str | None = None
     predictor_work_dir: str | None = None
-    # elmfire 기상: point(기준점 한 곳, 기본) · stations(관측소 여러 곳 매분자료 + 예보 × 돌풍 비율,
-    # 의성 시연 방식). stations는 KMA_API_KEY · DATA_GO_KR_API_KEY가 필요하다
-    predictor_weather_field: str = "point"
+    # elmfire 기상 출처(app.weather.elmfire_input):
+    #   stations = 실시간(기본) — 관측소 매분자료 + 단기예보, KMA_API_KEY · DATA_GO_KR_API_KEY 필요
+    #   deck = 시연 — 덱에 든 의성 관측 기상, WEATHER=asos(기온 · 습도)와 같이 쓴다
+    predictor_weather_field: str = "stations"
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose): fake(테스트 문장, 기본) · agent(EXAONE +
     # 근거 검색). agent는 아래 LLM_URL · EVIDENCE_URL(GPU 서버 터널 주소)이 필요하다
     proposal_writer: str = "fake"

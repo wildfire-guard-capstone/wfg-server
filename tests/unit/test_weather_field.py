@@ -8,9 +8,18 @@ import pytest
 
 from app.weather.aws_minute import AwsMinute, hourly, parse_minutes
 from app.weather.base import KST, WeatherUnavailable
+from app.weather.elmfire_input import ElmfireWeatherRequest, check_input
 from app.weather.field import StationField, load_stations
 from spread.units import MPH_PER_MS
-from spread.weather_field import Station, gust_factor, interpolate, station_series
+from spread.weather_field import (
+    Station,
+    blend_at,
+    gust_factor,
+    idw_weights,
+    interpolate,
+    point_weights,
+    station_series,
+)
 
 T0 = datetime(2025, 3, 22, 12, tzinfo=KST)
 
@@ -20,6 +29,12 @@ def Affine(a, b, c, d, e, f):  # noqa: N802 — rasterio 없이(API 이미지) �
 
 
 PROFILE = {"transform": Affine(600, 0, 1_100_000, 0, -600, 1_830_000), "width": 10, "height": 5}
+# 의성 덱 기상 격자(600 m, 179 × 104칸)
+DECK_PROF = {
+    "transform": Affine(600, 0, 1_069_200, 0, -600, 1_860_600),
+    "width": 179,
+    "height": 104,
+}
 
 
 def obs_hours(gust=9.0, mean=5.0, wd=270.0, ta=20.0, hm=25.0, n=3):
@@ -49,13 +64,16 @@ def test_series_hour0_observed_then_forecast_times_gust_factor():
     assert s.ws[0] == 9.0 and s.ws[1] == pytest.approx(4 * 1.8)
     assert s.wd[0] == 270.0 and s.wd[3] == 250.0
     assert len(s.m1) == 9 and 2 <= min(s.m1) and max(s.m100) <= 35
+    # 저장 · 판정용: 평균풍속은 0시 = 관측 평균, 뒤 = 예보 그대로(돌풍 비율을 곱하지 않음)
+    assert s.mean[0] == 5.0 and s.mean[1] == 4.0
+    assert (s.ta[0], s.hm[0], s.ta[1], s.hm[1], s.rn[1]) == (20.0, 25.0, 18.0, 30.0, 0.0)
 
 
 def test_series_fills_missing_forecast_hours_by_persistence():
     fc = fc_hours(start=5)  # 1 ~ 4시간 뒤 예보가 없다
     s = station_series(obs_hours(), fc, T0)
     assert s.kind == ["관측"] + ["지속"] * 4 + ["예보"] * 4
-    assert s.ws[1:5] == [9.0] * 4
+    assert s.ws[1:5] == [9.0] * 4 and s.mean[1:5] == [5.0] * 4
 
 
 def test_series_without_temperature_keeps_given_moisture():
@@ -110,10 +128,24 @@ def test_hourly_gust_mean_and_aws_fetch_filters_station():
     assert "stn=278" in urls[0] and "tm1=202503221000" in urls[0] and "help=1" in urls[0]
 
 
-def test_station_field_selects_nearby_skips_failures_and_needs_minimum():
+def test_point_weights_match_grid_cell_and_blend_skips_missing():
+    st = [Station("a", 1_100_300, 1_829_700), Station("b", 1_105_700, 1_827_300)]
+    x, y = 1_100_000 + 3.5 * 600, 1_830_000 - 1.5 * 600  # 칸(1, 3) 가운데
+    np.testing.assert_allclose(point_weights(st, x, y), idw_weights(st, PROFILE)[1, 3])
+    a = station_series(obs_hours(), fc_hours(ta=10.0), T0)
+    b = station_series(obs_hours(), fc_hours(ta=20.0), T0)
+    b.ta[2] = None  # b의 2시간 뒤 기온이 비면 a 값만
+    mix = blend_at(st, [a, b], x, y)
+    wa, wb = point_weights(st, x, y)
+    assert mix["ta"][1] == pytest.approx(10.0 * wa + 20.0 * wb)
+    assert mix["ta"][2] == pytest.approx(10.0)
+    assert mix["obs_share0"] == pytest.approx(1.0)
+
+
+def test_station_field_builds_grid_and_site_hours_skipping_failures():
     stations = [(s, ll) for s, ll in load_stations() if s.id in {"278", "136", "276", "279"}]
     assert len(stations) == 4
-    prof = {"transform": Affine(600, 0, 1_069_200, 0, -600, 1_860_600), "width": 179, "height": 104}
+    site = next(ll for s, ll in stations if s.id == "278")  # 의성 관측소 자리를 발화점으로
 
     def observed(stn, start, end):
         if stn == "276":
@@ -127,15 +159,73 @@ def test_station_field_selects_nearby_skips_failures_and_needs_minimum():
         return fc_hours()
 
     f = StationField(observed, forecast, stations=stations, buffer_m=0, min_stations=2)
-    assert {s.id for s, _ in f.select(prof)} == {"278", "136", "276"}  # 구미(279)는 범위 밖
-    grids, meta = f.build(T0 + timedelta(minutes=50), prof)
-    assert grids["ws"].shape == (9, 104, 179)
-    assert sorted(meta["stations"]) == ["136", "278"] and "276" in meta["skipped"]
-    assert meta["kinds"] == {"관측": 2, "예보": 16}
+    assert {s.id for s, _ in f.select(DECK_PROF)} == {"278", "136", "276"}  # 구미(279)는 범위 밖
+    inp = f.build(ElmfireWeatherRequest(T0 + timedelta(minutes=50), site, DECK_PROF))
+    check_input(inp, DECK_PROF)
+    assert inp.t0 == T0 and inp.grids["ws"].shape == (9, 104, 179)
+    assert sorted(inp.meta["stations"]) == ["136", "278"] and "276" in inp.meta["skipped"]
+    assert inp.meta["kinds"] == {"관측": 2, "예보": 16} and inp.meta["hour0_observed_share"] == 1.0
+    assert len(calls) == 3  # 예보 칸마다 한 번(세 관측소가 다른 칸)
+
+    w = inp.weather
+    assert w["source"] == "KMA_STATIONS" and w["location"] == {"lat": site[0], "lon": site[1]}
+    h0, h1 = w["hours"][0], w["hours"][1]
+    # 0시 = 관측(평균 5 · 1분 최대 9), 뒤 = 예보(평균 4, 1분 최대 = 4 × 돌풍 비율 1.8)
+    assert (h0["kind"], h0["wind_speed"], h0["temp"], h0["humidity"]) == ("관측", 5.0, 20.0, 25.0)
+    assert h0["wind_max_1min"] == pytest.approx(9.0, abs=0.01) and h0["wind_dir"] == 270.0
+    assert (h1["kind"], h1["wind_speed"], h1["temp"], h1["humidity"]) == ("예보", 4.0, 18.0, 30.0)
+    assert h1["wind_max_1min"] == pytest.approx(7.2, abs=0.01) and h1["wind_dir"] == 250.0
+    # 발화점 칸 값 = ELMFIRE 격자의 그 칸
+    r, c = inp.meta["site_cell"]
+    assert h1["wind_max_1min"] == pytest.approx(inp.grids["ws"][1, r, c] / MPH_PER_MS, abs=0.01)
+
     with pytest.raises(WeatherUnavailable, match="관측소가 2곳"):
         StationField(observed, forecast, stations=stations, buffer_m=0, min_stations=3).build(
-            T0, prof
+            ElmfireWeatherRequest(T0, site, DECK_PROF)
         )
+
+
+def test_station_field_hour0_kind_follows_observed_weight():
+    """발화점 칸 0시는 관측인 관측소의 가중치 합이 절반 이상일 때만 「관측」."""
+    stations = [(s, ll) for s, ll in load_stations() if s.id in {"278", "136"}]
+    site = next(ll for s, ll in stations if s.id == "278")  # 의성 칸 — 의성 비중이 거의 전부
+
+    def build(missing):
+        def observed(stn, start, end):
+            return {} if stn == missing else obs_hours()
+
+        f = StationField(
+            observed, lambda s, at: fc_hours(start=0), stations=stations, buffer_m=0,
+            min_stations=2,
+        )  # fmt: skip
+        return f.build(ElmfireWeatherRequest(T0 + timedelta(minutes=50), site, DECK_PROF))
+
+    near_missing = build("278")  # 가까운 의성 0시 관측이 없음 → 대부분 예보
+    assert near_missing.weather["hours"][0]["kind"] == "예보"
+    assert near_missing.meta["hour0_observed_share"] < 0.01
+    far_missing = build("136")  # 먼 안동만 없음 → 대부분 관측
+    assert far_missing.weather["hours"][0]["kind"] == "관측"
+    assert far_missing.meta["hour0_observed_share"] > 0.99
+
+
+def test_station_field_parallel_same_as_sequential():
+    stations = [(s, ll) for s, ll in load_stations() if s.id in {"278", "136", "832"}]
+    site = next(ll for s, ll in stations if s.id == "278")
+
+    def observed(stn, start, end):
+        g = {"278": 9.0, "136": 6.0, "832": 7.5}[stn]
+        return obs_hours(gust=g, mean=g / 1.7)
+
+    def forecast(site, base_at):
+        return fc_hours(ws=3.0 + site[0] % 1)  # 자리마다 다른 예보
+
+    req = ElmfireWeatherRequest(T0 + timedelta(minutes=50), site, DECK_PROF)
+    args = {"stations": stations, "buffer_m": 0, "min_stations": 2}
+    one = StationField(observed, forecast, workers=1, **args).build(req)
+    many = StationField(observed, forecast, workers=8, **args).build(req)
+    assert one.weather == many.weather
+    for k in one.grids:
+        np.testing.assert_array_equal(one.grids[k], many.grids[k])
 
 
 # 11/10 23:00 실제 키로 부른 응답(의성 278, help=1 · disp=1) 그대로

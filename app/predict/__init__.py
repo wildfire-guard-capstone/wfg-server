@@ -2,7 +2,8 @@
 
 새 예측 방법은 이 폴더에 파일 하나를 만들고(base.Predictor 약속을 지킴)
 아래 PREDICTORS에 이름을 더한다.
-지금: synthetic(가짜 타원) · file(P1 ~ P8 GeoJSON) · elmfire(요청 기상으로 ELMFIRE 실행, GPU 서버).
+지금: synthetic(가짜 타원) · file(P1 ~ P8 GeoJSON) ·
+elmfire(요청 때 만든 기상 입력으로 ELMFIRE 실행 — 출처 stations · deck).
 """
 
 from pathlib import Path

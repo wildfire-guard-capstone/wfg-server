@@ -24,6 +24,7 @@ COPY rules ./rules
 COPY agent ./agent
 COPY assistant ./assistant
 COPY risk ./risk
+COPY spread ./spread
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

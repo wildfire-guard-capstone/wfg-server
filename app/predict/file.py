@@ -42,8 +42,8 @@ class FilePredictor:
         if self.crs != 5179:
             to_5179 = Transformer.from_crs(self.crs, 5179, always_xy=True).transform
             slices = [transform(to_5179, g) for g in slices]
-        # TODO(홍준서 확인 필요): ELMFIRE 결과를 이 파일로 넣을 때의 기상
-        #   → base.PredictionRequest.weather 주석
+        # ELMFIRE 결과(app.predict.run_elmfire)를 이 파일로 넣을 때는 그때 쓴 기상 JSON을
+        #   weather_path로 같이 준다(docs/ELMFIRE-기상.md)
         if self.weather_path:  # 그 범위를 만들 때 쓴 기상(받은 기상보다 우선 — 실제로 쓴 값)
             weather = json.loads(Path(self.weather_path).read_text(encoding="utf-8"))
         else:

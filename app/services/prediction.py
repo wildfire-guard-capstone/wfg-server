@@ -81,6 +81,12 @@ def predictor_from_settings() -> Predictor:
         options = {"path": s.predictor_path, "crs": s.predictor_crs}
         if s.predictor_weather:
             options["weather_path"] = s.predictor_weather
+    elif s.predictor == "elmfire":
+        if not s.predictor_deck:
+            raise ValueError("PREDICTOR=elmfire에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
+        options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
+        if s.predictor_work_dir:
+            options["work_dir"] = s.predictor_work_dir
     return get_predictor(s.predictor, **options)
 
 

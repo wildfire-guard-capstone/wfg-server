@@ -86,9 +86,17 @@ def _set(text: str, key: str, value: str) -> str:
 
 
 def edit_namelist(
-    text: str, t_start: float, t_stop: float, ignition: tuple[float, float] | None
+    text: str,
+    t_start: float,
+    t_stop: float,
+    ignition: tuple[float, float] | None,
+    extra: tuple[tuple[float, float, float], ...] = (),
 ) -> str:
-    """Deck namelist → one run: own folders, time window, one point ignition or none (phi start)."""
+    """Deck namelist → one run: own folders, time window, one point ignition or none (phi start).
+
+    extra = (x, y, t) point ignitions added after the start one (e.g. a second fire that
+    starts later). Each burns at max(t, t_start + 60 s).
+    """
     for key in (
         "FUELS_AND_TOPOGRAPHY_DIRECTORY",
         "WEATHER_DIRECTORY",
@@ -105,13 +113,13 @@ def edit_namelist(
         except KeyError:
             pass
     text = re.sub(r"^\s*[XYT]_IGN\(\d+\).*\n", "", text, flags=re.M)
-    if ignition is None:
-        block = "NUM_IGNITIONS           = 0"
-    else:
-        x, y = ignition
-        block = (
-            f"NUM_IGNITIONS           = 1\nX_IGN(1)                = {x:.1f}\n"
-            f"Y_IGN(1)                = {y:.1f}\nT_IGN(1)                = {t_start:.1f}"
+    pts = [] if ignition is None else [(*ignition, t_start)]
+    pts += [(x, y, max(t, t_start + 60.0)) for x, y, t in extra]
+    block = f"NUM_IGNITIONS           = {len(pts)}"
+    for i, (x, y, t) in enumerate(pts, 1):
+        block += (
+            f"\nX_IGN({i})                = {x:.1f}\nY_IGN({i})                = {y:.1f}"
+            f"\nT_IGN({i})                = {t:.1f}"
         )
     return re.sub(r"^\s*NUM_IGNITIONS\s*=.*$", block, text, count=1, flags=re.M)
 
@@ -170,8 +178,12 @@ def run(
     hours: float,
     start: BaseGeometry,
     adj: float = 1.0,
+    extra_ignitions: tuple[tuple[float, float, float], ...] = (),
 ) -> RunResult:
-    """One ELMFIRE run from `start` (Polygon = perimeter, Point = ignition) for `hours`."""
+    """One ELMFIRE run from `start` (Polygon = perimeter, Point = ignition) for `hours`.
+
+    extra_ignitions = (x, y, t) point ignitions besides the start (see edit_namelist).
+    """
     import rasterio
 
     run_dir = Path(run_dir)
@@ -195,7 +207,7 @@ def run(
     t_stop = t_start_s + hours * HOUR_S
     ign = (start.x, start.y) if is_point else None
     (run_dir / "elmfire.data").write_text(
-        edit_namelist(deck.namelist, t_start_s, t_stop, ign), encoding="utf-8"
+        edit_namelist(deck.namelist, t_start_s, t_stop, ign, extra_ignitions), encoding="utf-8"
     )
     env = {**os.environ, **deck.env}
     t0 = time.time()

@@ -3,7 +3,7 @@
 
     python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
-        [--calibration blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
+        [--calibration fixed|blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
         [--risk-mode mean_0_5|at_p5] [--no-risk]
 
 입력 폴더(input/): scenario.json(사고 · 회차 · 현장 보고) · perimeters.json(상황도 화선) · regions.json ·
@@ -54,7 +54,7 @@ def main() -> None:
     ap.add_argument("--reuse-spread", type=Path, help="앞 결과 폴더: round_k/01_spread를 다시 쓴다")
     ap.add_argument("--spread-only", action="store_true", help="1단계만")
     ap.add_argument("--skip-llm", action="store_true", help="1 · 2단계만(제안 생성 없음)")
-    ap.add_argument("--calibration", default="blend", choices=list(step1_spread.CAL_METHODS))
+    ap.add_argument("--calibration", default="fixed", choices=list(step1_spread.CAL_METHODS))
     ap.add_argument("--llm", default="http://127.0.0.1:8031")
     ap.add_argument("--evidence", default="http://127.0.0.1:8032")
     ap.add_argument("--workers", type=int, default=4)
@@ -163,6 +163,8 @@ def main() -> None:
             f"항목 {[i['id'] for i in llm_in['items']]}",
             flush=True,
         )
+        if "돌풍" in ru["weather"]["wind_source"]:  # 최종 덱에 시간평균 ws · wd가 없을 때
+            print(f"  ! 규칙 엔진 바람: {ru['weather']['wind_source']}", flush=True)
         prev_stage, prev_alerts = ru["next_prev_stage"], ru["next_prev_alerts"]
         # 3. LLM 대응 생성
         items, logs, llm_s, calls = [], [], 0.0, []
@@ -207,6 +209,7 @@ def main() -> None:
             "weather": ru["weather"],
             "risk": rk,
             "llm_input": llm_in,
+            "llm_model": agent.llm.model if agent is not None else None,
             "proposal": items,
             "agent_log": logs,
             "llm_calls": calls,

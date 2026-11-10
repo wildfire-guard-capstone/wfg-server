@@ -3,8 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings, get_settings
-from app.core.security import hash_password, issue_token, read_token
+from app.demo_results.config import DemoSettings, get_demo_settings
+from app.demo_results.security import hash_password, issue_token, read_token
 from app.main import app
 
 SECRET = "s" * 32
@@ -33,10 +33,10 @@ def accounts_file(tmp_path):
 
 @pytest.fixture
 def client(bundle_dir, accounts_file):
-    settings = Settings(
+    settings = DemoSettings(
         _env_file=None, results_dir=bundle_dir, accounts_file=accounts_file, auth_secret=SECRET
     )
-    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_demo_settings] = lambda: settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -101,7 +101,7 @@ def test_removed_account_token_stops_working(client, accounts_file):
 
 
 def test_not_configured_is_503(bundle_dir):
-    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None)
+    app.dependency_overrides[get_demo_settings] = lambda: DemoSettings(_env_file=None)
     try:
         c = TestClient(app)
         assert _login(c, "cmd01").status_code == 503
@@ -111,8 +111,8 @@ def test_not_configured_is_503(bundle_dir):
 
 
 def test_short_secret_is_503(bundle_dir, accounts_file):
-    settings = Settings(_env_file=None, accounts_file=accounts_file, auth_secret="short")
-    app.dependency_overrides[get_settings] = lambda: settings
+    settings = DemoSettings(_env_file=None, accounts_file=accounts_file, auth_secret="short")
+    app.dependency_overrides[get_demo_settings] = lambda: settings
     try:
         assert _login(TestClient(app), "cmd01").status_code == 503
     finally:

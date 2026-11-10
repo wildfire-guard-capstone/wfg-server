@@ -8,6 +8,7 @@
 """
 
 import math
+import re
 import time
 from pathlib import Path
 
@@ -22,10 +23,39 @@ from rules.llm_input import build_llm_input
 
 MPH = 0.44704
 STAGE_OF = {v: k for k, v in LABEL.items()}
+MEAN_WIND = (
+    "ws",
+    "wd",
+)  # 시간평균 풍속(mph) · 풍향 래스터 — 규칙 엔진의 「평균풍속」 기준에 맞는 값
+
+
+def _namelist_file(text: str, key: str) -> str | None:
+    m = re.search(rf"^\s*{key}\s*=\s*'([^']+)'", text, re.M)
+    return m.group(1) if m else None
+
+
+def wind_files(deck: Path) -> tuple[str, str, str]:
+    """규칙 엔진에 넘길 바람 래스터(inputs/ 안 이름, 확장자 없음)와 출처 설명.
+
+    덱 inputs/에 시간평균 ws · wd가 있으면 그것을 쓴다(11/1 덱). 없으면 ELMFIRE namelist의
+    WS_FILENAME · WD_FILENAME을 쓴다 — 11/9 최종 덱은 ws_gust(시간 안 가장 센 1분 풍속)라
+    평균풍속보다 크고, 대응단계의 풍속 기준 판정이 올라갈 수 있다(출처 설명에 남김).
+    """
+    ws, wd = MEAN_WIND
+    if all((deck / "inputs" / f"{n}.tif").exists() for n in MEAN_WIND):
+        return ws, wd, "시간평균 풍속(덱 inputs/ws · wd)"
+    text = (deck / "elmfire.data").read_text(encoding="utf-8")
+    ws = _namelist_file(text, "WS_FILENAME") or ws
+    wd = _namelist_file(text, "WD_FILENAME") or wd
+    note = f"ELMFIRE 입력 바람(덱 namelist {ws} · {wd})"
+    if "gust" in ws:
+        note += " — 시간평균이 아니라 돌풍 값이라 평균풍속보다 큼"
+    return ws, wd, note
 
 
 def wind_series(deck: Path, at_xy, t0_s: float, hours: int = 8) -> list[tuple[float, float]]:
-    """ELMFIRE 입력의 시간별 풍속(mph) · 풍향을 한 점에서 읽어 t0 + h시간으로 선형 보간(u · v 성분)."""
+    """ELMFIRE 입력의 시간별 풍속(mph) · 풍향을 한 점에서 읽어 t0 + h시간으로 선형 보간(u · v 성분).
+    읽는 파일은 wind_files(deck)가 고른다."""
     import rasterio
 
     def band_vals(name):
@@ -33,7 +63,8 @@ def wind_series(deck: Path, at_xy, t0_s: float, hours: int = 8) -> list[tuple[fl
             row, col = r.index(*at_xy)
             return r.read()[:, row, col].astype(float)
 
-    ws, wd = band_vals("ws") * MPH, band_vals("wd")
+    ws_name, wd_name, _ = wind_files(deck)
+    ws, wd = band_vals(ws_name) * MPH, band_vals(wd_name)
     u = -ws * np.sin(np.radians(wd))
     v = -ws * np.cos(np.radians(wd))
     out = []
@@ -96,6 +127,7 @@ def make_inputs(
         "prev_stage": prev_stage,
         "wind_ms": wind_ms,
         "wind_deg": wind_deg,
+        "wind_source": "0시간 = 상황 보고, 1 ~ 8시간 = " + wind_files(deck)[2],
         "temp_c": rd.temp_c,
         "rh_pct": rd.rh_pct,
         "field": {rd_name: vars(f) for rd_name, f in rd.field_by_name.items()},
@@ -134,5 +166,9 @@ def run_rules(
         "next_prev_alerts": tuple(
             (r["sigungu"], r["emd"], r["level"]) for r in b["alerts"]["areas"]
         ),
-        "weather": {"wind_ms": summary["wind_ms"], "wind_deg": summary["wind_deg"]},
+        "weather": {
+            "wind_ms": summary["wind_ms"],
+            "wind_deg": summary["wind_deg"],
+            "wind_source": summary["wind_source"],
+        },
     }

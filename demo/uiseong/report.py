@@ -45,7 +45,8 @@ def main() -> None:
             + f"목표 {p['target_ha']} ha → {p['got_ha']} ha · 배율 {p['adj']:.2f}"
             for p in ps
         )
-        detail.append(f"- 보정: {cal['from']} → 배율 {cal['adj']:.2f} ({parts})")
+        tail = f" ({parts})" if parts else ""
+        detail.append(f"- 보정: {cal['from']} → 배율 {cal['adj']:.2f}{tail}")
         v = "; ".join(
             f"{c['at']} 예측 {c['pred_ha']} / 상황도 {c['obs_ha']} ha (IoU {c['iou']})"
             for c in sp["validation"]

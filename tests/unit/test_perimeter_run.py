@@ -42,3 +42,11 @@ def test_perimeter_start_has_no_ignitions():
 def test_point_start_keeps_one_ignition():
     out = edit_namelist(DECK, 1440.0, 6600.0, (1.0, 2.0))
     assert out.count("X_IGN(") == 1 and "T_IGN(1)                = 1440.0" in out
+
+
+def test_extra_ignition_after_perimeter_start():
+    # 화선 출발 + 뒤에 붙는 다른 발화(양곡리 14:39): 시작 1분 전이면 시작 1분 뒤로 민다
+    out = edit_namelist(DECK, 6600.0, 35400.0, None, ((1085295.0, 1824255.0, 13140.0),))
+    assert "NUM_IGNITIONS           = 1" in out and "T_IGN(1)                = 13140.0" in out
+    late = edit_namelist(DECK, 19800.0, 48600.0, None, ((1085295.0, 1824255.0, 13140.0),))
+    assert "T_IGN(1)                = 19860.0" in late and late.count("X_IGN(") == 1

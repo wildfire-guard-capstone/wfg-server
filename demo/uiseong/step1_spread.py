@@ -4,7 +4,11 @@
     res = run_spread(deck, work, md, rd, sc, method)   # ELMFIRE 실행(GPU 서버, CPU로 돈다)
     save(res, folder) / load(folder)                    # 01_spread/spread.json (다음 실행에서 --reuse-spread)
 
-보정(11/7 · 11/8 사용자 결정): 확산속도 배율(adj) 하나 = 두 배율의 기하평균(blend)
+보정(기본 fixed): 회차마다 배율을 찾지 않고 덱의 adj를 그대로 쓴다(배율 1).
+  11/10 최종 덱 A′ = 국내 연료 특성값(침엽 SAV 200 cm⁻¹ · 활엽 124 cm⁻¹ · 깊이 = 1시간 연료량 ÷ 20 kg/m³), adj 1(보정 없음),
+  관측소 22곳 돌풍 · 관측 연료수분 · CROWN_RATIO 0.02 · 엽수분 85 % · 비화 끔(demo/uiseong/deck/README.md).
+  의성 1 ~ 6보 재시작 19쌍 F2 0.654 · IoU 0.454(11/9 덱 0.640, 11/1 덱 + blend 0.580).
+이전 방법(11/7 · 11/8): 두 배율의 기하평균(blend)
   ① k−1보 화선 → k보 화선 면적 맞춤 ② k보 화선에서 발화 뒤 평균 성장 속도를 1시간 잇기. 1회차는 ②만.
 """
 
@@ -23,11 +27,18 @@ from demo.uiseong.rounds import Round, Scenario
 from spread import perimeter_run as pr
 
 CAL_METHODS = {
+    "fixed": "덱의 확산속도 보정(adj.tif)을 그대로 씀, 배율 1(기본 — 11/10 A′ 덱은 보정 없음)",
     "blend": "직전 구간 배율과 발화 뒤 평균 속도 배율의 기하평균(11/8 사용자 결정, 기본)",
     "interval": "직전 구간(k−1보 화선 → k보 화선) 면적 맞춤(11/7)",
     "rate": "발화 뒤 평균 성장 속도 유지(k보 화선 + 1시간 = 면적 ÷ 발화 뒤 시간)",
     "from_first": "1보 화선 → k보 화선 면적 맞춤",
 }
+
+
+# 11/9 최종 설정(로컬 실험과 같게): 안계면 양곡리 산83-19 발화(14:39)를 점 발화로 함께 넣는다.
+# 원좌표(1085314.9, 1824259.3)가 농경지 칸이라 20 m 서쪽 초지 칸. 회차 시각이 14:39 뒤면 시작 1분 뒤에 붙는다.
+# 괴산리 화선과 따로 타므로 P1 ~ P8에 양곡리 쪽 면적이 함께 들어간다(검증 지표는 괴산리 쪽만 보면 같다).
+EXTRA_IGNITIONS = ((1085295.0, 1824255.0, 13140.0),)
 
 
 @dataclass
@@ -54,7 +65,7 @@ def _part(cal: pr.Calibration, how: str) -> dict:
 
 
 def calibrate_round(
-    deck: pr.Deck, work: Path, md: MapData, rd: Round, sc: Scenario, method: str = "blend"
+    deck: pr.Deck, work: Path, md: MapData, rd: Round, sc: Scenario, method: str = "fixed"
 ) -> dict:
     """회차 rd의 확산속도 배율과 그 근거(round_k.json의 calibration).
 
@@ -65,6 +76,8 @@ def calibrate_round(
     """
     if method not in CAL_METHODS:
         raise ValueError(f"보정 방법 {method}: {list(CAL_METHODS)} 중 하나")
+    if method == "fixed":  # ELMFIRE를 돌리지 않는다 — 덱 adj.tif(산림 ×2)가 곧 보정
+        return {"method": "fixed", "adj": 1.0, "from": CAL_METHODS["fixed"], "parts": []}
     observed = md.report(rd.at)
     by_no = {r.no: r for r in sc.rounds}
 
@@ -136,12 +149,12 @@ def validate(md: MapData, rd: Round, observed, res: pr.RunResult, hours: float =
 
 
 def run_spread(
-    deck: pr.Deck, work: Path, md: MapData, rd: Round, sc: Scenario, method: str = "blend"
+    deck: pr.Deck, work: Path, md: MapData, rd: Round, sc: Scenario, method: str = "fixed"
 ) -> SpreadResult:
     observed = md.report(rd.at)
     t0 = time.time()
     cal = calibrate_round(deck, work, md, rd, sc, method)
-    res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"])
+    res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"], EXTRA_IGNITIONS)
     rngs = pr.ranges(res, observed)
     return SpreadResult(
         calibration=cal,

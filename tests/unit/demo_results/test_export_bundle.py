@@ -1,11 +1,12 @@
 import json
 
 import pytest
-from results_example import make_run
 
-from app.schemas.results import Incident, Perimeter, Prediction, Proposal
-from app.services.results import FileResultsStore
+from app.demo_results.result_schemas import Incident, Perimeter, Prediction, Proposal
+from app.demo_results.results import FileResultsStore
 from demo.uiseong.export_bundle import build, write
+
+from .results_example import make_run
 
 
 def test_bundle_matches_api_schemas(bundle_dir):

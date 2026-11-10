@@ -35,3 +35,8 @@ def created_at():
 def jsonb_object():
     """NOT NULL jsonb defaulting to ``{}``."""
     return mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
+def jsonb_array():
+    """NOT NULL jsonb defaulting to ``[]``."""
+    return mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))

@@ -1,0 +1,78 @@
+! ============================================================
+! 2025 의성 산불 — ELMFIRE 1.1 덱(11/10 최종 설정 A′: 국내 연료 특성값, 보정 없음)
+! 좌표계 EPSG:5179, 지형·연료 30 m, 기상 600 m / 1시간
+! 영역 x 1069200 ~ 1176600, y 1798200 ~ 1860600
+! 기상 밴드 1 = 2025-03-22 11:00 KST, 밴드 151 = 2025-03-28 17:00 (시각 = 밴드 1 뒤 초)
+! 확산속도 보정 없음: inputs/adj.tif = 1 (step1_spread 기본 fixed = 배율 1)
+! fuel_models.csv: 침엽 SAV 200 cm⁻¹(연구자료 제1207호) · 활엽 124 cm⁻¹(참나무 낙엽 실측) · 혼효 평균,
+!   연료층 깊이 = 1시간 연료량 ÷ 20 kg/m³(국내 낙엽층 밀도)
+! 바람: 관측소 22곳(ASOS 4 + AWS 18) 시간 안 가장 센 1분 풍속, 거리 가중 보간
+! 비화 끔 · 진화 효과 없음(한계로 둠). 근거와 성능은 README.md
+! perimeter_run이 디렉터리 · 시간 창 · 발화점(phi 출발이면 0개)을 실행마다 바꾼다
+! ============================================================
+&INPUTS
+FUELS_AND_TOPOGRAPHY_DIRECTORY = './inputs'
+DEM_FILENAME            = 'dem'
+SLP_FILENAME            = 'slp'
+ASP_FILENAME            = 'asp'
+FBFM_FILENAME           = 'fbfm'
+CC_FILENAME             = 'cc'
+CH_FILENAME             = 'ch'
+CBH_FILENAME            = 'cbh'
+CBD_FILENAME            = 'cbd'
+ADJ_FILENAME            = 'adj'
+PHI_FILENAME            = 'phi'
+CH_TIMES_10             = .TRUE.     ! ch, cbh 래스터 = m x 10
+CBH_TIMES_10            = .TRUE.
+CBD_TIMES_100           = .TRUE.     ! cbd 래스터 = kg/m3 x 100
+CC_IN_PERCENT           = .TRUE.
+WEATHER_DIRECTORY       = './inputs'
+WS_FILENAME             = 'ws_gust'  ! mph, 10 m, 시간 안 가장 센 1분 평균풍속
+WD_FILENAME             = 'wd_obs'   ! 불어오는 방향(도)
+M1_FILENAME             = 'm1_obs'   ! 고사연료 수분(%), 관측소 기온 · 습도로 계산
+M10_FILENAME            = 'm10_obs'
+M100_FILENAME           = 'm100_obs'
+DT_METEOROLOGY          = 3600.0
+WS_AT_10M               = .TRUE.     ! ELMFIRE가 10 m → 6.1 m(×0.87)로 바꾼다
+LH_MOISTURE_CONTENT     = 30.0       ! 가정값(3월 말 고사 초본)
+LW_MOISTURE_CONTENT     = 60.0       ! 가정값(휴면기)
+FOLIAR_MOISTURE_CONTENT = 85.0       ! 가정값(문헌 85 ~ 120)
+/
+
+&OUTPUTS
+OUTPUTS_DIRECTORY       = './outputs'
+DTDUMP                  = 3600.0
+DUMP_TIME_OF_ARRIVAL    = .TRUE.
+DUMP_SPREAD_RATE        = .TRUE.
+DUMP_FLIN               = .TRUE.
+DUMP_CROWN_FIRE         = .TRUE.
+CONVERT_TO_GEOTIFF      = .TRUE.
+/
+
+&TIME_CONTROL
+SIMULATION_TSTART       = 6600.0     ! 실행마다 바뀜(예: 12:50 1보)
+SIMULATION_TSTOP        = 35400.0
+SIMULATION_DT           = 5.0
+SIMULATION_DTMAX        = 600.0
+TARGET_CFL              = 0.4
+CURRENT_YEAR            = 2025
+HOUR_OF_YEAR            = 1931       ! 2025-03-22 11:00
+/
+
+&SIMULATOR
+NUM_IGNITIONS           = 0          ! 관측 화선(phi)에서 출발
+CROWN_FIRE_MODEL        = 1
+CROWN_RATIO             = 0.02       ! 기본 1.0 → 0.02(11/9 최종)
+WIND_FLUCTUATIONS       = .FALSE.
+/
+
+&MISCELLANEOUS
+PATH_TO_GDAL                   = 'auto'
+SCRATCH                        = './scratch'
+MISCELLANEOUS_INPUTS_DIRECTORY = './inputs'
+FUEL_MODEL_FILE                = 'fuel_models.csv'
+/
+
+&SPOTTING
+ENABLE_SPOTTING = .FALSE.
+/

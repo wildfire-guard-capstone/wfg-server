@@ -13,6 +13,7 @@ Wildfire Guard 백엔드 — API 서버, 확산 예측(ELMFIRE), 평가 하네�
 | `rules/` | 규칙 엔진(대응단계 · 지휘권자 등 판정). 순수 함수만, **FastAPI · DB · `spread`에 의존하지 않음** |
 | `risk/` | 산불 위험도: P5 범위의 23개 변수 등급을 CSV 가중치로 평균한 R(1.00 ~ 5.00). 설계 결정은 [`risk/README.md`](risk/README.md) |
 | `agent/` | 대응 제안 생성: 규칙 엔진 판정 → 근거 검색(RAG) → EXAONE → 검사 → 근거 표기 · 조립 |
+| `assistant/` | AI 어시스턴트(질의응답 · 상황 정정): 입력 구분 → 도구 고르기 → 도구 실행 → EXAONE 답 → 출처 검사 / 정정 확인안 |
 | `demo/uiseong/` | 의성 산불(2025-03-22) 데모: 입력 → 확산 예측 → 규칙 판정 → LLM 대응 생성 → 출력, 뷰어 · 검증 |
 | `docs/` | 구조서(`의성-데모-구조서.md`: 단계별 파일 · 함수 · 출력 · 디버깅 안내) |
 | `evaluation/` | 평가 하네스 (시나리오 S0~S6, 지표, 데이터셋 리더) |
@@ -81,10 +82,29 @@ uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.p
 자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
 [`demo/uiseong/README.md`](demo/uiseong/README.md).
 
-## 결과 조회 API(`/api`)
+## AI 어시스턴트 — 질의응답 · 상황 정정(`assistant/`, API AI-01 · AI-02 · COR-01 · COR-02 · PROP-05)
 
-GPU 서버에서 만든 데모 결과를 웹 화면(wfg-client)이 읽을 수 있게 내주는 읽기 전용 API다. DB를 쓰기 전까지는
-결과 묶음 폴더(JSON)를 읽는다(`app/services/results.py` — 나중에 같은 메서드의 DB 구현으로 바꾼다).
+통합지휘권자의 입력 하나를 **질문**(답을 `qa_messages`에 저장) · **상황 정정**(확인안만, 확인하면 `situation_corrections` +
+`incidents.situation` 저장 → 같은 예측으로 제안서 새 버전) · **처리 불가**(대응단계 · 기상 등 정정할 수 없는 말) 중 하나로 처리한다.
+답의 문장마다 출처(근거 문서 `[k]` 또는 상황 값 경로)가 있어야 내보내고, 숫자 · 시각 · 마을 이름은 그 출처에 있어야 한다.
+
+```bash
+uv run python -m assistant.cli --round <데모 회차 폴더> "헬기 몇 대 투입됐어?" "괴산리 대피 완료"          # LLM 없이(규칙만)
+python -m assistant.cli --round <회차> --llm http://127.0.0.1:<vLLM> --evidence http://127.0.0.1:<근거> \
+    --batch assistant/eval/questions.json --out out.json                                       # GPU 서버, EXAONE
+uv run pytest -q tests/unit/test_assistant_*.py
+```
+
+API 서버 설정: `ASSISTANT=rules`(기본, LLM 없음) · `exaone`(+ `LLM_URL` · `LLM_MODEL` · `EVIDENCE_URL`), `CORRECTION_TTL_S`(확인안 10분).
+구조 · 도구 16개 · 프롬프트 · 검사 · 정정 규칙 · 미결 사항은 [`docs/AI-어시스턴트-구조서.md`](docs/AI-어시스턴트-구조서.md).
+
+## 결과 조회 API(임시 · 김지오 전용, `/api`)
+
+> **임시**: 주 API는 DB를 쓰는 `/api/v1`(`app/routers`, API 명세서 v0.4)이다. 이 결과 조회 API는 그것이 화면에
+> 붙을 때까지만 쓰고, 코드는 `app/demo_results/` 한 폴더에 모여 있다(지우는 법은 그 폴더 `__init__.py`).
+
+GPU 서버에서 만든 데모 결과를 웹 화면(wfg-client)이 읽을 수 있게 내주는 읽기 전용 API다. DB 대신
+결과 묶음 폴더(JSON)를 읽는다(`app/demo_results/results.py`).
 응답 형식 · 열거형 값은 DB 설계(`app/db/models`)를 따른다. 문서: 서버를 띄운 뒤 `/docs`.
 
 | 메서드 · 경로 | 내용 | 권한 |
@@ -103,7 +123,7 @@ GPU 서버에서 만든 데모 결과를 웹 화면(wfg-client)이 읽을 수 �
 # 1) 결과 묶음 만들기(로컬 또는 GPU 서버) — 프롬프트 · 실행 기록은 빼고 화면에 필요한 것만, 약 1 MB
 uv run python -m demo.uiseong.export_bundle --run <결과 폴더(runs/tune10)> --input <demo-uiseong/input> --out <묶음 폴더>
 # 2) 계정 만들기(비밀번호는 화면에서 묻는다, 8자 이상)
-uv run python -m app.services.accounts add --file <accounts.json> --login cmd01 --role COMMANDER --name 홍길동 --org 의성군
+uv run python -m app.demo_results.accounts add --file <accounts.json> --login cmd01 --role COMMANDER --name 홍길동 --org 의성군
 # 3) .env에 RESULTS_DIR · ACCOUNTS_FILE · AUTH_SECRET(32자 이상 무작위) 넣고 실행
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```

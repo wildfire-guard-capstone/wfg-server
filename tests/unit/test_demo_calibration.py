@@ -81,3 +81,10 @@ def test_first_round_is_rate_only(calls, tmp_path):
 def test_unknown_method(calls, tmp_path):
     with pytest.raises(ValueError):
         step1_spread.calibrate_round(None, tmp_path, FakeMap(), SC.rounds[1], SC, "mean")
+
+
+def test_fixed_is_default_and_runs_nothing(calls, tmp_path):
+    # 11/9 최종 설정: 덱 adj.tif(산림 ×2)를 그대로 — ELMFIRE 보정 실행 없음, 배율 1
+    cal = step1_spread.calibrate_round(None, tmp_path, FakeMap(), SC.rounds[1], SC)
+    assert cal["method"] == "fixed" and cal["adj"] == 1.0 and cal["parts"] == []
+    assert calls == []

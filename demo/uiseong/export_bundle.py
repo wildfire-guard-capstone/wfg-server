@@ -3,7 +3,8 @@
     python -m demo.uiseong.export_bundle --run <결과 폴더> --input <demo-uiseong/input> \
         --out <묶음 폴더>
 
-API(app.routers.incidents)는 이 폴더만 읽는다 — 프롬프트 · LLM 원문 · 실행 기록은 옮기지 않는다.
+API(app.demo_results — 김지오 전용 · 임시)는 이 폴더만 읽는다.
+프롬프트 · LLM 원문 · 실행 기록은 옮기지 않는다.
 제안 근거에 표준매뉴얼 원문이 들어 있으므로 묶음 폴더는 저장소에 넣지 않고
 공개 URL로 내보내지 않는다.
 

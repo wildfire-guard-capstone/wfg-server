@@ -1,83 +1,75 @@
-"""비밀번호 해시와 로그인 토큰. 표준 라이브러리만 쓴다(새 의존성 없음).
+"""비밀번호 해시(argon2)와 접근 토큰(JWT HS256)."""
 
-- 비밀번호: PBKDF2-HMAC-SHA256, ``pbkdf2_sha256$<반복>$<salt>$<hash>`` (base64url).
-- 토큰: ``<payload>.<서명>`` — payload = base64url(JSON {sub, role, iat, exp}),
-  서명 = HMAC-SHA256(auth_secret). JWT HS256과 같은 원리를 최소한으로 구현했다.
-"""
-
-import base64
 import hashlib
 import hmac
-import json
+import logging
 import secrets
-import time
-from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-PBKDF2_ITERATIONS = 600_000
-MIN_SECRET_LENGTH = 32
+import jwt
+from pwdlib import PasswordHash
+from pwdlib.exceptions import UnknownHashError
 
+from app.core.config import get_settings
 
-def _b64e(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+log = logging.getLogger(__name__)
 
-
-def _b64d(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-
-
-def hash_password(password: str, *, iterations: int = PBKDF2_ITERATIONS) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-    return f"pbkdf2_sha256${iterations}${_b64e(salt)}${_b64e(digest)}"
+ALGORITHM = "HS256"
+_hasher = PasswordHash.recommended()
+_fallback_secret = secrets.token_urlsafe(32)
 
 
-def verify_password(password: str, stored: str) -> bool:
+def hash_password(password: str) -> str:
+    return _hasher.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """해시가 아닌 값(「!」 = 로그인 불가 계정)이면 거짓."""
     try:
-        scheme, iterations, salt, digest = stored.split("$")
-        if scheme != "pbkdf2_sha256":
-            return False
-        got = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _b64d(salt), int(iterations))
-    except (ValueError, TypeError):
+        return _hasher.verify(password, password_hash)
+    except UnknownHashError:
         return False
-    return hmac.compare_digest(got, _b64d(digest))
 
 
-@dataclass(frozen=True)
-class TokenClaims:
-    sub: str
-    role: str
-    iat: int
-    exp: int
+def temporary_password() -> str:
+    """계정 발급 · 재발급 때 주는 임시 비밀번호(12자)."""
+    return secrets.token_urlsafe(9)
 
 
-class InvalidToken(Exception):
-    pass
+_warned = False
 
 
-def _sign(body: str, secret: str) -> str:
-    return _b64e(hmac.new(secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256).digest())
+def _secret() -> str:
+    global _warned
+    secret = get_settings().jwt_secret
+    if secret:
+        return secret
+    if not _warned:
+        log.warning("JWT_SECRET이 없어 임시 키를 씁니다(서버를 다시 켜면 다시 로그인).")
+        _warned = True
+    return _fallback_secret
 
 
-def issue_token(
-    sub: str, role: str, secret: str, ttl_seconds: int, *, now: int | None = None
-) -> str:
-    iat = int(time.time()) if now is None else now
-    payload = {"sub": sub, "role": role, "iat": iat, "exp": iat + ttl_seconds}
-    body = _b64e(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    return f"{body}.{_sign(body, secret)}"
+def purpose_key(purpose: str) -> str:
+    """로그인 토큰과 다른 용도(예: 정정 확인안)의 서명 키. 같은 비밀에서 갈라 내므로
+    다른 용도의 토큰을 로그인 토큰으로 쓸 수 없다(서명이 맞지 않음)."""
+    return hmac.new(_secret().encode(), purpose.encode(), hashlib.sha256).hexdigest()
 
 
-def read_token(token: str, secret: str, *, now: int | None = None) -> TokenClaims:
-    try:
-        body, sig = token.split(".")
-    except ValueError as e:
-        raise InvalidToken("형식 오류") from e
-    if not hmac.compare_digest(sig, _sign(body, secret)):
-        raise InvalidToken("서명 불일치")
-    try:
-        claims = TokenClaims(**json.loads(_b64d(body)))
-    except (ValueError, TypeError) as e:
-        raise InvalidToken("내용 오류") from e
-    if claims.exp <= (int(time.time()) if now is None else now):
-        raise InvalidToken("만료")
-    return claims
+def create_access_token(user_id: int, role: str, now: datetime | None = None) -> tuple[str, int]:
+    """(토큰, 유효 초). 역할은 참고로만 넣고, 요청마다 DB의 역할을 다시 읽는다(명세 2.1)."""
+    expires = get_settings().jwt_expires_s
+    now = now or datetime.now(UTC)
+    claims = {
+        "sub": str(user_id),
+        "role": role,
+        "iat": now,
+        "exp": now + timedelta(seconds=expires),
+    }
+    return jwt.encode(claims, _secret(), algorithm=ALGORITHM), expires
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """만료 · 위조면 jwt.ExpiredSignatureError · jwt.InvalidTokenError."""
+    return jwt.decode(token, _secret(), algorithms=[ALGORITHM])

@@ -119,6 +119,27 @@ print("ELMFIRE finished successfully")
 '''
 
 
+FAKE_POINT = r'''#!{python}
+"""가짜 ELMFIRE(점 발화): 진짜처럼 발화점 칸에는 도착 시각을 남기지 않고, EC2 의성 시험처럼
+위 · 오른쪽 위 · 왼쪽 3칸만 10분에 탄다(둘러싸지 않아 구멍 메우기로도 안 채워짐)."""
+import re, sys
+from pathlib import Path
+import numpy as np, rasterio
+
+text = Path(sys.argv[1]).read_text()
+val = lambda k: float(re.search(rf"^\s*{{k}}\s*=\s*([^!\n]*)", text, re.M).group(1))
+t0, x, y = val("SIMULATION_TSTART"), val(r"X_IGN\(1\)"), val(r"Y_IGN\(1\)")
+with rasterio.open("inputs/phi.tif") as r:
+    prof, (row, col) = r.profile, r.index(x, y)
+toa = np.full((prof["height"], prof["width"]), -1.0, "float32")
+for dr, dc in ((-1, 0), (-1, 1), (0, -1)):
+    toa[row + dr, col + dc] = t0 + 600
+with rasterio.open("outputs/time_of_arrival_0000001.tif", "w", **prof) as w:
+    w.write(toa, 1)
+print("ELMFIRE finished successfully")
+'''
+
+
 @pytest.fixture
 def fake_deck(tmp_path):
     rasterio = pytest.importorskip("rasterio")
@@ -229,6 +250,23 @@ def test_predict_stops_elmfire_after_timeout(fake_deck, tmp_path):
         pred.predict(PredictionRequest(START, BASE_AT, SITE, None, fake_input()))
     assert (datetime.now() - t0).total_seconds() < 10
     assert not list((tmp_path / "runs").glob("pred_*"))  # 실행 폴더도 지운다
+
+
+def test_point_start_counts_ignition_cell_so_p1_covers_it(fake_deck, tmp_path):
+    """진짜 ELMFIRE는 점 발화 칸에 도착 시각을 남기지 않는다(11/11 EC2) — 그래도 P1이 발화점을
+    감싸고 저장 검사를 통과한다."""
+    from app.repositories.predictions import check_slices
+
+    deck, _ = fake_deck
+    exe = tmp_path / "fake_point"
+    exe.write_text(FAKE_POINT.format(python=sys.executable), encoding="utf-8")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    point = Point(X0 + 455, Y1 - 605)  # 칸 가운데가 아닌 발화점
+    request = PredictionRequest(point, BASE_AT, SITE, None, fake_input())
+    result = ElmfirePredictor(deck, str(exe), tmp_path / "runs").predict(request)
+    p1 = check_slices(point, result.slices)[0]
+    assert p1.covers(point)  # 발화점 칸이 시작 칸으로 들어갔다
+    assert p1.area >= 3 * CELL * CELL  # 발화점 칸 + 둘레 3칸(다듬기로 조금 줄 수 있음)
 
 
 def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):

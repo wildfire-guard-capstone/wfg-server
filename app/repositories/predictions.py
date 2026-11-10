@@ -17,6 +17,9 @@ from app.predict.base import HOURS, PredictionResult
 
 # 앞 시간 범위가 다음 범위 밖으로 삐져나와도 되는 몫(래스터 → 폴리곤 경계 오차)
 NEST_TOLERANCE = 0.001
+# 시작이 점(발화점)일 때 P1 경계와 떨어져도 되는 거리(m). ELMFIRE 면은 칸(30 m) 경계를 10 m까지
+# 다듬어서(spread.perimeter_run.polygonize) 1 m로는 빡빡하다(11/11 EC2 시험)
+POINT_TOLERANCE_M = 10.0
 
 
 @dataclass(frozen=True)
@@ -48,8 +51,8 @@ def check_slices(start: BaseGeometry, slices: list[BaseGeometry]) -> list[MultiP
             raise ValueError(f"P{i}가 비어 있습니다")
     prev: BaseGeometry = start
     for i, cur in enumerate(out, start=1):
-        if prev.area == 0:  # 시작이 점(발화점)이면 덮는지만 본다
-            ok = cur.buffer(1.0).covers(prev)
+        if prev.area == 0:  # 시작이 점(발화점)이면 덮는지만 본다(다듬기 폭만큼 봐준다)
+            ok = cur.buffer(POINT_TOLERANCE_M).covers(prev)
         else:
             ok = prev.difference(cur).area <= prev.area * NEST_TOLERANCE
         if not ok:

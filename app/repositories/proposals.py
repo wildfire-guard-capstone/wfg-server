@@ -90,8 +90,12 @@ def save_proposal(
     llm_input: LlmInput,
     written: list[WrittenItem],
     user_id: int,
+    trigger: ProposalTrigger = ProposalTrigger.PREDICTION,
+    correction_id: int | None = None,
 ) -> int:
     """제안서 하나를 넣고 id를 돌려준다. 커밋은 부르는 쪽이 한다(예측과 한 트랜잭션).
+
+    상황 정정 버전(F-30)은 trigger = CORRECTION · correction_id로 같은 예측에 순번만 올린다.
 
     1. 버전 = 예측의 시작 화선 번호(발화점이면 0) . 같은 화선 안 순번
     2. proposals 1행(현재 · P5 단계, 엔진 묶음) + 항목마다 proposal_items 1행
@@ -112,7 +116,8 @@ def save_proposal(
         prediction_id=prediction_id,
         perimeter_version=perimeter_version,
         seq=next_seq(session, incident_id, perimeter_version),
-        trigger=ProposalTrigger.PREDICTION,
+        trigger=trigger,
+        correction_id=correction_id,
         judged_stage=STAGE_OF[stage["now"]["stage"]],
         predicted_stage=STAGE_OF[stage["p5"]["stage"]],
         context=llm_input["bundles"],

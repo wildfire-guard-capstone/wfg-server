@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
     proposal_writer: str = "fake"
 
+    # AI 어시스턴트(AI-01): rules = LLM 없이 규칙만(개발 · 시험), exaone = vLLM(EXAONE) + 근거 서버.
+    # GPU 서버의 vLLM · 근거 서버는 127.0.0.1에서만 열리므로 API 서버에서는 터널 주소를 넣는다.
+    assistant: str = "rules"
+    llm_url: str = "http://127.0.0.1:8031"
+    llm_model: str = "exaone-4.5-33b-awq"
+    llm_timeout_s: float = 120
+    evidence_url: str | None = None  # 비우면 검색 없이 제안서가 인용한 원문만 쓴다
+    correction_ttl_s: int = 600  # 정정 확인안 유효 시간(명세 CorrectionPreview, 10분)
+
     # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)
     jwt_secret: str = ""
     jwt_expires_s: int = 1800

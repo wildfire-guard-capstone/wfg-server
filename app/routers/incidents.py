@@ -65,7 +65,7 @@ def _refs(db: Session, incident: Incident) -> dict:
         "needs_reprediction": latest is None or perimeter.version_no > latest[1],
         "proposal_stale": stale,
         # 동시 수정 방지 토큰(명세 2.4 제안). 지금은 최신 정정 id — 방식은 Q-05 · Q-06
-        "situation_revision": f"rev-{correction[0] if correction else 0}",
+        "situation_revision": incidents.situation_revision(db, incident.id),
     }
 
 

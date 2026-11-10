@@ -12,6 +12,7 @@ Wildfire Guard 백엔드 — API 서버, 확산 예측(ELMFIRE), 평가 하네�
 | `spread/` | 확산 예측 패키지. **FastAPI에 의존하지 않음** — 서버와 평가가 같은 코드를 호출 |
 | `rules/` | 규칙 엔진(대응단계 · 지휘권자 등 판정). 순수 함수만, **FastAPI · DB · `spread`에 의존하지 않음** |
 | `agent/` | 대응 제안 생성: 규칙 엔진 판정 → 근거 검색(RAG) → EXAONE → 검사 → 근거 표기 · 조립 |
+| `assistant/` | AI 어시스턴트(질의응답 · 상황 정정): 입력 구분 → 도구 고르기 → 도구 실행 → EXAONE 답 → 출처 검사 / 정정 확인안 |
 | `demo/uiseong/` | 의성 산불(2025-03-22) 데모: 입력 → 확산 예측 → 규칙 판정 → LLM 대응 생성 → 출력, 뷰어 · 검증 |
 | `docs/` | 구조서(`의성-데모-구조서.md`: 단계별 파일 · 함수 · 출력 · 디버깅 안내) |
 | `evaluation/` | 평가 하네스 (시나리오 S0~S6, 지표, 데이터셋 리더) |
@@ -79,6 +80,22 @@ uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.p
 
 자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
 [`demo/uiseong/README.md`](demo/uiseong/README.md).
+
+## AI 어시스턴트 — 질의응답 · 상황 정정(`assistant/`, API AI-01 · AI-02 · COR-01 · COR-02 · PROP-05)
+
+통합지휘권자의 입력 하나를 **질문**(답을 `qa_messages`에 저장) · **상황 정정**(확인안만, 확인하면 `situation_corrections` +
+`incidents.situation` 저장 → 같은 예측으로 제안서 새 버전) · **처리 불가**(대응단계 · 기상 등 정정할 수 없는 말) 중 하나로 처리한다.
+답의 문장마다 출처(근거 문서 `[k]` 또는 상황 값 경로)가 있어야 내보내고, 숫자 · 시각 · 마을 이름은 그 출처에 있어야 한다.
+
+```bash
+uv run python -m assistant.cli --round <데모 회차 폴더> "헬기 몇 대 투입됐어?" "괴산리 대피 완료"          # LLM 없이(규칙만)
+python -m assistant.cli --round <회차> --llm http://127.0.0.1:<vLLM> --evidence http://127.0.0.1:<근거> \
+    --batch assistant/eval/questions.json --out out.json                                       # GPU 서버, EXAONE
+uv run pytest -q tests/unit/test_assistant_*.py
+```
+
+API 서버 설정: `ASSISTANT=rules`(기본, LLM 없음) · `exaone`(+ `LLM_URL` · `LLM_MODEL` · `EVIDENCE_URL`), `CORRECTION_TTL_S`(확인안 10분).
+구조 · 도구 16개 · 프롬프트 · 검사 · 정정 규칙 · 미결 사항은 [`docs/AI-어시스턴트-구조서.md`](docs/AI-어시스턴트-구조서.md).
 
 ## 결과 조회 API(임시 · 김지오 전용, `/api`)
 

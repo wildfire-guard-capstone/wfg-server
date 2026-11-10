@@ -173,6 +173,12 @@ def vulnerable_zones(session: Session, area: BaseGeometry) -> list[tuple[BaseGeo
     return [(wkb.loads(bytes(g)), float((a or 0) + (b or 0))) for g, a, b in rows]
 
 
+# 명세 7.6 정의 그대로 계산하게 하는 risk 옵션: 취약계층 = P5 안, 팀 추가 변수(규모 · 노출) 없음,
+# R은 aggregate()가 23개 가중평균으로 낸다. risk/ 기본값(R = √(H × X), 노출 = P5 + 1 km, 11/11)은
+# 명세를 고친 뒤에 옮긴다(risk/README.md).
+SPEC_OPTIONS: dict[str, Any] = {"exposure": {}, "exposure_radius_m": 0.0, "combine": "mean"}
+
+
 def build_inputs(
     session: Session, prediction: Prediction, static: StaticGrid | None
 ) -> calc.RiskInputs:
@@ -203,6 +209,7 @@ def build_inputs(
         zones=vulnerable_zones(session, p5),
         stations=[s.geom for s in stations],
         sources=sources,
+        **SPEC_OPTIONS,
     )
 
 

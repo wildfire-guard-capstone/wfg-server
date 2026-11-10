@@ -50,9 +50,15 @@ def _forest_type(species: str) -> str:
     raise ValueError(f"모르는 수종: {species}")
 
 
-def load_fuel_models(deck: Path) -> dict[int, FuelModel]:
-    """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값."""
+def load_fuel_models(deck: Path, tables: Path | None = None) -> dict[int, FuelModel]:
+    """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값.
+
+    tables: scripts/fuel_table_raw.csv · inputs/fuel_model_mapping.csv가 있는 덱 폴더(기본 = deck).
+    11/9 최종 덱 묶음에는 이 두 표가 없다 — 연료 모델 번호 · fuel_models.csv가 11/1 덱과 같으므로
+    11/1 덱(<input>/elmfire_deck)의 표를 그대로 쓴다.
+    """
     deck = Path(deck)
+    tables = Path(tables) if tables is not None else deck
     lib = {}
     for row in csv.reader(open(deck / "inputs" / "fuel_models.csv", encoding="utf-8-sig")):
         if row and row[0].strip().isdigit():
@@ -61,10 +67,10 @@ def load_fuel_models(deck: Path) -> dict[int, FuelModel]:
             lib[code] = (sum(loads) / LB_FT2_PER_T_HA, float(row[11]) * CM_PER_FT)
     raw = {
         (r["수종"], float(r["영급"]), float(r["경급"])): r
-        for r in _csv(deck / "scripts" / "fuel_table_raw.csv")
+        for r in _csv(tables / "scripts" / "fuel_table_raw.csv")
     }
     out: dict[int, FuelModel] = {}
-    for r in _csv(deck / "inputs" / "fuel_model_mapping.csv"):
+    for r in _csv(tables / "inputs" / "fuel_model_mapping.csv"):
         code = int(r["fbfm"])
         sp, age, dia = r["수종"], float(r["영급"]), float(r["경급"])
         src = raw[(sp, age, dia)]

@@ -43,6 +43,7 @@ def result(w, zones=(), stations=(), static=None):
         weather=svc.forecast_inputs(w),
         zones=zones,
         stations=stations,
+        **svc.SPEC_OPTIONS,
     )
     return calc.compute_risk(inp)
 

@@ -244,6 +244,12 @@ def latest_prediction(session: Session, incident_id: int) -> tuple[int, int] | N
     return (row[0], row[1]) if row else None
 
 
+def situation_revision(session: Session, incident_id: int) -> str:
+    """상황 버전(동시 수정 방지 토큰, 명세 2.4). 지금은 최신 정정 id — 방식은 Q-05 · Q-06."""
+    correction = latest_correction(session, incident_id)
+    return f"rev-{correction[0] if correction else 0}"
+
+
 def latest_correction(session: Session, incident_id: int) -> tuple[int, datetime] | None:
     """(최신 상황 정정 id, 저장 시각)."""
     row = session.execute(

@@ -1,5 +1,7 @@
 """비밀번호 해시(argon2)와 접근 토큰(JWT HS256)."""
 
+import hashlib
+import hmac
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -47,6 +49,12 @@ def _secret() -> str:
         log.warning("JWT_SECRET이 없어 임시 키를 씁니다(서버를 다시 켜면 다시 로그인).")
         _warned = True
     return _fallback_secret
+
+
+def purpose_key(purpose: str) -> str:
+    """로그인 토큰과 다른 용도(예: 정정 확인안)의 서명 키. 같은 비밀에서 갈라 내므로
+    다른 용도의 토큰을 로그인 토큰으로 쓸 수 없다(서명이 맞지 않음)."""
+    return hmac.new(_secret().encode(), purpose.encode(), hashlib.sha256).hexdigest()
 
 
 def create_access_token(user_id: int, role: str, now: datetime | None = None) -> tuple[str, int]:

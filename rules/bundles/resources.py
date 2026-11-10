@@ -12,7 +12,7 @@ from rules.context import Context
 from rules.core.places import Deployed
 
 LABELS = {
-    "helicopter": ("산림청", "지자체", "소방", "군", "경찰"),
+    "helicopter": ("산림청", "지자체", "소방", "군", "경찰", "미상"),
     "crew": ("진화대", "공무원", "소방", "군", "경찰", "기타"),
     "vehicle": ("지휘·진화차", "소방차", "기타"),
 }

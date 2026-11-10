@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.db.models._types import created_at
+from app.db.models._types import created_at, jsonb_array, jsonb_object
 
 
 class SituationCorrection(Base):
@@ -38,4 +38,8 @@ class QaMessage(Base):
     item_code: Mapped[str | None] = mapped_column(String(10))
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
+    # Cited source text, same shape as proposal_items.evidence plus k (the [k] in the answer).
+    evidence: Mapped[list[dict[str, Any]]] = jsonb_array()
+    # route · sentences(문장별 근거 번호 · 상황 값 출처) · insufficient · tools · no_evidence
+    detail: Mapped[dict[str, Any]] = jsonb_object()
     created_at: Mapped[datetime] = created_at()

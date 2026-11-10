@@ -32,6 +32,7 @@ DEPLOYED_LABELS = {
         "fire": "소방",
         "military": "군",
         "police": "경찰",
+        "unknown": "미상",  # 기관을 모르는 헬기(합계만 받은 보고 · 정정)
     },
     "crew": {
         "special_crew": "진화대",
@@ -43,6 +44,8 @@ DEPLOYED_LABELS = {
     },
     "vehicle": {"forest_vehicle": "지휘·진화차", "fire_truck": "소방차", "other": "기타"},
 }
+# 기관을 모르는 투입 수를 두는 칸(assistant.context.UNSPECIFIED와 같음)
+UNSPECIFIED = {"helicopter": "unknown", "crew": "other", "vehicle": "other"}
 VILLAGE_FIELDS = ("evac_order", "evacuated", "pre_evac_done", "alert_at", "reported_at")
 _TO_WGS84 = Transformer.from_crs(5179, 4326, always_xy=True)
 
@@ -78,17 +81,24 @@ def village_fields(situation: Mapping[str, Any]) -> dict[int, VillageField]:
 
 
 def deployed_of(situation: Mapping[str, Any]) -> Deployed | None:
-    """situation.deployed → 엔진 투입 수(라벨). 보고 전이면 None. `total`은 엔진이 다시 더한다."""
+    """situation.deployed → 엔진 투입 수(라벨). 보고 전이면 None.
+
+    엔진은 기관 칸을 더해 합계를 다시 낸다. 그래서 `total`이 기관 칸 합보다 크면(합계만 보고 · 정정)
+    그 차이를 기관을 모르는 칸(헬기 미상, 인력 · 차량 기타)에 넣어 합계가 버려지지 않게 한다(11-10).
+    """
     d = situation.get("deployed")
     if d is None:
         return None
     out = {}
     for group, labels in DEPLOYED_LABELS.items():
-        values = {k: v for k, v in d.get(group, {}).items() if k != "total"}
+        values = {k: int(v) for k, v in d.get(group, {}).items() if k != "total"}
         unknown = set(values) - set(labels)
         if unknown:
             raise ValueError(f"situation.deployed.{group}에 모르는 키: {sorted(unknown)}")
-        out[group] = {labels[k]: int(v) for k, v in values.items()}
+        rest = int(d.get(group, {}).get("total", 0)) - sum(values.values())
+        if rest > 0:
+            values[UNSPECIFIED[group]] = values.get(UNSPECIFIED[group], 0) + rest
+        out[group] = {labels[k]: v for k, v in values.items()}
     return Deployed(**out, reported_at=d.get("reported_at"))
 
 

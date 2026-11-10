@@ -121,6 +121,9 @@ def test_before_report_is_unknown_not_zero_and_bad_label_errors():
     assert {"field": "투입 수", "reason": "상황 보고 전"} in s3["withheld"]
     with pytest.raises(ValueError, match="모르는 라벨"):
         _run(deployed=Deployed(helicopter={"민간": 1}))
+    # 기관을 모르는 헬기(미상, 11-10)는 합계에 들어간다
+    bundles, _, _ = _run(deployed=Deployed(helicopter={"산림청": 3, "미상": 2}))
+    assert bundles["resources"]["helicopter"]["total"] == 5
 
 
 def test_deployed_by_base_and_exhausted_base_not_requested():

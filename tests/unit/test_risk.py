@@ -1,13 +1,17 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from shapely.geometry import Point, box
 
 from app.services import risk as svc
 from app.services.risk import FACTORS, KEY_OF, FactorGrade, aggregate
 from risk import compute as calc
+from risk import grid as grid_mod
 from risk.criteria import BY_KEY, STATIC_KEYS
+from risk.grid import StaticGrid
+from risk.overlap import Grid
 
 BASE_AT = datetime.fromisoformat("2025-03-22T12:00:00+09:00")
 WEATHER_CODES = {"wind_speed", "humidity", "temperature", "precipitation"}
@@ -132,10 +136,54 @@ def test_reasons_are_grouped():
     assert len(reasons) == len({r.split(":")[0] for r in reasons})
 
 
+def _saved_grid(folder):
+    """10 x 10칸(30 m) 시험 격자: 모든 변수 등급 4."""
+    g = Grid(0.0, 300.0, 30.0, 10, 10)
+    ones = np.ones((10, 10))
+    grid_mod.save(
+        StaticGrid(
+            g,
+            {k: ones for k in STATIC_KEYS},
+            {k: ones * 4 for k in STATIC_KEYS},
+            {"region": "시험"},
+        ),
+        folder,
+    )
+    return folder
+
+
 def test_static_grid_is_optional(monkeypatch, tmp_path):
-    monkeypatch.setattr(svc, "get_settings", lambda: SimpleNamespace(risk_grid_dir=None))
-    assert svc.static_grid() == (None, svc.NO_GRID)
-    missing = tmp_path / "없는 폴더"
-    monkeypatch.setattr(svc, "get_settings", lambda: SimpleNamespace(risk_grid_dir=missing))
-    grid, reason = svc.static_grid()
+    def use(folder):
+        monkeypatch.setattr(svc, "get_settings", lambda: SimpleNamespace(risk_grid_dir=folder))
+
+    use(None)
+    assert svc.static_grid((0, 0, 1, 1)) == (None, svc.NO_GRID)
+    use(tmp_path / "없는 폴더")  # EC2에 아직 안 올림 — API는 그대로 뜬다
+    grid, reason = svc.static_grid((0, 0, 1, 1))
+    assert grid is None and reason.startswith(svc.NO_GRID) and "파일이 없음" in reason
+    broken = tmp_path / "깨짐"
+    broken.mkdir()
+    (broken / "meta.json").write_text("{}", encoding="utf-8")
+    use(broken)
+    grid, reason = svc.static_grid((0, 0, 1, 1))
     assert grid is None and reason.startswith("지역 격자를 읽지 못함")
+
+
+def test_static_grid_reads_only_the_p5_window(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        svc, "get_settings", lambda: SimpleNamespace(risk_grid_dir=_saved_grid(tmp_path / "g"))
+    )
+    p5 = box(35, 35, 95, 125)
+    grid, reason = svc.static_grid(p5.bounds)
+    assert reason is None and (grid.grid.h, grid.grid.w) == (4, 3)
+    assert svc.static_grid((5000, 5000, 6000, 6000)) == (None, svc.OUT_OF_GRID)
+
+    inp = calc.RiskInputs(
+        p5=p5, perimeter=Point(40, 40), static=grid, weather=svc.forecast_inputs(weather())
+    )
+    gs = svc.to_grades(
+        calc.compute_risk(inp), base_at=BASE_AT, weather_source="KMA", grid_reason=None
+    )
+    by = {g.code: g for g in gs}
+    assert by["slope_up"].grade == 4 and by["canopy_cover"].grade == 4
+    assert aggregate(gs)["axes"]["terrain"] == 4.0

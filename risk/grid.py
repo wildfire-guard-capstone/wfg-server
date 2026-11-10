@@ -7,9 +7,13 @@ DB 설계 원칙(래스터는 파일, DB에는 경로)에 따라 GeoTIFF 두 개
     <폴더>/grades.tif   13밴드 uint8 등급(1 ~ 5, 0 = 값 없음). 밴드 이름 = 변수 키
     <폴더>/values.tif   13밴드 float32 원래 값(화면 설명용, NaN = 값 없음)
     <폴더>/meta.json    격자 · 밴드 순서 · 계산 기준 · 원자료
+
+`load(폴더, bounds)`는 범위에 걸친 칸만 읽는다 — API는 요청마다 P5 근처만 읽어
+지역 격자 전체(의성군 약 260만 칸 × 26밴드)를 메모리에 두지 않는다.
 """
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -119,20 +123,47 @@ def save(sg: StaticGrid, folder: Path) -> Path:
     return folder
 
 
-def load(folder: Path) -> StaticGrid:
+def window_of(grid: Grid, bounds: tuple[float, float, float, float]):
+    """(xmin, ymin, xmax, ymax) → 걸친 칸 (행 시작, 행 끝, 열 시작, 열 끝). 안 겹치면 None."""
+    xmin, ymin, xmax, ymax = bounds
+    c0 = max(math.floor((xmin - grid.x0) / grid.cs), 0)
+    c1 = min(math.ceil((xmax - grid.x0) / grid.cs), grid.w)
+    r0 = max(math.floor((grid.y0 - ymax) / grid.cs), 0)
+    r1 = min(math.ceil((grid.y0 - ymin) / grid.cs), grid.h)
+    if c0 >= c1 or r0 >= r1:
+        return None
+    return r0, r1, c0, c1
+
+
+def sub_grid(grid: Grid, win: tuple[int, int, int, int]) -> Grid:
+    r0, r1, c0, c1 = win
+    return Grid(grid.x0 + c0 * grid.cs, grid.y0 - r0 * grid.cs, grid.cs, r1 - r0, c1 - c0)
+
+
+def load(folder: Path, bounds: tuple[float, float, float, float] | None = None):
+    """지역 격자 읽기. bounds(EPSG:5179)를 주면 그 범위에 걸친 칸만 — 격자와 안 겹치면 None."""
     import rasterio
+    from rasterio.windows import Window
 
     folder = Path(folder)
     meta = json.loads((folder / "meta.json").read_text("utf-8"))
     g = meta["grid"]
     grid = Grid(g["x0"], g["y0"], g["cs"], g["h"], g["w"])
+    window = None
+    if bounds is not None:
+        win = window_of(grid, bounds)
+        if win is None:
+            return None
+        r0, r1, c0, c1 = win
+        window = Window(c0, r0, c1 - c0, r1 - r0)
+        grid = sub_grid(grid, win)
     grades, values = {}, {}
     with rasterio.open(folder / "grades.tif") as r:
         for i, k in enumerate(meta["bands"], 1):
-            a = r.read(i).astype("float64")
+            a = r.read(i, window=window).astype("float64")
             a[a == 0] = np.nan
             grades[k] = a
     with rasterio.open(folder / "values.tif") as r:
         for i, k in enumerate(meta["bands"], 1):
-            values[k] = r.read(i).astype("float64")
+            values[k] = r.read(i, window=window).astype("float64")
     return StaticGrid(grid, values, grades, meta)

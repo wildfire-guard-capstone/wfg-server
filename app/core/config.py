@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     # 예측 API(PRED-01)가 쓰는 제안 작성기(app.propose). 지금은 fake(테스트 문장)만 있다
     proposal_writer: str = "fake"
     # 위험도(RISK-01) 지형 7 · 연료 6 변수의 지역 격자 폴더(risk.grid: grades.tif · values.tif ·
-    # meta.json, rasterio 필요). 비우면 그 13개는 빼고 나머지 변수로 계산한다
+    # meta.json, demo/uiseong/build_risk_grid.py로 만듦). 요청마다 P5 근처 칸만 읽는다.
+    # 비우거나 파일이 없으면 그 13개는 빼고 나머지 변수로 계산한다. EC2: /data/risk/uiseong
     risk_grid_dir: Path | None = None
 
     # AI 어시스턴트(AI-01): rules = LLM 없이 규칙만(개발 · 시험), exaone = vLLM(EXAONE) + 근거 서버.

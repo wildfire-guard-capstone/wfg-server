@@ -4,6 +4,8 @@
 # Lives on EC2 as /home/ubuntu/wfg/compose.yml, beside:
 #   db.env        POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (the same file wfg-db uses)
 #   data/base/    base data load files (copied from capston-data data/지도자원/적재), read-only
+#   data/risk/    risk region grids (demo/uiseong/build_risk_grid.py), read-only. Without
+#                 data/risk/uiseong the API still runs; RISK-01 leaves out terrain · fuel.
 # See deploy/README.md.
 name: wfg
 
@@ -17,8 +19,10 @@ services:
     environment:
       DB_HOST: wfg-db
       BASE_DATA_DIR: /data/base
+      RISK_GRID_DIR: /data/risk/uiseong
     volumes:
       - ./data/base:/data/base:ro
+      - ./data/risk:/data/risk:ro
     # Only reachable from inside EC2 for now (check with an SSH tunnel).
     ports:
       - "127.0.0.1:8000:8000"

@@ -6,7 +6,8 @@
 - 기온 · 습도 · 풍속 · 강수량: 예측에 쓴 기상(predictions.weather)의 0 ~ 5시간 — 한 점 값
 - 취약계층 수: P5와 겹친 리(villages)의 65세 이상 + 0 ~ 14세 추정 × 겹친 면적 비율의 합
 - 소방서와의 거리: 예측 기준 화선에서 가장 가까운 소방 시설(facilities 소방, 인접 시군 포함)
-- 지형 7 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만
+- 지형 7 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
+  읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
 - 기압 · 지면온도 · 7일 누적 강수량 · 연료 수분함량: 아직 받는 곳이 없다
 못 구한 변수는 등급 null + 이유로 보이고, 남은 변수의 가중치로 다시 나눈다(status PARTIAL).
 변수 등급은 면적 · 시각 평균이라 소수가 될 수 있다(risk/README.md 사안 3).
@@ -19,7 +20,6 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ from app.db.models import FirePerimeter, Prediction, PredictionSlice
 from app.db.models._types import SRID
 from app.repositories import base_data
 from risk import compute as calc
+from risk import grid as grid_mod
 from risk.criteria import STATIC_KEYS
 from risk.grid import StaticGrid
 from risk.weather import HOURS, RAIN_HOURS
@@ -141,23 +142,23 @@ def forecast_inputs(weather: dict[str, Any]) -> dict[str, dict[int, float | None
     return out
 
 
-@lru_cache(maxsize=2)
-def _load_grid(folder: str) -> StaticGrid:
-    from risk import grid as grid_mod  # rasterio는 격자를 쓸 때만 필요
-
-    return grid_mod.load(Path(folder))
-
-
-def static_grid() -> tuple[StaticGrid | None, str | None]:
-    """(지역 격자, 없을 때 이유). 설정 RISK_GRID_DIR가 비면 지형 · 연료 13개는 빼고 계산한다."""
+def static_grid(
+    bounds: tuple[float, float, float, float],
+) -> tuple[StaticGrid | None, str | None]:
+    """범위(P5 경계 상자)에 걸친 지역 격자 칸과, 못 읽었을 때 이유.
+    설정 RISK_GRID_DIR가 비거나 파일이 없으면 지형 · 연료 13개는 빼고 계산한다."""
     folder = get_settings().risk_grid_dir
     if not folder:
         return None, NO_GRID
+    folder = Path(folder)
+    if not (folder / "meta.json").exists():
+        return None, f"{NO_GRID} — {folder}에 파일이 없음"
     try:
-        return _load_grid(str(folder)), None
+        sg = grid_mod.load(folder, bounds=bounds)
     except Exception as exc:  # noqa: BLE001 — 격자 없이도 나머지 변수로 계산한다
         log.exception("위험도 지역 격자를 읽지 못함: %s", folder)
         return None, f"지역 격자를 읽지 못함({type(exc).__name__})"
+    return (sg, None) if sg is not None else (None, OUT_OF_GRID)
 
 
 def vulnerable_zones(session: Session, area: BaseGeometry) -> list[tuple[BaseGeometry, float]]:
@@ -173,10 +174,8 @@ def vulnerable_zones(session: Session, area: BaseGeometry) -> list[tuple[BaseGeo
     return [(wkb.loads(bytes(g)), float((a or 0) + (b or 0))) for g, a, b in rows]
 
 
-def build_inputs(
-    session: Session, prediction: Prediction, static: StaticGrid | None
-) -> calc.RiskInputs:
-    """예측 1회 → risk 입력. 좌표는 DB 그대로(EPSG:5179 = risk가 쓰는 좌표)."""
+def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInputs, str | None]:
+    """예측 1회 → (risk 입력, 지역 격자를 못 쓴 이유). 좌표는 DB 그대로(EPSG:5179 = risk 좌표)."""
     p5 = to_shape(
         session.scalar(
             select(PredictionSlice.geom).where(
@@ -184,6 +183,7 @@ def build_inputs(
             )
         )
     )
+    static, grid_reason = static_grid(p5.bounds)
     perimeter = to_shape(session.get(FirePerimeter, prediction.perimeter_id).geom)
     stations = base_data.facilities(session, perimeter)["fire_stations"]
     nearest = min(stations, key=lambda s: perimeter.distance(s.geom), default=None)
@@ -194,7 +194,7 @@ def build_inputs(
         sources["station_dist"] = f"소방 시설(facilities) — {nearest.name}"
     if static is not None:
         sources |= {k: f"지역 격자 {static.meta.get('region') or ''}".strip() for k in STATIC_KEYS}
-    return calc.RiskInputs(
+    inputs = calc.RiskInputs(
         p5=p5,
         perimeter=perimeter,
         static=static,
@@ -204,6 +204,7 @@ def build_inputs(
         stations=[s.geom for s in stations],
         sources=sources,
     )
+    return inputs, grid_reason
 
 
 # ── 결과 → 명세 모양 ──
@@ -254,8 +255,8 @@ def to_grades(
 
 def grade_factors(session: Session, prediction: Prediction) -> list[FactorGrade]:
     """변수 23개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
-    static, grid_reason = static_grid()
-    res = calc.compute_risk(build_inputs(session, prediction, static))
+    inputs, grid_reason = build_inputs(session, prediction)
+    res = calc.compute_risk(inputs)
     return to_grades(
         res,
         base_at=prediction.base_at,

@@ -8,6 +8,9 @@
 - `inputs/fuel_models.csv`         ELMFIRE 연료 사전(GR1 · GR2 · GS2 연료량 lb/ft², 연료층 깊이 ft)
 - `inputs/cc.tif` · `ch.tif`       수관피복률(%: 임상도 밀도 소 30 · 중 55 · 밀 85) ·
   수관높이(m × 10)
+
+11/10 A′ 덱은 연료층 깊이 · 표면적비만 바꾸고 모델 번호 · 이름 · 연료량은 11/1과 같다. A′ 릴리스에는
+대응표 두 개가 없어 `tables`로 11/1 덱의 표를 쓴다(load_fuel_models).
 """
 
 import csv
@@ -50,9 +53,12 @@ def _forest_type(species: str) -> str:
     raise ValueError(f"모르는 수종: {species}")
 
 
-def load_fuel_models(deck: Path) -> dict[int, FuelModel]:
-    """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값."""
+def load_fuel_models(deck: Path, tables: Path | None = None) -> dict[int, FuelModel]:
+    """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값.
+    tables: 대응표(inputs/fuel_model_mapping.csv · scripts/fuel_table_raw.csv)를 읽을 덱 —
+    비우면 deck. 연료층 깊이 · GR · GS 연료량은 늘 deck의 fuel_models.csv."""
     deck = Path(deck)
+    tables = Path(tables) if tables else deck
     lib = {}
     for row in csv.reader(open(deck / "inputs" / "fuel_models.csv", encoding="utf-8-sig")):
         if row and row[0].strip().isdigit():
@@ -61,10 +67,10 @@ def load_fuel_models(deck: Path) -> dict[int, FuelModel]:
             lib[code] = (sum(loads) / LB_FT2_PER_T_HA, float(row[11]) * CM_PER_FT)
     raw = {
         (r["수종"], float(r["영급"]), float(r["경급"])): r
-        for r in _csv(deck / "scripts" / "fuel_table_raw.csv")
+        for r in _csv(tables / "scripts" / "fuel_table_raw.csv")
     }
     out: dict[int, FuelModel] = {}
-    for r in _csv(deck / "inputs" / "fuel_model_mapping.csv"):
+    for r in _csv(tables / "inputs" / "fuel_model_mapping.csv"):
         code = int(r["fbfm"])
         sp, age, dia = r["수종"], float(r["영급"]), float(r["경급"])
         src = raw[(sp, age, dia)]

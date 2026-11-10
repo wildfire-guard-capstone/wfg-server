@@ -82,7 +82,10 @@ PYTHONPATH=. ~/miniforge3/envs/wfg-elm/bin/python -X utf8 -m demo.uiseong.verify
 `python -m demo.uiseong.prepare_risk_data --input <input> --asos <asos_278_20250312_20250322.csv> --sgis-zip <SGIS zip>`
 (`<input>/risk/`: 시간별 기상 · 읍면동 취약계층 비율). 지역 격자(지형 · 연료 13개 등급, `<input>/risk/grid/`)는 처음 돌 때 만든다(약 1분).
 앞 결과에 위험도만 더하기(ELMFIRE · LLM 없이 로컬): `python -m demo.uiseong.step1b_risk --input <input> --runs <결과 폴더>`.
-의성 4회차(`tune10`의 P5): R 3.11 · 3.11 · 3.08 · 3.09. 변수 정의 · 자료 · 설계 결정은 [`risk/README.md`](../../risk/README.md).
+의성 4회차(`tune10`의 P5): R 3.11 · 3.11 · 3.08 · 3.09(11/1 덱 격자), A′ 덱 격자로는 3.07 · 3.07 · 3.05 · 3.06(연료층 깊이만 바뀜).
+변수 정의 · 자료 · 설계 결정은 [`risk/README.md`](../../risk/README.md).
+API(EC2)용 시군구 격자: `python -m demo.uiseong.build_risk_grid --input <input> --deck <A′ 덱> --tables <11/1 덱> --out <폴더>/uiseong`
+(의성군 경계 + 2 km, 1945 × 1379칸, 57 MB) → EC2 `data/risk/uiseong/`([`deploy/README.md`](../../deploy/README.md)).
 뷰어(로컬): `uv run python -m demo.uiseong.build_viewer --runs <결과 폴더> --data <demo-uiseong/input> --out viewer.html`.
 
 ## LLM 대응 생성(agent/, 11/8 재설계)

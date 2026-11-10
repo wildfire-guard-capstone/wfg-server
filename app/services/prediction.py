@@ -87,6 +87,17 @@ def predictor_from_settings() -> Predictor:
         options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
         if s.predictor_work_dir:
             options["work_dir"] = s.predictor_work_dir
+        if s.predictor_weather_field == "stations":
+            from app.weather.field import station_field  # spread가 있는 곳(GPU 서버)에서만
+
+            if not (s.kma_api_key and s.data_go_kr_api_key):
+                raise ValueError(
+                    "PREDICTOR_WEATHER_FIELD=stations에는 KMA_API_KEY · "
+                    "DATA_GO_KR_API_KEY가 필요합니다"
+                )
+            options["field_provider"] = station_field(s.kma_api_key, s.data_go_kr_api_key)
+        elif s.predictor_weather_field != "point":
+            raise ValueError(f"모르는 PREDICTOR_WEATHER_FIELD: {s.predictor_weather_field}")
     return get_predictor(s.predictor, **options)
 
 

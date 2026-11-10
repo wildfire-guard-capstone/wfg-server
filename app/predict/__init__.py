@@ -9,14 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from app.predict.base import PredictionRequest, PredictionResult, Predictor
-from app.predict.elmfire import ElmfirePredictor
 from app.predict.file import FilePredictor
 from app.predict.synthetic import SyntheticPredictor
 
 PREDICTORS = {
     "synthetic": SyntheticPredictor,
     "file": FilePredictor,
-    "elmfire": ElmfirePredictor,
+    "elmfire": None,  # 쓸 때 불러온다(spread · ELMFIRE는 GPU 서버에만, API 이미지에는 없음)
 }
 
 
@@ -29,9 +28,12 @@ def get_predictor(name: str, **options: Any) -> Predictor:
         if options.get("weather_path"):
             options["weather_path"] = Path(options["weather_path"])
     if name == "elmfire":
+        from app.predict.elmfire import ElmfirePredictor
+
         options["deck"] = Path(options["deck"])
         if options.get("work_dir"):
             options["work_dir"] = Path(options["work_dir"])
+        return ElmfirePredictor(**options)
     return PREDICTORS[name](**options)
 
 

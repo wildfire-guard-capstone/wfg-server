@@ -9,6 +9,7 @@ import json
 import stat
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from pyproj import Transformer
@@ -175,3 +176,48 @@ def test_predict_removes_run_dir_and_rejects_outside_or_mismatched(fake_deck, tm
     late = BASE_AT + timedelta(hours=2)
     with pytest.raises(ValueError, match="맞지 않습니다"):
         pred.predict(PredictionRequest(START, late, (36.4, 128.6), weather()))
+
+
+class _Field:
+    """관측소 기상 격자 대신: 풍속 7 m/s 격자를 주거나(ok) 실패한다."""
+
+    def __init__(self, ok=True):
+        self.ok, self.calls = ok, []
+
+    def build(self, base_at, profile):
+        import numpy as np
+
+        from app.weather.base import WeatherUnavailable
+
+        self.calls.append((base_at, profile["width"], profile["height"]))
+        if not self.ok:
+            raise WeatherUnavailable("관측소 0곳")
+        shape = (9, profile["height"], profile["width"])
+        grids = {k: np.full(shape, 5.0, "float32") for k in ("wd", "m1", "m10", "m100")}
+        grids["ws"] = np.full(shape, 7.0 * 2.23694, "float32")
+        return grids, {"stations": ["278"], "kinds": {"관측": 1, "예보": 8}}
+
+
+def test_predict_uses_station_field_on_weather_grid_or_falls_back(fake_deck, tmp_path):
+    deck, exe = fake_deck
+    f = _Field()
+    pred = ElmfirePredictor(deck, exe, tmp_path / "runs", keep_runs=True, field_provider=f)
+    result = pred.predict(PredictionRequest(START, BASE_AT, (36.36, 128.60), weather()))
+    assert f.calls == [(BASE_AT, 6, 2)]  # 덱 기상 격자(600 m) 크기로 부른다
+    assert result.meta["weather_field"]["mode"] == "stations"
+    seen = json.loads(next(Path(result.meta["run_dir"]).glob("seen.json")).read_text())
+    assert seen["ws0"] == pytest.approx(7.0 * 2.23694, abs=1e-3)  # 격자 값이 들어갔다
+
+    bad = ElmfirePredictor(deck, exe, tmp_path / "runs2", field_provider=_Field(ok=False))
+    result = bad.predict(PredictionRequest(START, BASE_AT, (36.36, 128.60), weather()))
+    assert result.meta["weather_field"]["mode"] == "point"
+    assert "관측소 0곳" in result.meta["weather_field"]["fallback"]
+
+
+def test_api_starts_without_spread_package():
+    """API 이미지(docker/api)에는 spread/가 없다 — ELMFIRE 코드는 쓸 때만 불러와야 한다."""
+    import subprocess
+
+    code = "import sys; sys.modules['spread'] = None; import app.main, app.predict; print('ok')"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.returncode == 0 and "ok" in out.stdout, out.stderr[-800:]

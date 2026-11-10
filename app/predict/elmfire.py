@@ -29,7 +29,7 @@ from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
 from app.predict.base import HOURS, PredictionRequest, PredictionResult
-from app.weather.base import KST, WeatherRequest, check_weather
+from app.weather.base import KST, WeatherRequest, WeatherUnavailable, check_weather
 from app.weather.fixed import FixedWeather
 from spread import perimeter_run as pr
 from spread.weather_input import ElmfireWeather, hour_of_year, to_elmfire
@@ -74,6 +74,9 @@ class ElmfirePredictor:
     env: dict = field(default_factory=dict)  # PATH · PROJ_DATA · GDAL_DATA
     # 0시 고사연료수분(%) {"m10": …, "m100": …}. 없으면 0시 평형수분(앞선 기상 기록이 없을 때)
     moisture_init: dict[str, float] | None = None
+    # 관측소 여러 곳 기상 격자(app.weather.field.StationField, 의성 시연 방식). 없거나 실패하면
+    # 요청 기상(기준점 한 곳)을 영역 전체에 쓴다
+    field_provider: Any = None
     name: str = "elmfire"
 
     def _runs(self) -> Path:
@@ -104,7 +107,14 @@ class ElmfirePredictor:
             wx_profile = r.profile.copy()
             wx_shape = (r.height, r.width)
         wx_profile.update(compress="deflate")
-        own = {f"wx_{k}": (grid, wx_profile) for k, grid in wx.grids(wx_shape).items()}
+        grids, field_meta = wx.grids(wx_shape), {"mode": "point"}
+        if self.field_provider is not None:
+            try:
+                grids, info = self.field_provider.build(base_at, wx_profile)
+                field_meta = {"mode": "stations", **info}
+            except WeatherUnavailable as e:  # 관측소 기상을 못 받으면 한 곳 기상으로
+                field_meta = {"mode": "point", "fallback": str(e)[:300]}
+        own = {f"wx_{k}": (grid, wx_profile) for k, grid in grids.items()}
 
         run_dir = self._runs() / f"pred_{base_at:%Y%m%d_%H%M}_{uuid.uuid4().hex[:8]}"
         try:
@@ -128,7 +138,8 @@ class ElmfirePredictor:
             "wind_mult": self.wind_mult,
             "t_start_s": t_start_s,
             "wall_s": round(res.wall_s, 1),
-            "elmfire_weather": wx.bands,  # 실제로 넣은 값(mph · ° · %)
+            "weather_field": field_meta,
+            "elmfire_weather": wx.bands,  # 기준점 값(mph · ° · %). stations면 격자는 관측소 보간
             "moisture_init": self.moisture_init or "0시 평형수분",
         }
         if self.keep_runs:

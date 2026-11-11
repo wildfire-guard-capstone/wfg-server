@@ -16,9 +16,10 @@ dependencies = [
     # rules/ geometry (also used by spread/). The worker installs with --no-deps and
     # gets shapely from its conda env.
     "shapely>=2.0",
-    # risk/ grading (RISK-01 in the API, demo step 1b). Raster files need rasterio, which is
-    # imported only when a region grid is configured (RISK_GRID_DIR).
+    # risk/ grading (RISK-01 in the API, demo step 1b) and its region grid files
+    # (GeoTIFF, read window by window — RISK_GRID_DIR). rasterio wheels bundle GDAL.
     "numpy>=1.26",
+    "rasterio>=1.4",
     # app/ coordinate transforms (EPSG:5179 <-> 4326): file predictor, engine inputs, API.
     "pyproj>=3.6",
     # ELMFIRE weather input (app/weather/elmfire_input · deck): the API reads the deck weather

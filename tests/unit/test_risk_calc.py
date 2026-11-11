@@ -7,6 +7,7 @@ import pytest
 from shapely.geometry import Point, box
 
 from risk import fuel, terrain
+from risk import grid as grid_mod
 from risk.compute import RiskInputs, compute_risk
 from risk.criteria import CSV_WEIGHT_SUM, STATIC_KEYS, VARIABLES, aspect_grade, grade
 from risk.grid import StaticGrid
@@ -164,6 +165,21 @@ def test_load_fuel_models(tmp_path):
     grass = m[102]
     assert grass.type == "초지" and grass.load_t_ha == pytest.approx(0.0505 / 0.020482, rel=1e-3)
     assert m[91].type == "비연소" and m[91].depth_cm == 0
+
+
+def test_fuel_tables_can_come_from_another_deck(tmp_path):
+    """A′ 릴리스 덱처럼 대응표가 없는 덱: 깊이는 그 덱 fuel_models.csv, 대응표는 tables 덱."""
+    (tmp_path / "old").mkdir()
+    old = _deck(tmp_path / "old")
+    new = tmp_path / "new"
+    (new / "inputs").mkdir(parents=True)
+    rows = (old / "inputs" / "fuel_models.csv").read_text("utf-8").replace(",0.3,", ",0.064,")
+    (new / "inputs" / "fuel_models.csv").write_text(rows, encoding="utf-8")
+    m = fuel.load_fuel_models(new, tables=old)
+    assert m[14].depth_cm == pytest.approx(0.064 * 30.48, abs=0.01)
+    assert m[14].load_t_ha == fuel.load_fuel_models(old)[14].load_t_ha
+    with pytest.raises(FileNotFoundError):
+        fuel.load_fuel_models(new)
 
 
 def test_fuel_layers_and_canopy(tmp_path):
@@ -431,3 +447,43 @@ def test_area_is_hazard_and_vulnerable_counts_within_exposure_radius():
         _hx_inputs(zones=[(box(500, 0, 600, 40), 100.0)], exposure_radius_m=0)
     )
     assert {x.key: x for x in inside_only.factors}["vulnerable"].value == 0
+
+
+# ── 지역 격자 파일 · 범위만 읽기 ──
+
+
+def _small_grid(h=6, w=8):
+    """칸마다 다른 값(행 × 10 + 열)인 30 m 격자 — 범위로 자른 위치를 값으로 확인한다."""
+    g = Grid(1000.0, 2000.0, 30.0, h, w)
+    base = np.arange(h)[:, None] * 10.0 + np.arange(w)[None, :]
+    values = {k: base.copy() for k in STATIC_KEYS}
+    grades = {k: np.clip(base % 5 + 1, 1, 5) for k in STATIC_KEYS}
+    grades[STATIC_KEYS[0]][0, 0] = np.nan  # 값 없는 칸 = 0으로 저장 → NaN으로 읽힘
+    return StaticGrid(g, values, grades, {"region": "시험"})
+
+
+def test_window_of_and_sub_grid():
+    g = Grid(1000.0, 2000.0, 30.0, 6, 8)
+    assert grid_mod.window_of(g, (1031, 1911, 1089, 1969)) == (1, 3, 1, 3)
+    assert grid_mod.window_of(g, (0, 0, 500, 500)) is None  # 밖
+    assert grid_mod.window_of(g, (900, 1700, 5000, 5000)) == (0, 6, 0, 8)  # 넘치면 격자까지
+    s = grid_mod.sub_grid(g, (1, 3, 1, 3))
+    assert (s.x0, s.y0, s.h, s.w) == (1030.0, 1970.0, 2, 2)
+
+
+def test_save_and_load_by_bounds(tmp_path):
+    sg = _small_grid()
+    grid_mod.save(sg, tmp_path)
+    full = grid_mod.load(tmp_path)
+    k = STATIC_KEYS[0]
+    assert np.isnan(full.grades[k][0, 0]) and full.grades[k][1, 1] == sg.grades[k][1, 1]
+    part = grid_mod.load(tmp_path, bounds=(1031, 1911, 1089, 1969))
+    assert (part.grid.h, part.grid.w) == (2, 2)
+    assert part.values[k].tolist() == [[11.0, 12.0], [21.0, 22.0]]
+    assert grid_mod.load(tmp_path, bounds=(0, 0, 500, 500)) is None
+    # 같은 폴리곤이면 전체로 읽든 범위만 읽든 가중평균이 같다
+    poly = box(1035, 1915, 1100, 1960)
+    a = weighted_mean(full.grades[k], grid_weights(poly, full.grid))
+    win = grid_mod.load(tmp_path, bounds=poly.bounds)  # API와 같이 폴리곤 상자만큼
+    b = weighted_mean(win.grades[k], grid_weights(poly, win.grid))
+    assert a == pytest.approx(b)

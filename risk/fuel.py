@@ -8,6 +8,9 @@
 - `inputs/fuel_models.csv`         ELMFIRE 연료 사전(GR1 · GR2 · GS2 연료량 lb/ft², 연료층 깊이 ft)
 - `inputs/cc.tif` · `ch.tif`       수관피복률(%: 임상도 밀도 소 30 · 중 55 · 밀 85) ·
   수관높이(m × 10)
+
+11/10 A′ 덱은 연료층 깊이 · 표면적비만 바꾸고 모델 번호 · 이름 · 연료량은 11/1과 같다. A′ 릴리스에는
+대응표 두 개가 없어 `tables`로 11/1 덱의 표를 쓴다(load_fuel_models).
 """
 
 import csv
@@ -53,12 +56,13 @@ def _forest_type(species: str) -> str:
 def load_fuel_models(deck: Path, tables: Path | None = None) -> dict[int, FuelModel]:
     """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값.
 
-    tables: scripts/fuel_table_raw.csv · inputs/fuel_model_mapping.csv가 있는 덱 폴더(기본 = deck).
-    11/9 최종 덱 묶음에는 이 두 표가 없다 — 연료 모델 번호 · fuel_models.csv가 11/1 덱과 같으므로
-    11/1 덱(<input>/elmfire_deck)의 표를 그대로 쓴다.
+    tables: 대응표(inputs/fuel_model_mapping.csv · scripts/fuel_table_raw.csv)를 읽을 덱,
+    비우면 deck. 11/9 · 11/10 최종 덱 묶음에는 이 두 표가 없다 — 연료 모델 번호가 11/1 덱과
+    같으므로 11/1 덱(<input>/elmfire_deck)의 표를 쓴다. 연료층 깊이 · GR · GS 연료량은 늘 deck의
+    fuel_models.csv.
     """
     deck = Path(deck)
-    tables = Path(tables) if tables is not None else deck
+    tables = Path(tables) if tables else deck
     lib = {}
     for row in csv.reader(open(deck / "inputs" / "fuel_models.csv", encoding="utf-8-sig")):
         if row and row[0].strip().isdigit():

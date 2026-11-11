@@ -9,6 +9,7 @@ EC2 /home/ubuntu/wfg/
 ├── db.env        ← POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (wfg-db와 같이 씀, 비공개)
 ├── api.env       ← API 설정(없으면 배포가 빈 파일로 만듦, 덮어쓰지 않음) — 「GPU 서버 연결」
 ├── data/base/    ← 바탕 데이터 적재 파일 6개 (컨테이너 /data/base, 읽기 전용)
+├── data/risk/uiseong/ ← 위험도 지역 격자 grades.tif · values.tif · meta.json (컨테이너 /data/risk, 읽기 전용)
 └── deck/elmfire_deck/  ← ELMFIRE 덱(릴리스 deck-20261110) — api · worker 둘 다 /deck에 읽기 전용
 ```
 
@@ -47,6 +48,18 @@ docker compose up -d api                                   # 같은 버전으로
 
 ```bash
 rsync -az "<capston-data>/data/지도자원/적재/" wfg-ec2:/home/ubuntu/wfg/data/base/
+```
+
+위험도 지역 격자(지형 7 · 연료 6, 의성군)를 새로 만들었으면 같은 방법으로 복사한다. 없으면 API는 그대로 뜨고
+RISK-01이 그 13개를 빼고 계산한다(이유 표시). 컨테이너가 요청마다 P5 근처 칸만 읽으니 다시 켤 필요는 없다.
+
+```bash
+# 만들기(내 컴퓨터, ELMFIRE 덱 · demo-uiseong/input 필요 — demo/uiseong/build_risk_grid.py 참고)
+uv run python -m demo.uiseong.build_risk_grid --input <demo-uiseong/input> --deck <A′ 덱> \
+    --tables <11/1 덱> --out <폴더>/uiseong
+# 올리기(배포가 먼저 돌았으면 docker가 data/risk를 root로 만들어 두므로 주인을 ubuntu로)
+ssh wfg-ec2 "mkdir -p /home/ubuntu/wfg/data/risk && sudo chown ubuntu:ubuntu /home/ubuntu/wfg/data/risk"
+scp -r <폴더>/uiseong wfg-ec2:/home/ubuntu/wfg/data/risk/
 ```
 
 API를 내 컴퓨터에서 보려면 터널: `ssh -N -L 8000:127.0.0.1:8000 wfg-ec2` → http://localhost:8000/health

@@ -49,7 +49,7 @@ SOURCES = {
     "water_dist": "DEM 흐름 누적 0.5 km² 이상 물길 + OSM 저수지 · 호수",
     "fuel_type": "ELMFIRE 입력 연료 모델(임상도 2024 · 토지피복)",
     "fuel_load": "연구자료 제1036호 연소가능 수관연료량 + 지표 연료(ELMFIRE 입력 연료 모델)",
-    "fuel_depth": "ELMFIRE 연료 사전 연료층 깊이(숲 0.3 ft = 가정값)",
+    "fuel_depth": "ELMFIRE 연료 사전 연료층 깊이(fuel_models.csv — 11/1 덱은 숲 0.3 ft 가정값, A′는 국내값)",
     "stand_age": "임상도 영급 → 10n − 5년(ELMFIRE 입력 연료 모델)",
     "canopy_height": "ELMFIRE 입력 ch(임상도 임분고)",
     "canopy_cover": "ELMFIRE 입력 cc(임상도 밀도 소 30 · 중 55 · 밀 85%)",
@@ -105,15 +105,33 @@ def weather_files(deck: Path) -> tuple[Path, Path, str]:
     return inp / f"{ws_name}.tif", inp / f"{m1_name}.tif", note
 
 
-def build_grid(input_dir: Path, deck: Path, out: Path) -> Path:
-    """ELMFIRE 입력 30 m 격자 + 지도 17_저수지_호수 → 지역 격자(risk.grid) 파일."""
+def build_grid(
+    input_dir: Path,
+    deck: Path,
+    out: Path,
+    bounds: tuple[float, float, float, float] | None = None,
+    tables: Path | None = None,
+    region: str = "의성(ELMFIRE 입력 11/1 영역)",
+) -> Path:
+    """ELMFIRE 입력 30 m 격자 + 지도 17_저수지_호수 → 지역 격자(risk.grid) 파일.
+    bounds(EPSG:5179)를 주면 덱에서 그 범위만 잘라 만든다. tables = 연료 대응표를 읽을 덱
+    (비우면 덱 자신, 없으면 <input>/elmfire_deck — fuel_tables_dir)."""
     from rasterio.features import rasterize
     from rasterio.transform import from_origin
+
+    tables = Path(tables) if tables else fuel_tables_dir(input_dir, deck)
 
     (dem,), g = _read_band_stack(deck / "inputs" / "dem.tif")
     (fb,), _ = _read_band_stack(deck / "inputs" / "fbfm.tif")
     (cc,), _ = _read_band_stack(deck / "inputs" / "cc.tif")
     (ch,), _ = _read_band_stack(deck / "inputs" / "ch.tif")
+    if bounds is not None:
+        win = grid_mod.window_of(g, bounds)
+        if win is None:
+            raise ValueError(f"범위 {bounds}가 덱 격자와 겹치지 않음")
+        r0, r1, c0, c1 = win
+        dem, fb, cc, ch = (a[r0:r1, c0:c1] for a in (dem, fb, cc, ch))
+        g = grid_mod.sub_grid(g, win)
     water_path = next((input_dir / "map").glob("17_*.geojson"))
     polys = [
         geom for _, geom in _feats(water_path) if geom.geom_type in ("Polygon", "MultiPolygon")
@@ -126,12 +144,13 @@ def build_grid(input_dir: Path, deck: Path, out: Path) -> Path:
         dtype="uint8",
     ).astype(bool)
     sg = grid_mod.build_static_grid(
-        dem, fb.astype(int), cc, ch / 10.0, g,
-        fuel_mod.load_fuel_models(deck, fuel_tables_dir(input_dir, deck)), water,
+        dem, fb.astype(int), cc, ch / 10.0, g, fuel_mod.load_fuel_models(deck, tables), water,
         meta={
-            "region": "의성(ELMFIRE 입력 11/1 영역)",
-            "sources": {"deck": str(deck.name), "deck_path": str(Path(deck).resolve()),
-                        "fuel_tables": str(fuel_tables_dir(input_dir, deck).name), "water": water_path.name, "water_polygons": len(polys)},
+            "region": region,
+            "sources": {
+                "deck": str(deck.name), "deck_path": str(Path(deck).resolve()),
+                "tables": str(Path(tables).name), "water": water_path.name, "water_polygons": len(polys),
+            },
             "built": datetime.now().isoformat(timespec="seconds"),
         },
     )  # fmt: skip

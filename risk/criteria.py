@@ -250,7 +250,49 @@ STATIC_KEYS = (
     "fuel_type", "fuel_load", "fuel_depth", "stand_age", "canopy_height", "canopy_cover",
 )  # fmt: skip
 WEATHER_KEYS = ("temp", "precip", "wind", "humidity", "pressure", "ground_temp", "rain_7d")
-AXES = {"W": "기상", "T": "지형", "F": "연료", "I": "인프라"}
+AXES = {"W": "기상", "T": "지형", "F": "연료", "S": "규모", "I": "인프라", "E": "노출"}
+
+# ── 팀 추가 변수(AI Hub CSV 밖, 11/10 · 11/11) ──
+# 불이 커지거나 마을에 가까워질수록 오르는 합산 변수.
+# 면적 = 불의 규모(위해 H 쪽 「S 규모」 축, 11/11): 범위가 넓다는 것은 기상 · 연료가 낳은
+# 결과라 노출에 두면 같은 원인을 두 번 센다(강풍 → H↑ · 범위↑ → X↑).
+# 주택 수 = 노출 X 쪽 「E 노출」 축.
+# 등급은 10배마다 1씩 오르는 연속값(로그). 가중치는 RiskInputs.exposure로 바꾼다(0이면 뺌).
+EXPOSURE_VARIABLES: tuple[Variable, ...] = (
+    Variable(
+        "area", "예측 범위 면적", "S", 0.15, "ha", None,
+        "10배마다 1등급(연속): 10 ha = 2(산림청 대응 1단계 시작), 100 ha = 3(2단계), 1,000 ha = 4, "
+        "10,000 ha 이상 = 5, 1 ha 이하 = 1",
+    ),
+    Variable(
+        "houses_1km", "예측 범위 1 km 안 주택 수", "E", 0.05, "동", None,
+        "10배마다 1등급(연속): 0동 = 1, 9동 = 2, 99동 = 3, 999동 = 4, 9,999동 이상 = 5",
+    ),
+)  # fmt: skip
+EXPOSURE_BY_KEY = {v.key: v for v in EXPOSURE_VARIABLES}
+
+# ── R = √(위해 H × 노출 X) (11/10, UNDRR 「위험 = 위해 × 노출 × 취약성」) ──
+# H = 불이 얼마나 크고 사나운가(기상 · 지형 · 연료 21개 AI Hub 가중치 + 예측 범위 면적)
+# X = 그 불 앞에 누가 있고 얼마나 막을 수 있나(P5 + 1 km 안 주택 · 취약계층, 소방서 거리)
+HAZARD_AXES = ("W", "T", "F", "S")
+EXPOSURE_AXES = ("I", "E")
+COMBINES = ("sqrt_hx", "mean")  # mean = 23(+노출)개를 한 번에 가중평균(11/10 이전)
+DEFAULT_EXPOSURE = {v.key: v.weight for v in EXPOSURE_VARIABLES}
+HOUSE_RADIUS_M = (
+    1000.0  # 노출(주택 · 취약계층)을 세는 범위 = P5 + 이 거리(RiskInputs.exposure_radius_m)
+)
+
+
+def area_grade(ha: float) -> float:
+    """예측 범위 면적(ha) → 1 ~ 5(연속). 2 + log10(면적 ÷ 10 ha)."""
+    return float(min(5.0, max(1.0, 2.0 + np.log10(max(ha, 1e-9) / 10.0))))
+
+
+def houses_grade(n: float) -> float:
+    """주택 수 → 1 ~ 5(연속). 1 + log10(1 + 동 수)."""
+    return float(min(5.0, max(1.0, 1.0 + np.log10(1.0 + max(n, 0.0)))))
+
+
 CSV_WEIGHT_SUM = round(sum(v.weight for v in VARIABLES), 6)  # 0.94
 
 # 수종종류 등급(CSV 순서). 연료가 없는 칸(시가지 · 논밭 · 물 · 나지)은 1등급(README F-1)

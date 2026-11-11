@@ -75,16 +75,28 @@ def weighted_mean(values: np.ndarray, w: Weights) -> float | None:
     return float((v[ok] * w.frac[ok]).sum() / w.frac[ok].sum())
 
 
-def zone_sum(zones: Iterable[tuple[BaseGeometry, float]], geom: BaseGeometry) -> tuple[float, list]:
-    """Σ 인원ⱼ × (geom ∩ 구역ⱼ 면적) ÷ 구역ⱼ 면적. 돌려주는 것: (합계, 겹친 구역 목록)."""
+def zone_sum(zones: Iterable[tuple], geom: BaseGeometry) -> tuple[float, list]:
+    """Σ 인원ⱼ × 겹친 비율ⱼ. 돌려주는 것: (합계, 겹친 구역 목록 [(번호, 비율, 인원, 방식)]).
+
+    zones의 원소: (경계, 인원) 또는 (경계, 인원, 주택 좌표 (k, 2) 배열).
+    주택 좌표가 있으면(1채 이상) 겹친 비율 = geom 안에 든 주택 수 ÷ 그 구역 주택 수.
+    없으면 geom ∩ 구역 면적 ÷ 구역 면적(사람이 구역에 고르게 산다고 봄).
+    """
     total, hits = 0.0, []
     shapely.prepare(geom)
-    for i, (z, n) in enumerate(zones):
+    for i, zone in enumerate(zones):
+        z, n = zone[0], zone[1]
+        pts = zone[2] if len(zone) > 2 else None
         if z.is_empty or z.area <= 0 or not geom.intersects(z):
             continue
-        share = geom.intersection(z).area / z.area
+        if pts is not None and len(pts):
+            share = float(shapely.contains_xy(geom, pts[:, 0], pts[:, 1]).sum()) / len(pts)
+            how = "houses"
+        else:
+            share = geom.intersection(z).area / z.area
+            how = "area"
         if share <= 0:
             continue
         total += n * share
-        hits.append((i, share, n * share))
+        hits.append((i, share, n * share, how))
     return total, hits

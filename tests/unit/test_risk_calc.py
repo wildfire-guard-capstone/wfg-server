@@ -236,6 +236,8 @@ def test_compute_risk_weighted_mean_and_missing():
             rain_7d=0.0,  # 5
             zones=[(box(0, 0, 40, 40), 300.0)],  # 3
             stations=[Point(20, 20 + 5000)],  # 5 km → 2
+            exposure={},  # AI Hub 23개만
+            combine="mean",
         )
     )
     used = {f.key: f.grade for f in res.factors if f.grade is not None}
@@ -251,5 +253,181 @@ def test_compute_risk_weighted_mean_and_missing():
 
 
 def test_compute_risk_without_static_grid():
-    res = compute_risk(RiskInputs(p5=box(0, 0, 10, 10), perimeter=box(0, 0, 1, 1), static=None))
+    res = compute_risk(
+        RiskInputs(
+            p5=box(0, 0, 10, 10),
+            perimeter=box(0, 0, 1, 1),
+            static=None,
+            exposure={},
+            combine="mean",
+        )
+    )
     assert res.score is None and len(res.missing) == 23
+    # 규모(면적)는 지역 격자 없이도 값이 있다. 주택 좌표 · 구역 · 소방서가 없으면 X 없음 → R = H
+    res = compute_risk(RiskInputs(p5=box(0, 0, 10, 10), perimeter=box(0, 0, 1, 1), static=None))
+    assert res.hazard == pytest.approx(1.0) and res.exposure is None and res.score == res.hazard
+    assert "houses_1km" in res.missing and any("위해 H만" in n for n in res.notes)
+
+
+# ── 연료: 탈 수 있는 칸만 평균(burnable_only) ──
+
+
+def _half_farmland():
+    """왼쪽 절반 = 논밭(비연소, 연료 등급 1), 오른쪽 절반 = 침엽수림(연료 등급 5)."""
+    sg = _static(3.0)
+    burn = np.zeros((4, 4), bool)
+    burn[:, 2:] = True
+    sg.values["fuel_type"] = np.where(burn, fuel.TYPE_ID["침엽수림"], fuel.TYPE_ID["비연소"])
+    sg.values["fuel_type"] = sg.values["fuel_type"].astype("float64")
+    for k in ("fuel_type", "fuel_load", "fuel_depth", "stand_age", "canopy_height", "canopy_cover"):
+        sg.grades[k] = np.where(burn, 5.0, 1.0)
+    return sg
+
+
+def _fuel_grades(res):
+    return {f.key: f.grade for f in res.factors if f.axis == "F" and f.key != "moisture"}
+
+
+def test_fuel_burnable_only_ignores_non_burnable_land():
+    sg = _half_farmland()
+    p5 = box(0, 0, 40, 40)
+    new = compute_risk(RiskInputs(p5=p5, perimeter=Point(20, 20), static=sg))
+    old = compute_risk(RiskInputs(p5=p5, perimeter=Point(20, 20), static=sg, burnable_only=False))
+    assert set(_fuel_grades(new).values()) == {5.0}  # 숲 칸만
+    assert set(_fuel_grades(old).values()) == {3.0}  # 논밭 1 + 숲 5 평균
+    assert any("탈 수 있는 땅 50.0%" in n for n in new.notes)
+    # 지형은 그대로 모든 칸
+    assert {f.grade for f in new.factors if f.axis == "T"} == {3.0}
+
+
+def test_fuel_grade_does_not_drop_when_fire_reaches_farmland():
+    sg = _half_farmland()
+    forest_only = compute_risk(
+        RiskInputs(p5=box(20, 0, 40, 40), perimeter=Point(30, 20), static=sg)
+    )
+    grown = compute_risk(RiskInputs(p5=box(0, 0, 40, 40), perimeter=Point(30, 20), static=sg))
+    assert _fuel_grades(forest_only) == _fuel_grades(grown)
+
+
+def test_fuel_no_burnable_cells_is_grade_1_and_unknown_is_missing():
+    sg = _half_farmland()
+    farm = compute_risk(RiskInputs(p5=box(0, 0, 20, 40), perimeter=Point(10, 20), static=sg))
+    assert set(_fuel_grades(farm).values()) == {1.0}
+    sg.values["fuel_type"][:] = np.nan
+    for k in ("fuel_type", "fuel_load", "fuel_depth", "stand_age", "canopy_height", "canopy_cover"):
+        sg.grades[k][:] = np.nan
+    res = compute_risk(RiskInputs(p5=box(0, 0, 40, 40), perimeter=Point(20, 20), static=sg))
+    assert {"fuel_type", "fuel_load", "canopy_cover"} <= set(res.missing)
+
+
+# ── 취약계층: 주택 비율로 나누기 ──
+
+
+def test_zone_sum_by_houses_counts_people_where_houses_are():
+    # 100 m × 100 m 리, 인원 100명. 주택 4채가 모두 오른쪽 위 구석(마을)에 있음
+    z = box(0, 0, 100, 100)
+    pts = np.array([[80.0, 80.0], [85.0, 90.0], [90.0, 85.0], [95.0, 95.0]])
+    forest = box(0, 0, 50, 100)  # 왼쪽 절반(산)만 덮음
+    village = box(70, 70, 100, 100)  # 마을만 덮음(면적 9%)
+    assert zone_sum([(z, 100.0)], forest)[0] == pytest.approx(50.0)  # 면적 방식
+    assert zone_sum([(z, 100.0, pts)], forest)[0] == 0.0  # 집이 없으면 0명
+    assert zone_sum([(z, 100.0)], village)[0] == pytest.approx(9.0)
+    assert zone_sum([(z, 100.0, pts)], village)[0] == pytest.approx(100.0)
+    half = box(0, 0, 100, 87)  # 4채 중 2채([80,80], [90,85])
+    n, hits = zone_sum([(z, 100.0, pts)], half)
+    assert n == pytest.approx(50.0) and hits[0][3] == "houses"
+
+
+def test_zone_sum_without_houses_falls_back_to_area():
+    z = box(0, 0, 100, 100)
+    empty = np.zeros((0, 2))
+    n, hits = zone_sum([(z, 100.0, empty), (box(100, 0, 200, 100), 10.0)], box(50, 0, 150, 100))
+    assert n == pytest.approx(55.0)
+    assert [h[3] for h in hits] == ["area", "area"]
+
+
+# ── 팀 추가 노출 변수(면적 · 1 km 안 주택 수) ──
+
+
+def test_exposure_grades_are_log_scaled():
+    from risk.criteria import area_grade, houses_grade
+
+    assert area_grade(10) == pytest.approx(2.0)  # 산림청 대응 1단계 시작
+    assert area_grade(100) == pytest.approx(3.0)  # 2단계
+    assert area_grade(1000) == pytest.approx(4.0)
+    assert area_grade(0.5) == 1.0 and area_grade(1e6) == 5.0
+    assert houses_grade(0) == 1.0 and houses_grade(9) == pytest.approx(2.0)
+    assert houses_grade(99) == pytest.approx(3.0) and houses_grade(1e9) == 5.0
+
+
+def test_exposure_raises_r_as_range_grows_and_near_houses():
+    sg = _static(3.0)
+    houses = np.array([[3000.0, 20.0]] * 50)  # 오른쪽 3 km에 주택 50동
+    small, big = box(0, 0, 40, 40), box(-2000, -2000, 2040, 2040)  # 큰 범위는 경계에서 약 1 km
+    kw = dict(perimeter=Point(20, 20), static=sg, houses_xy=houses)
+    r_small = compute_risk(RiskInputs(p5=small, **kw))
+    r_big = compute_risk(RiskInputs(p5=big, **kw))
+    assert r_big.score > r_small.score
+    f = {x.key: x for x in r_big.factors}
+    assert f["houses_1km"].value == 50 and f["area"].value == pytest.approx(big.area / 1e4)
+    assert {x.key: x for x in r_small.factors}["houses_1km"].value == 0
+    # 가중치 0(또는 {})이면 빠진다
+    off = compute_risk(RiskInputs(p5=big, exposure={"area": 0.10}, **kw))
+    assert "houses_1km" not in {x.key for x in off.factors}
+    assert off.axes["S"]["n"] == 1 and off.axes["E"]["n"] == 0
+
+
+# ── R = √(위해 H × 노출 X) ──
+
+
+def _hx_inputs(**kw):
+    weather = {k: dict.fromkeys(range(6), v) for k, v in
+               (("temp", 30.0), ("wind", 12.0), ("humidity", 15.0), ("moisture", 8.0),
+                ("pressure", 1010.0), ("ground_temp", 20.0))}  # fmt: skip
+    weather["precip"] = dict.fromkeys(range(1, 6), 0.0)
+    base = dict(
+        p5=box(0, 0, 40, 40), perimeter=Point(20, 20), static=_static(3.0), weather=weather,
+        rain_7d=0.0, zones=[(box(0, 0, 40, 40), 300.0)], stations=[Point(20, 5020)],
+        houses_xy=np.array([[20.0, 20.0]] * 5),
+    )  # fmt: skip
+    base.update(kw)
+    return RiskInputs(**base)
+
+
+def test_sqrt_hx_is_geometric_mean_of_hazard_and_exposure():
+    res = compute_risk(_hx_inputs())
+    assert res.combine == "sqrt_hx"
+    h = [f for f in res.factors if f.grade is not None and f.axis in "WTFS"]
+    x = [f for f in res.factors if f.grade is not None and f.axis in "IE"]
+    H = sum(f.weight_csv * f.grade for f in h) / sum(f.weight_csv for f in h)
+    X = sum(f.weight_csv * f.grade for f in x) / sum(f.weight_csv for f in x)
+    assert res.hazard == pytest.approx(H) and res.exposure == pytest.approx(X)
+    assert res.score == pytest.approx((H * X) ** 0.5)
+    # 묶음마다 가중치 합 1
+    assert sum(f.weight for f in h) == pytest.approx(1.0)
+    assert sum(f.weight for f in x) == pytest.approx(1.0)
+    d = res.to_dict()
+    assert d["hazard"] == round(H, 2) and d["exposure"] == round(X, 2)
+
+
+def test_sqrt_hx_low_exposure_pulls_r_down_even_with_bad_conditions():
+    crowded = compute_risk(_hx_inputs())
+    empty = compute_risk(_hx_inputs(zones=[(box(0, 0, 40, 40), 0.0)], houses_xy=np.zeros((0, 2))))
+    assert empty.hazard == pytest.approx(crowded.hazard)
+    assert empty.score < crowded.score
+    mean = compute_risk(_hx_inputs(combine="mean"))
+    assert mean.hazard is None and mean.score != crowded.score
+    with pytest.raises(ValueError):
+        compute_risk(_hx_inputs(combine="max"))
+
+
+def test_area_is_hazard_and_vulnerable_counts_within_exposure_radius():
+    # 면적은 위해 H(규모 축), 취약계층은 P5 + 1 km 안에서 센다(주택과 같은 범위)
+    res = compute_risk(_hx_inputs(zones=[(box(500, 0, 600, 40), 100.0)]))  # P5 밖 500 m 마을
+    f = {x.key: x for x in res.factors}
+    assert f["area"].axis == "S" and f["houses_1km"].axis == "E"
+    assert f["vulnerable"].value == pytest.approx(100.0)
+    inside_only = compute_risk(
+        _hx_inputs(zones=[(box(500, 0, 600, 40), 100.0)], exposure_radius_m=0)
+    )
+    assert {x.key: x for x in inside_only.factors}["vulnerable"].value == 0

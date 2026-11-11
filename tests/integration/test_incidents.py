@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import bindparam, text
 
@@ -158,6 +160,12 @@ def test_report_and_correct_perimeter(client, login, anpyeong):
     fix = {"geometry": square(*anpyeong, d=0.004), "observed_at": "2025-03-22T13:05:00+09:00"}
     r = client.post(f"{per}/{v0}/corrections", json=fix, headers=rep)
     assert r.status_code == 422 and r.json()["error"]["code"] == "V0_NOT_CORRECTABLE"
+    # 고친 화선 시각: 그 앞 화선(v0)보다 이전이면 거절, 5분 넘게 미래면 거절(PER-02와 같게, 11/11)
+    for bad in ("2025-03-22T10:00:00+09:00", (datetime.now(UTC) + timedelta(hours=1)).isoformat()):
+        r = client.post(
+            f"{per}/{v1['id']}/corrections", json={**fix, "observed_at": bad}, headers=rep
+        )
+        assert r.status_code == 422 and r.json()["error"]["code"] == "INVALID_OBSERVED_AT", bad
     r = client.post(f"{per}/{v1['id']}/corrections", json=fix, headers=rep)
     assert r.status_code == 201, r.text
     v2 = r.json()["data"]

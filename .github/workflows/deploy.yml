@@ -93,8 +93,11 @@ jobs:
           printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
-      - name: Copy compose file
-        run: scp -i ~/.ssh/deploy deploy/compose.ec2.yml "$EC2:/home/ubuntu/wfg/compose.yml"
+      - name: Copy compose file and Caddyfile
+        run: |
+          scp -i ~/.ssh/deploy deploy/compose.ec2.yml "$EC2:/home/ubuntu/wfg/compose.yml"
+          $SSH "$EC2" "mkdir -p /home/ubuntu/wfg/caddy"
+          scp -i ~/.ssh/deploy deploy/caddy/Caddyfile "$EC2:/home/ubuntu/wfg/caddy/Caddyfile"
       - name: Pull image and restart
         run: |
           # The job token can read the image only while this job runs; log out right after.
@@ -106,9 +109,11 @@ jobs:
           # compose reads .env; pins this version of both images
           printf 'API_IMAGE=%s\nWORKER_IMAGE=%s\n' "${IMAGE}:${GITHUB_SHA}" "${WORKER_IMAGE}:${GITHUB_SHA}" > .env
           touch api.env   # optional API settings, edited by hand on EC2; never overwritten
-          docker compose pull api worker
+          docker compose pull api worker web
           docker logout ghcr.io >/dev/null
-          docker compose up -d api worker
+          docker compose up -d api worker web
+          # apply a changed Caddyfile when the web container itself was not recreated
+          docker compose exec -T web caddy reload --config /etc/caddy/Caddyfile
           EOF
       - name: Health check
         run: |
@@ -118,6 +123,19 @@ jobs:
           done
           $SSH "$EC2" "cd /home/ubuntu/wfg && docker compose logs --tail 50 api"
           exit 1
+      - name: Web check (port 80 → api, docs closed)
+        run: |
+          ok=
+          for i in $(seq 1 30); do
+            if $SSH "$EC2" "curl -fs http://127.0.0.1/health"; then echo; ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then
+            $SSH "$EC2" "cd /home/ubuntu/wfg && docker compose logs --tail 50 web"
+            exit 1
+          fi
+          code=$($SSH "$EC2" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/docs")
+          if [ "$code" != 404 ]; then echo "/docs must stay closed, got $code"; exit 1; fi
       - name: Worker health check
         run: |
           # worker has no published port: ask it from inside the api container (same network)

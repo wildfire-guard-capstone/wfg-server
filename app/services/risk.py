@@ -1,28 +1,42 @@
-"""위험도 R(1.00~5.00): 예측 1회마다 P5 안 23개 변수의 가중평균(위험도-정리.md, 명세 7.6).
+"""위험도 R(1.00~5.00): 예측 1회마다 R = √(위해 H × 노출 X)(11/10 팀 결정, risk/README.md).
+
+- H(위해) = 기상 7 · 지형 7 · 연료 7(AI Hub 21개) + 산불 규모(P5 면적)의 가중평균
+- X(노출) = 취약계층 수 · 소방서와의 거리(AI Hub 2개) + 주변 주택 수의 가중평균
+- 둘 다 1 ~ 5라 R도 1 ~ 5. 노출 변수가 모두 없으면 R = H
+명세 7.6(23개 한 번에 가중평균)에서 바뀐 점: 변수 2개 추가(규모 · 주택 수), 노출을 P5 + 1 km로,
+취약계층을 리 안 주택 비율로 나눔, 묶음별 평균 뒤 기하평균.
 
 변수 등급은 `risk/` 패키지(risk.compute, 의성 데모 1b와 같은 계산)가 구하고, 여기서는 DB에서
 입력을 모아 넘긴 뒤 명세 모양(Risk · RiskFactor)으로 바꾼다.
 
 - 기온 · 습도 · 풍속 · 강수량: 예측에 쓴 기상(predictions.weather)의 0 ~ 5시간 — 한 점 값
-- 취약계층 수: P5와 겹친 리(villages)의 65세 이상 + 0 ~ 14세 추정 × 겹친 면적 비율의 합
+- 취약계층 수: P5 + 1 km와 겹친 리(villages)의 65세 이상 + 0 ~ 14세 추정 × 그 리 주택 중 안에 든
+  비율의 합(주택 점이 없는 리는 겹친 면적 비율)
+- 주변 주택 수: P5 + 1 km 안 주택 점(map_features kind=house)
+- 산불 규모: P5 면적
 - 소방서와의 거리: 예측 기준 화선에서 가장 가까운 소방 시설(facilities 소방, 인접 시군 포함)
 - 지형 7 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
   읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
 - 기압 · 지면온도 · 7일 누적 강수량 · 연료 수분함량: 아직 받는 곳이 없다
-못 구한 변수는 등급 null + 이유로 보이고, 남은 변수의 가중치로 다시 나눈다(status PARTIAL).
+못 구한 변수는 등급 null + 이유로 보이고, 그 묶음 안 남은 변수의 가중치로 다시 나눈다
+(status PARTIAL).
 변수 등급은 면적 · 시각 평균이라 소수가 될 수 있다(risk/README.md 사안 3).
 
-`aggregate()`는 명세 그대로다. 저장하지 않고 조회할 때마다 계산한다(저장 위치는 명세 Q-01).
+`aggregate()`가 위 식을 계산한다(risk.compute.compute_risk와 같은 값). 저장하지 않고 조회할
+때마다 계산한다(저장 위치는 명세 Q-01).
 위험도는 제안의 입력이 아니다(11/7).
 """
 
 import logging
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import shapely
 from geoalchemy2.shape import to_shape
 from shapely import wkb
 from shapely.geometry.base import BaseGeometry
@@ -35,16 +49,16 @@ from app.db.models._types import SRID
 from app.repositories import base_data
 from risk import compute as calc
 from risk import grid as grid_mod
-from risk.criteria import STATIC_KEYS
+from risk.criteria import HOUSE_RADIUS_M, STATIC_KEYS
 from risk.grid import StaticGrid
 from risk.weather import HOURS, RAIN_HOURS
 
 log = logging.getLogger(__name__)
 
-METHOD_VERSION = "risk-1"  # 위험도-정리.md · 11/8 결정(0 ~ 5시간 6개 시각 등급 평균)
+METHOD_VERSION = "risk-2"  # 11/10 R = √(H × X) · 변수 25개(risk-1 = 명세 7.6 23개 가중평균)
 P5 = 5
 
-# (코드, 원문 변수, 축, CSV 원가중치) — 명세 7.6. 가중치 합 0.94
+# (코드, 원문 변수, 축, CSV 원가중치) — 명세 7.6 23개(합 0.94) + 팀 추가 2개(규모 0.15 · 주택 0.05)
 FACTORS: list[tuple[str, str, str, float]] = [
     ("slope_up", "경사도_up", "terrain", 0.08),
     ("aspect", "사면방향", "terrain", 0.06),
@@ -69,8 +83,12 @@ FACTORS: list[tuple[str, str, str, float]] = [
     ("fuel_moisture", "수분함량", "fuel", 0.06),
     ("vulnerable_population", "취약계층 수", "infrastructure", 0.04),
     ("fire_station_distance", "소방서와의 거리", "infrastructure", 0.03),
+    ("fire_area", "산불 규모(P5 면적)", "scale", 0.15),
+    ("houses_nearby", "주변 주택 수(P5 + 1 km)", "exposure", 0.05),
 ]
-AXES = ("terrain", "fuel", "weather", "infrastructure")
+AXES = ("terrain", "fuel", "weather", "infrastructure", "scale", "exposure")
+HAZARD_AXES = ("terrain", "fuel", "weather", "scale")  # H(위해)
+EXPOSURE_AXES = ("infrastructure", "exposure")  # X(노출)
 
 # 명세 코드 → risk/ 변수 키(risk.criteria)
 KEY_OF = {
@@ -97,6 +115,8 @@ KEY_OF = {
     "fuel_moisture": "moisture",
     "vulnerable_population": "vulnerable",
     "fire_station_distance": "station_dist",
+    "fire_area": "area",
+    "houses_nearby": "houses_1km",
 }
 
 # 예측 기상(predictions.weather.hours)에서 읽는 값: risk 키 → 시간별 칸 이름
@@ -112,6 +132,7 @@ MISSING_REASON = {
     "moisture": "연료 수분함량 자료를 받는 곳이 아직 없음",
     "vulnerable": "P5와 겹친 리에 연령별 추정 인구가 없음",
     "station_dist": "가까운 시군에 소방 시설 자료가 없음",
+    "houses_1km": "P5 + 1 km 안 주택 점 자료가 없음",
 }
 GAP_IN_FORECAST = "예측 기상에 0 ~ 5시간 중 빈 시각이 있음"
 
@@ -174,10 +195,34 @@ def vulnerable_zones(session: Session, area: BaseGeometry) -> list[tuple[BaseGeo
     return [(wkb.loads(bytes(g)), float((a or 0) + (b or 0))) for g, a, b in rows]
 
 
-# 명세 7.6 정의 그대로 계산하게 하는 risk 옵션: 취약계층 = P5 안, 팀 추가 변수(규모 · 노출) 없음,
-# R은 aggregate()가 23개 가중평균으로 낸다. risk/ 기본값(R = √(H × X), 노출 = P5 + 1 km, 11/11)은
-# 명세를 고친 뒤에 옮긴다(risk/README.md).
-SPEC_OPTIONS: dict[str, Any] = {"exposure": {}, "exposure_radius_m": 0.0, "combine": "mean"}
+def house_points(session: Session, bounds: tuple[float, float, float, float]) -> np.ndarray:
+    """경계 상자 안 주택 점(map_features kind=house) → (k, 2) 좌표."""
+    rows = session.execute(
+        text(
+            "SELECT ST_X(geom), ST_Y(geom) FROM map_features WHERE kind = 'house'"
+            " AND geom && ST_MakeEnvelope(:x0, :y0, :x1, :y1, :srid)"
+        ),
+        {"x0": bounds[0], "y0": bounds[1], "x1": bounds[2], "y1": bounds[3], "srid": SRID},
+    ).all()
+    return np.asarray(rows, dtype="float64").reshape(-1, 2)
+
+
+def with_houses(zones: list[tuple[BaseGeometry, float]], houses_xy: np.ndarray) -> list[tuple]:
+    """리마다 그 리 안 주택 좌표를 붙인다(risk.overlap.zone_sum이 주택 비율로 나누게).
+    주택이 없는 리는 그대로(겹친 면적 비율)."""
+    out: list[tuple] = []
+    for geom, n in zones:
+        inside = (
+            houses_xy[shapely.contains_xy(geom, houses_xy[:, 0], houses_xy[:, 1])]
+            if len(houses_xy)
+            else houses_xy
+        )
+        out.append((geom, n, inside) if len(inside) else (geom, n))
+    return out
+
+
+# 노출(취약계층 · 주택 수)을 세는 범위 = P5 + 이 거리(risk.criteria.HOUSE_RADIUS_M, 1 km)
+EXPOSURE_RADIUS_M = HOUSE_RADIUS_M
 
 
 def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInputs, str | None]:
@@ -190,12 +235,21 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
         )
     )
     static, grid_reason = static_grid(p5.bounds)
+    scope = p5.buffer(EXPOSURE_RADIUS_M)
+    zones = vulnerable_zones(session, scope)
+    # 리 전체의 주택이 있어야 「안에 든 비율」을 잴 수 있어 겹친 리 경계까지 넓혀 읽는다
+    x0, y0, x1, y1 = scope.bounds
+    for g, _ in zones:
+        gx0, gy0, gx1, gy1 = g.bounds
+        x0, y0, x1, y1 = min(x0, gx0), min(y0, gy0), max(x1, gx1), max(y1, gy1)
+    houses_xy = house_points(session, (x0, y0, x1, y1))
     perimeter = to_shape(session.get(FirePerimeter, prediction.perimeter_id).geom)
     stations = base_data.facilities(session, perimeter)["fire_stations"]
     nearest = min(stations, key=lambda s: perimeter.distance(s.geom), default=None)
     wsrc = (prediction.weather or {}).get("source") or "미상"
     sources = {k: f"예측 기상({wsrc})" for k in FROM_FORECAST}
-    sources["vulnerable"] = "리별 65세 이상 + 0 ~ 14세 추정(villages)"
+    sources["vulnerable"] = "리별 65세 이상 + 0 ~ 14세 추정(villages) × 리 안 주택 비율"
+    sources["houses"] = "주택 점(map_features)"
     if nearest is not None:
         sources["station_dist"] = f"소방 시설(facilities) — {nearest.name}"
     if static is not None:
@@ -206,10 +260,12 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
         static=static,
         weather=forecast_inputs(prediction.weather or {}),
         rain_7d=None,
-        zones=vulnerable_zones(session, p5),
+        zones=with_houses(zones, houses_xy),
         stations=[s.geom for s in stations],
         sources=sources,
-        **SPEC_OPTIONS,
+        houses_xy=houses_xy if len(houses_xy) else None,
+        exposure_radius_m=EXPOSURE_RADIUS_M,
+        combine="sqrt_hx",
     )
     return inputs, grid_reason
 
@@ -236,7 +292,7 @@ def to_grades(
     weather_source: str | None,
     grid_reason: str | None,
 ) -> list[FactorGrade]:
-    """risk 결과(변수 키) → 명세 코드 순서의 FactorGrade 23개."""
+    """risk 결과(변수 키) → FACTORS 순서의 FactorGrade 25개."""
     by_key = {f.key: f for f in res.factors}
     out = []
     for code, *_ in FACTORS:
@@ -261,7 +317,7 @@ def to_grades(
 
 
 def grade_factors(session: Session, prediction: Prediction) -> list[FactorGrade]:
-    """변수 23개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
+    """변수 25개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
     inputs, grid_reason = build_inputs(session, prediction)
     res = calc.compute_risk(inputs)
     return to_grades(
@@ -272,21 +328,40 @@ def grade_factors(session: Session, prediction: Prediction) -> list[FactorGrade]
     )
 
 
+def _mean(part: list[tuple[float, float]]) -> float | None:
+    w = sum(x for x, _ in part)
+    return sum(x * y for x, y in part) / w if w else None
+
+
 def aggregate(grades: list[FactorGrade]) -> dict[str, Any]:
-    """명세 7.6: R = Σ(가중치 × 등급) ÷ Σ(포함 변수의 가중치). 빠진 변수는 분모에서도 뺀다."""
+    """R = √(H × X). H · X = 그 묶음 안 값이 있는 변수의 가중평균(빠진 변수는 분모에서도 뺀다).
+    X가 없으면 R = H, H가 없으면 계산하지 않는다(UNAVAILABLE).
+    contribution = 그 묶음 점수(H 또는 X)에 대한 기여(묶음 안 합 = H 또는 X)."""
     by_code = {g.code: g for g in grades}
     included = [(f, by_code[f[0]]) for f in FACTORS if by_code[f[0]].grade is not None]
     wsum = sum(f[3] for f, _ in included)
-    score = sum(f[3] * g.grade for f, g in included) / wsum if wsum else None
-    axes = {}
-    for axis in AXES:
-        part = [(f[3], g.grade) for f, g in included if f[2] == axis]
-        w = sum(x for x, _ in part)
-        axes[axis] = round(sum(x * y for x, y in part) / w, 2) if w else None
+    group_w = {
+        name: sum(f[3] for f, _ in included if f[2] in axs)
+        for name, axs in (("H", HAZARD_AXES), ("X", EXPOSURE_AXES))
+    }
+    hazard = _mean([(f[3], g.grade) for f, g in included if f[2] in HAZARD_AXES])
+    exposure = _mean([(f[3], g.grade) for f, g in included if f[2] in EXPOSURE_AXES])
+    if hazard is None:
+        score = None
+    elif exposure is None:
+        score = hazard
+    else:
+        score = math.sqrt(hazard * exposure)
+    axes = {
+        axis: (round(m, 2) if (m := _mean([(f[3], g.grade) for f, g in included if f[2] == axis]))
+               is not None else None)
+        for axis in AXES
+    }  # fmt: skip
     factors = []
     for code, name, axis, weight in FACTORS:
         g = by_code[code]
-        contribution = weight * g.grade / wsum if (g.grade is not None and wsum) else None
+        gw = group_w["H" if axis in HAZARD_AXES else "X"]
+        contribution = weight * g.grade / gw if (g.grade is not None and gw) else None
         factors.append(
             {
                 "code": code,
@@ -303,11 +378,14 @@ def aggregate(grades: list[FactorGrade]) -> dict[str, Any]:
             }
         )
     status = (
-        "UNAVAILABLE" if not included else "READY" if len(included) == len(FACTORS) else "PARTIAL"
+        "UNAVAILABLE" if score is None else "READY" if len(included) == len(FACTORS) else "PARTIAL"
     )
     return {
         "status": status,
         "score": round(score, 2) if score is not None else None,
+        "hazard": round(hazard, 2) if hazard is not None else None,
+        "exposure": round(exposure, 2) if exposure is not None else None,
+        "combine": "sqrt_hx",
         "axes": axes,
         "included_weight_sum": round(wsum, 4),
         "factors": factors,

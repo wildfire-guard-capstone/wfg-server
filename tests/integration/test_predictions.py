@@ -277,15 +277,15 @@ def test_failed_proposal_keeps_neither_prediction_nor_proposal(
 
 
 def test_risk(client, login, reported):
-    """격자 없이(RISK_GRID_DIR 비움): 예측 기상 4개 + 취약계층 · 소방서는 계산, 나머지는 이유."""
+    """격자 없이(RISK_GRID_DIR 비움): 기상 4개 · 취약계층 · 소방서 · 규모는 계산, 나머지는 이유."""
     cmd = login("t_cmd4", "COMMANDER")
     pid = run(client, reported, cmd)["result"]["prediction_id"]
     risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]
-    assert risk["prediction_id"] == pid and risk["method_version"] == "risk-1"
-    assert risk["status"] == "PARTIAL" and len(risk["factors"]) == 23
+    assert risk["prediction_id"] == pid and risk["method_version"] == "risk-2"
+    assert risk["status"] == "PARTIAL" and len(risk["factors"]) == 25
     assert 1 <= risk["score"] <= 5 and risk["unavailable_reasons"]
     by = {f["code"]: f for f in risk["factors"]}
     assert all(by[c]["included"] for c in ("wind_speed", "humidity", "temperature"))
     assert by["slope_up"]["included"] is False and by["slope_up"]["reason"]
-    total = sum(f["contribution"] for f in risk["factors"])
-    assert abs(total - risk["score"]) < 0.01
+    assert by["fire_area"]["included"]
+    assert abs((risk["hazard"] * risk["exposure"]) ** 0.5 - risk["score"]) < 0.01

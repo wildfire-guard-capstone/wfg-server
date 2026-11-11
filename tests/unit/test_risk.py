@@ -9,7 +9,7 @@ from app.services import risk as svc
 from app.services.risk import FACTORS, KEY_OF, FactorGrade, aggregate
 from risk import compute as calc
 from risk import grid as grid_mod
-from risk.criteria import BY_KEY, STATIC_KEYS
+from risk.criteria import BY_KEY, EXPOSURE_BY_KEY, STATIC_KEYS
 from risk.grid import StaticGrid
 from risk.overlap import Grid
 
@@ -39,7 +39,7 @@ def weather(over=None, n=9):
     return {"source": "FIXED", "issued_at": None, "location": None, "hours": hours}
 
 
-def result(w, zones=(), stations=(), static=None):
+def result(w, zones=(), stations=(), static=None, houses=None):
     inp = calc.RiskInputs(
         p5=box(0, 0, 2000, 1000),
         perimeter=Point(100, 500),
@@ -47,37 +47,67 @@ def result(w, zones=(), stations=(), static=None):
         weather=svc.forecast_inputs(w),
         zones=zones,
         stations=stations,
-        **svc.SPEC_OPTIONS,
+        houses_xy=houses,
+        exposure_radius_m=svc.EXPOSURE_RADIUS_M,
+        combine="sqrt_hx",
     )
     return calc.compute_risk(inp)
 
 
-def test_weights_sum_to_094():
-    assert len(FACTORS) == 23
-    assert sum(f[3] for f in FACTORS) == pytest.approx(0.94)
+def with_grade(gs, code, value):
+    return [FactorGrade(g.code, None, value, None, None, None) if g.code == code else g for g in gs]
 
 
-def test_spec_codes_map_to_risk_variables_with_the_same_weights():
+def test_weights_are_ai_hub_23_plus_scale_and_houses():
+    assert len(FACTORS) == 25
+    assert sum(f[3] for f in FACTORS) == pytest.approx(1.14)
+    assert sum(f[3] for f in FACTORS if f[2] in svc.HAZARD_AXES) == pytest.approx(1.02)
+    assert sum(f[3] for f in FACTORS if f[2] in svc.EXPOSURE_AXES) == pytest.approx(0.12)
+
+
+def test_codes_map_to_risk_variables_with_the_same_weights():
     assert set(KEY_OF) == {f[0] for f in FACTORS}
-    assert len(set(KEY_OF.values())) == 23
+    assert len(set(KEY_OF.values())) == 25
     for code, _, _, weight in FACTORS:
-        assert BY_KEY[KEY_OF[code]].weight == pytest.approx(weight), code
+        var = BY_KEY.get(KEY_OF[code]) or EXPOSURE_BY_KEY[KEY_OF[code]]
+        assert var.weight == pytest.approx(weight), code
 
 
-def test_all_same_grade_gives_that_score_and_contributions_add_up():
+def test_all_same_grade_gives_that_score_and_contributions_add_up_per_group():
     r = aggregate(grades(4))
     assert r["status"] == "READY" and r["score"] == 4.0
-    assert r["included_weight_sum"] == pytest.approx(0.94)
-    assert sum(f["contribution"] for f in r["factors"]) == pytest.approx(4.0, abs=1e-3)
+    assert r["hazard"] == 4.0 and r["exposure"] == 4.0
+    assert r["included_weight_sum"] == pytest.approx(1.14)
+    for axes, total in ((svc.HAZARD_AXES, r["hazard"]), (svc.EXPOSURE_AXES, r["exposure"])):
+        part = sum(f["contribution"] for f in r["factors"] if f["axis"] in axes)
+        assert part == pytest.approx(total, abs=1e-3)
     assert set(r["axes"].values()) == {4.0}
+
+
+def test_score_is_geometric_mean_of_hazard_and_exposure():
+    g = grades(4)
+    for code, axis in ((f[0], f[2]) for f in FACTORS):
+        if axis in svc.EXPOSURE_AXES:
+            g = with_grade(g, code, 1)
+    r = aggregate(g)  # 조건이 나빠도(H 4) 사람 · 집이 없으면(X 1) R은 2
+    assert r["hazard"] == 4.0 and r["exposure"] == 1.0 and r["score"] == 2.0
+
+
+def test_without_exposure_r_is_hazard():
+    g = grades(3)
+    for code, axis in ((f[0], f[2]) for f in FACTORS):
+        if axis in svc.EXPOSURE_AXES:
+            g = with_grade(g, code, None)
+    r = aggregate(g)
+    assert r["status"] == "PARTIAL" and r["exposure"] is None and r["score"] == r["hazard"] == 3.0
 
 
 def test_missing_variables_leave_the_denominator():
     g = grades(5)
     g[0] = FactorGrade("slope_up", None, None, "자료 없음", None, None)  # 가중치 0.08
     r = aggregate(g)
-    assert r["status"] == "PARTIAL" and r["score"] == 5.0  # 0.94로 나누지 않는다
-    assert r["included_weight_sum"] == pytest.approx(0.86)
+    assert r["status"] == "PARTIAL" and r["score"] == 5.0  # 빠진 가중치로 나누지 않는다
+    assert r["included_weight_sum"] == pytest.approx(1.06)
     slope = next(f for f in r["factors"] if f["code"] == "slope_up")
     assert slope["included"] is False and slope["contribution"] is None
 
@@ -95,14 +125,23 @@ def test_forecast_hours_go_to_0_5_and_rain_to_1_5():
     assert svc.forecast_inputs({})["wind"] == dict.fromkeys(range(6))
 
 
-def test_without_grid_weather_people_and_station_are_real_and_the_rest_has_reasons():
-    zones = [(box(0, 0, 4000, 1000), 200.0)]  # P5가 구역의 절반 → 100명
-    res = result(weather(), zones=zones, stations=[Point(3100, 500)])  # 3 km
+def test_without_grid_weather_people_station_scale_houses_are_real_and_the_rest_has_reasons():
+    houses = np.array([[1000, 500], [5000, 500], [6000, 500], [7000, 500]], dtype="float64")
+    # 리 주택 4채 중 P5 + 1 km 안 1채 → 200명 × 1/4 = 50명(면적 비율이면 3/8)
+    zones = svc.with_houses([(box(0, 0, 8000, 1000), 200.0)], houses)
+    res = result(weather(), zones=zones, stations=[Point(3100, 500)], houses=houses)  # 3 km
     gs = svc.to_grades(res, base_at=BASE_AT, weather_source="FIXED", grid_reason=svc.NO_GRID)
     by = {g.code: g for g in gs}
     included = {g.code for g in gs if g.grade is not None}
-    assert included == WEATHER_CODES | {"vulnerable_population", "fire_station_distance"}
-    assert by["vulnerable_population"].raw_value == pytest.approx(100.0)
+    assert included == WEATHER_CODES | {
+        "vulnerable_population",
+        "fire_station_distance",
+        "fire_area",
+        "houses_nearby",
+    }
+    assert by["vulnerable_population"].raw_value == pytest.approx(50.0)
+    assert by["houses_nearby"].raw_value == 1.0
+    assert by["fire_area"].raw_value == pytest.approx(200.0)  # 2 km × 1 km
     assert by["fire_station_distance"].raw_value == pytest.approx(3.0)
     assert by["wind_speed"].raw_value == pytest.approx(6.0)
     assert by["wind_speed"].reason == svc.FIXED_WEATHER and by["wind_speed"].value_at == BASE_AT
@@ -111,11 +150,19 @@ def test_without_grid_weather_people_and_station_are_real_and_the_rest_has_reaso
 
     r = aggregate(gs)
     assert r["status"] == "PARTIAL" and 1 <= r["score"] <= 5
-    assert r["included_weight_sum"] == pytest.approx(0.33)
-    assert sum(f["contribution"] for f in r["factors"] if f["included"]) == pytest.approx(
-        r["score"], abs=0.01
-    )
+    assert r["included_weight_sum"] == pytest.approx(0.26 + 0.07 + 0.15 + 0.05)
+    assert r["score"] == pytest.approx(res.score, abs=0.01)  # risk.compute와 같은 값
+    assert r["hazard"] == pytest.approx(res.hazard, abs=0.01)
+    assert r["exposure"] == pytest.approx(res.exposure, abs=0.01)
     assert r["axes"]["terrain"] is None and r["axes"]["fuel"] is None
+
+
+def test_with_houses_attaches_only_houses_inside_each_zone():
+    houses = np.array([[1, 1], [5, 5], [50, 50]], dtype="float64")
+    z = svc.with_houses([(box(0, 0, 10, 10), 7.0), (box(100, 100, 110, 110), 3.0)], houses)
+    assert len(z[0]) == 3 and len(z[0][2]) == 2
+    assert z[1] == (box(100, 100, 110, 110), 3.0)  # 주택 없는 리는 면적 비율
+    assert svc.with_houses([(box(0, 0, 1, 1), 1.0)], np.empty((0, 2))) == [(box(0, 0, 1, 1), 1.0)]
 
 
 def test_a_gap_in_the_forecast_drops_that_variable():

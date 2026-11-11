@@ -305,6 +305,17 @@ def list_perimeters(
 FUTURE_SLACK_S = 300  # 관측 시각이 지금보다 이만큼 넘게 미래면 거절(기기 시계 차이는 허용)
 
 
+def _reject_future(observed_at: datetime) -> None:
+    """화선 보고(PER-02) · 정정(PER-03) 공통: 5분 넘게 미래인 관측 시각은 거절(11/11 확정)."""
+    if (observed_at - datetime.now(UTC)).total_seconds() > FUTURE_SLACK_S:
+        raise ApiError(
+            422,
+            "INVALID_OBSERVED_AT",
+            "미래 시각입니다.",
+            [{"field": "observed_at", "reason": "지금보다 늦을 수 없습니다."}],
+        )
+
+
 def _checked_perimeter(db: Session, incident: Incident, geometry: dict, observed_at: datetime):
     """새 화선 도형 · 관측 시각 검사: 면(Polygon · MultiPolygon) · 올바른 도형, 현재 화선보다
     앞선 시각이나 미래 시각은 거절(예측 0시가 거꾸로 가지 않게)."""
@@ -317,13 +328,7 @@ def _checked_perimeter(db: Session, incident: Incident, geometry: dict, observed
             "현재 화선보다 앞선 관측 시각입니다.",
             [{"field": "observed_at", "reason": "현재 화선 관측 시각 이후여야 합니다."}],
         )
-    if (observed_at - datetime.now(UTC)).total_seconds() > FUTURE_SLACK_S:
-        raise ApiError(
-            422,
-            "INVALID_OBSERVED_AT",
-            "미래 시각입니다.",
-            [{"field": "observed_at", "reason": "지금보다 늦을 수 없습니다."}],
-        )
+    _reject_future(observed_at)
     return geom
 
 
@@ -395,6 +400,7 @@ def correct_perimeter(
             "직전 화선보다 앞선 관측 시각입니다.",
             [{"field": "observed_at", "reason": "직전 화선 관측 시각 이후여야 합니다."}],
         )
+    _reject_future(body.observed_at)
     target.corrected_at = datetime.now(UTC)
     p = incidents.add_perimeter(
         db, incident_id=incident_id, geom=geom, observed_at=body.observed_at, reported_by=user.id

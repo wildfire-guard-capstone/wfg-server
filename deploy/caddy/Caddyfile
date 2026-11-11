@@ -1,0 +1,16 @@
+# 문지기(EC2 웹 포트 80) — 밖에는 API만 연다(deploy/README.md 「웹 포트 — Caddy」).
+#   /api/v1/* · /health → api 컨테이너(wfg-api:8000)
+#   그 밖(API 문서 /docs · /openapi.json, 임시 결과 API /api/auth · /api/incidents …)은 404
+# 나중: ":80"을 도메인으로 바꾸면 HTTPS 인증서를 자동으로 받는다 · 프론트 빌드 파일도 여기서 준다.
+:80 {
+	encode zstd gzip
+
+	@api path /api/v1/* /health
+	handle @api {
+		reverse_proxy wfg-api:8000
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}

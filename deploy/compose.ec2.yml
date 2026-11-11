@@ -9,6 +9,7 @@
 #   api.env       optional API settings (PROPOSAL_WRITER · ASSISTANT · LLM_URL · EVIDENCE_URL …).
 #                 The deploy job creates it empty when missing and never overwrites it.
 #   deck/elmfire_deck/  ELMFIRE deck (release deck-20261110), read-only for api and worker.
+#   caddy/Caddyfile     front door on port 80 (deploy/caddy/Caddyfile, copied by each deploy).
 # ELMFIRE runs only in the worker (structure B): the API builds the weather input and sends it
 # to http://wfg-worker:8100/run. Predictions stay synthetic until api.env sets PREDICTOR=elmfire.
 # See deploy/README.md.
@@ -36,7 +37,7 @@ services:
       - ./data/base:/data/base:ro
       - ./data/risk:/data/risk:ro
       - ./deck/elmfire_deck:/deck:ro
-    # Only reachable from inside EC2 for now (check with an SSH tunnel).
+    # 8000 stays inside EC2; from outside the API is reached through the web container (port 80).
     ports:
       - "127.0.0.1:8000:8000"
     networks:
@@ -61,6 +62,29 @@ services:
     networks:
       - wfg-net
 
+  # Front door on port 80 (security group: HTTP 80 open). Forwards only /api/v1/* · /health to
+  # the api container — API docs and everything else answer 404. Later: a domain for HTTPS and
+  # the frontend build. See deploy/README.md 「웹 포트 — Caddy」.
+  web:
+    image: caddy:2-alpine
+    container_name: wfg-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    mem_limit: 128m
+    networks:
+      - wfg-net
+
 networks:
   wfg-net:
     external: true
+
+volumes:
+  caddy-data:
+  caddy-config:

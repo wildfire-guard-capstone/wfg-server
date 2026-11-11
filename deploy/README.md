@@ -8,13 +8,14 @@ EC2 /home/ubuntu/wfg/
 ├── .env          ← API_IMAGE · WORKER_IMAGE=…:<커밋> (배포가 씀, 지금 떠 있는 버전)
 ├── db.env        ← POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB (wfg-db와 같이 씀, 비공개)
 ├── api.env       ← API 설정(없으면 배포가 빈 파일로 만듦, 덮어쓰지 않음) — 「GPU 서버 연결」
+├── caddy/Caddyfile ← deploy/caddy/Caddyfile (배포 때마다 복사됨) — 「웹 포트 — Caddy」
 ├── data/base/    ← 바탕 데이터 적재 파일 6개 (컨테이너 /data/base, 읽기 전용)
 ├── data/risk/uiseong/ ← 위험도 지역 격자 grades.tif · values.tif · meta.json (컨테이너 /data/risk, 읽기 전용)
 └── deck/elmfire_deck/  ← ELMFIRE 덱(릴리스 deck-20261110) — api · worker 둘 다 /deck에 읽기 전용
 ```
 
 - 앱은 `db.env`의 값과 `DB_HOST=wfg-db`로 DB 접속 주소를 만든다(`app/core/config.py`). 비밀번호는 `db.env`에만 있다
-- API는 EC2 안에서만 열려 있다(`127.0.0.1:8000`). 보안 그룹 인바운드는 SSH(22)만
+- 밖에서는 **웹 포트 80(문지기 Caddy, `wfg-web`)으로 API만** 닿는다 — `/api/v1/*` · `/health`. API 문서(`/docs`) · DB(5432) · 8000은 EC2 안에서만. 보안 그룹 인바운드는 SSH(22) · HTTP(80)
 
 ## 자동 배포
 
@@ -22,7 +23,8 @@ EC2 /home/ubuntu/wfg/
 
 ```
 lint · 테스트 → 이미지 빌드(x86): wfg-api · wfg-worker(elmfire-image.yml) → GHCR → EC2 SSH
-→ compose.yml 복사 → 두 이미지 받기 → 재시작 → api /health · worker /health 확인
+→ compose.yml · Caddyfile 복사 → 이미지 받기 → api · worker · web 재시작(Caddyfile 다시 읽기)
+→ api /health · 웹 80 /health(+ /docs는 404) · worker /health 확인
 ```
 
 - **마이그레이션과 바탕 데이터 적재는 하지 않는다.** 아래 명령으로 직접 한다
@@ -132,6 +134,20 @@ cd /home/ubuntu/wfg && docker compose up -d api
 - 터널이나 vLLM이 꺼져 있으면 예측 작업은 `PROPOSAL_FAILED`로 끝나고 예측 · 제안서 모두 저장하지 않는다. 가짜 작성기로 되돌리려면 `api.env`에서 `PROPOSAL_WRITER` 줄을 지우고 다시 켠다
 - 공용 GPU라 vLLM은 쓸 때만 켠다(상시 실행은 관리자 허락 뒤)
 
+## 웹 포트 — Caddy (문지기)
+
+브라우저 · 프론트가 SSH 키 없이 API를 부르게 하는 입구. `deploy/caddy/Caddyfile`
+
+```
+브라우저 · 프론트 개발 서버 ── http://54.116.227.3/api/v1/… ──▶ EC2 :80 wfg-web(Caddy) ──▶ wfg-api:8000
+```
+
+- 보안 그룹 인바운드: **HTTP 80**(0.0.0.0/0) — AWS 콘솔에서. 8000 · 5432는 열지 않는다
+- 넘기는 것: `/api/v1/*` · `/health`뿐. 그 밖(`/docs` · `/openapi.json` · 임시 결과 API `/api/auth` · `/api/incidents`)은 404
+- 프론트 개발: `wfg-client`의 `.env.local`에 `API_PROXY_TARGET=http://54.116.227.3`(개발 서버 프록시라 CORS 필요 없음)
+- 아직 HTTP — 비밀번호 · 토큰이 암호화 없이 오간다. 시연 전에 도메인을 붙여 `:80` 자리를 도메인으로 바꾸고 443을 열면 Caddy가 HTTPS 인증서를 자동으로 받는다
+- 메모리 상한 128 MB
+
 ## 처음 한 번 (끝남, 2026-11-08)
 
 1. 보안 그룹: 인바운드 22만, 키 로그인만(비밀번호 로그인 꺼짐)
@@ -141,4 +157,4 @@ cd /home/ubuntu/wfg && docker compose up -d api
 
 ## EC2 IP가 바뀌면
 
-탄력적 IP가 없어서 인스턴스를 중지 → 시작하면 공인 IP가 바뀐다(재부팅은 그대로). 고칠 곳: 레포 시크릿 `EC2_HOST`, 내 컴퓨터 `~/.ssh/config`의 `wfg-ec2` HostName, DBeaver SSH 호스트.
+2026-11-11부터 **탄력적 IP `54.116.227.3`**(예전 `13.125.80.118`)이라 중지 → 시작해도 주소가 그대로다. 탄력적 IP를 바꾸거나 떼면 고칠 곳: 레포 시크릿 `EC2_HOST`, 내 컴퓨터 `~/.ssh/config`의 `wfg-ec2` HostName, DBeaver SSH 호스트, **GPU 서버 `~/wfg/tunnel/ec2_host`**(안 고치면 EXAONE 터널이 끊김), 프론트 `API_PROXY_TARGET`.

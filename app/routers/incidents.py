@@ -18,7 +18,7 @@ from app.api.geo import from_geojson, to_geojson
 from app.api.pagination import LIMIT, cut, decode_cursor
 from app.db.models import FirePerimeter, Incident, User
 from app.db.models.enums import IncidentStatus
-from app.repositories import event_logs, incidents
+from app.repositories import event_logs, incidents, resources
 from app.repositories.predictions import to_multipolygon
 from app.schemas.incident import (
     IncidentCreateIn,
@@ -245,7 +245,8 @@ def get_incident(incident_id: IncidentId, request: Request, user: Reader, db: Db
 def end_incident(
     incident_id: IncidentId, body: IncidentEndIn, request: Request, user: Commander, db: Db
 ):
-    """INC-04. 진행 중 산불만, 화면이 본 현재 화선과 같을 때만 종료한다."""
+    """INC-04. 진행 중 산불만, 화면이 본 현재 화선과 같을 때만 종료한다. 이 산불에 투입된
+    자원은 대기로 돌리고 연결을 푼다(명세 v0.5) — 다른 산불에서 다시 부를 수 있게."""
     incident = load_incident(db, user, incident_id)
     if incident.status is IncidentStatus.ENDED:
         raise ApiError(409, "INCIDENT_ENDED", "이미 종료된 산불입니다.")
@@ -256,7 +257,27 @@ def end_incident(
     incident.status = IncidentStatus.ENDED
     incident.ended_at = datetime.now(UTC)
     incident.ended_by = user.id
-    event_logs.add(db, "INCIDENT_ENDED", user_id=user.id, incident_id=incident_id)
+    released = resources.release_linked(db, incident_id)
+    for r in released:  # 자원 이력은 관리자 수정과 같은 이름(RESOURCE_UPDATED)에 op로 구분
+        event_logs.add(
+            db,
+            "RESOURCE_UPDATED",
+            user_id=user.id,
+            incident_id=incident_id,
+            details={
+                "op": "released",
+                "resource_id": r.id,
+                "name": r.name,
+                "changed": ["status", "deployed_incident_id"],
+            },
+        )
+    event_logs.add(
+        db,
+        "INCIDENT_ENDED",
+        user_id=user.id,
+        incident_id=incident_id,
+        details={"released_resource_ids": [r.id for r in released]},
+    )
     db.commit()
     return ok(request, incident_out(db, incident))
 

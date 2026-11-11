@@ -55,8 +55,12 @@ def _forest_type(species: str) -> str:
 
 def load_fuel_models(deck: Path, tables: Path | None = None) -> dict[int, FuelModel]:
     """덱 폴더(elmfire_deck) → 연료 모델 번호별 위험도 연료 값.
-    tables: 대응표(inputs/fuel_model_mapping.csv · scripts/fuel_table_raw.csv)를 읽을 덱 —
-    비우면 deck. 연료층 깊이 · GR · GS 연료량은 늘 deck의 fuel_models.csv."""
+
+    tables: 대응표(inputs/fuel_model_mapping.csv · scripts/fuel_table_raw.csv)를 읽을 덱,
+    비우면 deck. 11/9 · 11/10 최종 덱 묶음에는 이 두 표가 없다 — 연료 모델 번호가 11/1 덱과
+    같으므로 11/1 덱(<input>/elmfire_deck)의 표를 쓴다. 연료층 깊이 · GR · GS 연료량은 늘 deck의
+    fuel_models.csv.
+    """
     deck = Path(deck)
     tables = Path(tables) if tables else deck
     lib = {}

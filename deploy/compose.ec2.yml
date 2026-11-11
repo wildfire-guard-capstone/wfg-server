@@ -6,6 +6,11 @@
 #   data/base/    base data load files (copied from capston-data data/지도자원/적재), read-only
 #   data/risk/    risk region grids (demo/uiseong/build_risk_grid.py), read-only. Without
 #                 data/risk/uiseong the API still runs; RISK-01 leaves out terrain · fuel.
+#   api.env       optional API settings (PROPOSAL_WRITER · ASSISTANT · LLM_URL · EVIDENCE_URL …).
+#                 The deploy job creates it empty when missing and never overwrites it.
+#   deck/elmfire_deck/  ELMFIRE deck (release deck-20261110), read-only for api and worker.
+# ELMFIRE runs only in the worker (structure B): the API builds the weather input and sends it
+# to http://wfg-worker:8100/run. Predictions stay synthetic until api.env sets PREDICTOR=elmfire.
 # See deploy/README.md.
 name: wfg
 
@@ -16,16 +21,43 @@ services:
     restart: unless-stopped
     env_file:
       - ./db.env
+      - ./api.env
     environment:
       DB_HOST: wfg-db
       BASE_DATA_DIR: /data/base
       RISK_GRID_DIR: /data/risk/uiseong
+      PREDICTOR_DECK: /deck # ELMFIRE weather input (used only when PREDICTOR=elmfire)
+      ELMFIRE_WORKER_URL: http://wfg-worker:8100
+    # "gpu" = the EC2 host itself, where the reverse SSH tunnel from the GPU server listens
+    # (vLLM 8031 · evidence 8032). See deploy/README.md 「GPU 서버 연결」.
+    extra_hosts:
+      - "gpu:host-gateway"
     volumes:
       - ./data/base:/data/base:ro
       - ./data/risk:/data/risk:ro
+      - ./deck/elmfire_deck:/deck:ro
     # Only reachable from inside EC2 for now (check with an SSH tunnel).
     ports:
       - "127.0.0.1:8000:8000"
+    networks:
+      - wfg-net
+
+  # ELMFIRE runner: one run at a time (about 1.1 GB, 20 s), 5 min limit. No published port —
+  # only the api container reaches it on wfg-net. If a run exceeds the memory limit only that
+  # run fails; api and db keep running.
+  worker:
+    image: ${WORKER_IMAGE:-ghcr.io/wildfire-guard-capstone/wfg-worker:latest}
+    container_name: wfg-worker
+    restart: unless-stopped
+    command: ["-lc", "exec python -m app.predict.worker_server"] # image entrypoint is bash
+    environment:
+      PREDICTOR_DECK: /deck
+      PREDICTOR_WORK_DIR: /tmp/runs
+      ELMFIRE_TIMEOUT_S: "300"
+    volumes:
+      - ./deck/elmfire_deck:/deck:ro
+    mem_limit: 1300m
+    memswap_limit: 2g # may spill up to ~700 MB into the host swap file
     networks:
       - wfg-net
 

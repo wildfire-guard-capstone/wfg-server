@@ -11,6 +11,8 @@ from typing import Any, Protocol
 
 from shapely.geometry.base import BaseGeometry
 
+from app.weather.elmfire_input import ElmfireWeatherInput
+
 HOURS = 8  # P1 ~ P8
 
 
@@ -21,15 +23,10 @@ class PredictionRequest:
     site: tuple[float, float]  # 기준점 위도 · 경도(WGS84) — 기상 지점 · 일출 · 일몰
     # 서버가 기상 제공자(app.weather)에서 받은 9시간 기상(predictions.weather 모양). 있으면 예측
     # 제공자는 이 기상으로 계산하고 결과 weather로 돌려준다. 없으면(시험 · 개발 명령) 스스로 고정값
-    #
-    # TODO(홍준서 확인 필요 — ELMFIRE 기상): 서버는 이 기상 데이터를 예측으로 넘기고, 예측에 쓴
-    #   그 기상 데이터를 predictions.weather로 저장해 제안(규칙 엔진 · 제안서)에서 쓴다 — 예측과
-    #   제안이 같은 기상이어야 한다. 그런데 ELMFIRE가 기상 데이터를 어떻게 사용하는지(받는 값 ·
-    #   시간 간격 · 형식 · 시간별로 바뀌는지)는 황승준이 아직 명확하게 파악하지 못했다.
-    #   → 홍준서가 ELMFIRE의 기상 데이터를 확인해 파악 필요: 이 9시간 기상(1시간 간격, 풍향 ·
-    #   풍속 · 기온 · 습도 · 강수)을 그대로 넣을 수 있는지, 바꾸거나 더 받아야 하는지.
-    #   ELMFIRE가 다른 기상으로 계산했다면 결과 weather에는 실제로 쓴 그 기상을 돌려줘야 한다
     weather: dict[str, Any] | None = None
+    # ELMFIRE만: 예측 요청 때 출처(stations 실시간 · deck 시연)로 만든 기상 입력(격자 + 발화점 칸
+    # 9시간). ELMFIRE는 이것만 쓰고 결과 weather = 입력의 발화점 칸 9시간(docs/ELMFIRE-기상.md)
+    elmfire_weather: ElmfireWeatherInput | None = None
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import Db, SessionFactory, require_roles
 from app.api.envelope import Envelope, ok
 from app.api.errors import ApiError, not_found
+from app.core.config import get_settings
 from app.db.models import FirePerimeter, Prediction, User
 from app.db.models.enums import IncidentStatus
 from app.repositories import incidents, predictions
@@ -18,9 +19,19 @@ from app.routers.incidents import IncidentId, load_incident
 from app.schemas.prediction import OperationOut, PredictionOut, PredictionRequestIn, SliceSummary
 from app.schemas.risk import RiskOut
 from app.services import operations
-from app.services.prediction import fetch_weather, run_prediction_operation
+from app.services.prediction import (
+    MODE_SOURCES,
+    build_elmfire_weather,
+    elmfire_source_from_settings,
+    fetch_weather,
+    run_prediction_operation,
+)
 from app.services.risk import compute_risk
-from app.services.weather import provider_from_settings
+from app.services.weather import (
+    asos_provider_from_settings,
+    prediction_weather_out,
+    provider_from_settings,
+)
 from app.weather import WeatherUnavailable
 
 router = APIRouter(prefix="/incidents/{incident_id}", tags=["예측"])
@@ -51,8 +62,13 @@ def request_prediction(
 ):
     """PRED-01. 최신 화선으로만 예측한다. 202 = 시작했다는 뜻, 결과는 PRED-05로 본다.
 
-    기상은 여기서 먼저 받는다(설정 WEATHER의 원천, 9시간). 못 받으면 작업을 시작하지 않고
-    503 WEATHER_UNAVAILABLE(명세 v0.4 그대로). 받은 기상은 작업에 넘겨 예측 · 제안에 같이 쓴다.
+    기상은 여기서 먼저 받는다. 못 받으면 작업을 시작하지 않고 503 WEATHER_UNAVAILABLE(명세 v0.4
+    그대로). 받은 기상은 작업에 넘겨 예측 · 제안에 같이 쓴다.
+      - mode LIVE(실서비스): ELMFIRE 기상 입력 — 실시간 관측소(stations)
+      - mode DEMO_ELMFIRE(시연 1): ELMFIRE 기상 입력 — 덱에 든 2025 실측(deck), 기온 · 습도는 asos
+      - mode 없음: 서버 기본 설정 — PREDICTOR=elmfire면 PREDICTOR_WEATHER_FIELD의 출처, 아니면
+        (synthetic · file) 설정 WEATHER의 원천에서 기준점 9시간
+      관측소가 모자라거나 덱에 없는 시각이어도 503(다른 기상으로 대신하지 않는다).
     """
     incident = load_incident(db, user, incident_id)
     if incident.status is IncidentStatus.ENDED:
@@ -61,8 +77,17 @@ def request_prediction(
         raise ApiError(409, "STALE_PERIMETER", "화선이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
     if operations.is_running(incident_id):  # 이미 계산 중이면 기상청을 부르지 않는다
         raise ApiError(409, "PREDICTION_RUNNING", "이 산불의 예측을 이미 계산하는 중입니다.")
+    mode, weather, elmfire_weather = body.mode, None, None
     try:
-        weather = fetch_weather(db, incident_id, provider_from_settings())
+        if mode or get_settings().predictor == "elmfire":
+            source = elmfire_source_from_settings(MODE_SOURCES.get(mode))  # 모드 없으면 설정
+            server = None
+            if source.uses_server_weather:  # deck: 기온 · 습도 · 강수
+                demo = mode == "DEMO_ELMFIRE"
+                server = asos_provider_from_settings() if demo else provider_from_settings()
+            elmfire_weather = build_elmfire_weather(db, incident_id, source, server)
+        else:
+            weather = fetch_weather(db, incident_id, provider_from_settings())
     except (
         WeatherUnavailable,
         ValueError,
@@ -72,7 +97,13 @@ def request_prediction(
     if op is None:
         raise ApiError(409, "PREDICTION_RUNNING", "이 산불의 예측을 이미 계산하는 중입니다.")
     background.add_task(
-        run_prediction_operation, op, body.expected_perimeter_id, session_factory, weather
+        run_prediction_operation,
+        op,
+        body.expected_perimeter_id,
+        session_factory,
+        weather,
+        elmfire_weather,
+        mode,
     )
     return ok(request, OperationOut.of(op))
 
@@ -147,12 +178,12 @@ def get_slices(
 def get_weather(
     incident_id: IncidentId, prediction_id: PredictionId, request: Request, user: Analyst, db: Db
 ):
-    """PRED-04. 그 예측에 넣은 기상 그대로(새로 받지 않음).
+    """PRED-04. 그 예측에 넣은 기상 그대로(새로 받지 않음). 저장 전용 칸(wind_max_1min)만 뺀다.
 
     가짜 · 파일 예측은 기온 · 습도 · 위치가 없어 명세 Weather와 다를 수 있다(04 수정 필요 5번).
     """
     p = load_prediction(db, user, incident_id, prediction_id)
-    return ok(request, p.weather)
+    return ok(request, prediction_weather_out(p.weather))
 
 
 @router.get("/predictions/{prediction_id}/risk", response_model=Envelope[RiskOut])

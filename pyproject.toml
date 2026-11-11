@@ -22,6 +22,9 @@ dependencies = [
     "rasterio>=1.4",
     # app/ coordinate transforms (EPSG:5179 <-> 4326): file predictor, engine inputs, API.
     "pyproj>=3.6",
+    # ELMFIRE weather input (app/weather/elmfire_input · deck): the API reads the deck weather
+    # grid when PREDICTOR=elmfire. The worker gets it from its conda env (--no-deps).
+    "rasterio>=1.4",
     # API auth: JWT access tokens, password hashing.
     "pyjwt>=2.8",
     "pwdlib[argon2]>=0.2",

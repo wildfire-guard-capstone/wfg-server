@@ -10,6 +10,7 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 COPY spread ./spread
 COPY evaluation ./evaluation
+COPY config ./config
 
 # Pure-Python deps only; the numerical/geo stack comes from the ELMFIRE env.
 RUN pip install --no-cache-dir --no-deps . && \

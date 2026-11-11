@@ -18,7 +18,7 @@ from app.api.geo import from_geojson, to_geojson
 from app.api.pagination import LIMIT, cut, decode_cursor
 from app.db.models import FirePerimeter, Incident, User
 from app.db.models.enums import IncidentStatus
-from app.repositories import event_logs, incidents
+from app.repositories import event_logs, incidents, resources
 from app.repositories.predictions import to_multipolygon
 from app.schemas.incident import (
     IncidentCreateIn,
@@ -245,7 +245,8 @@ def get_incident(incident_id: IncidentId, request: Request, user: Reader, db: Db
 def end_incident(
     incident_id: IncidentId, body: IncidentEndIn, request: Request, user: Commander, db: Db
 ):
-    """INC-04. 진행 중 산불만, 화면이 본 현재 화선과 같을 때만 종료한다."""
+    """INC-04. 진행 중 산불만, 화면이 본 현재 화선과 같을 때만 종료한다. 이 산불에 투입된
+    자원은 대기로 돌리고 연결을 푼다(명세 v0.5) — 다른 산불에서 다시 부를 수 있게."""
     incident = load_incident(db, user, incident_id)
     if incident.status is IncidentStatus.ENDED:
         raise ApiError(409, "INCIDENT_ENDED", "이미 종료된 산불입니다.")
@@ -256,7 +257,27 @@ def end_incident(
     incident.status = IncidentStatus.ENDED
     incident.ended_at = datetime.now(UTC)
     incident.ended_by = user.id
-    event_logs.add(db, "INCIDENT_ENDED", user_id=user.id, incident_id=incident_id)
+    released = resources.release_linked(db, incident_id)
+    for r in released:  # 자원 이력은 관리자 수정과 같은 이름(RESOURCE_UPDATED)에 op로 구분
+        event_logs.add(
+            db,
+            "RESOURCE_UPDATED",
+            user_id=user.id,
+            incident_id=incident_id,
+            details={
+                "op": "released",
+                "resource_id": r.id,
+                "name": r.name,
+                "changed": ["status", "deployed_incident_id"],
+            },
+        )
+    event_logs.add(
+        db,
+        "INCIDENT_ENDED",
+        user_id=user.id,
+        incident_id=incident_id,
+        details={"released_resource_ids": [r.id for r in released]},
+    )
     db.commit()
     return ok(request, incident_out(db, incident))
 
@@ -284,6 +305,17 @@ def list_perimeters(
 FUTURE_SLACK_S = 300  # 관측 시각이 지금보다 이만큼 넘게 미래면 거절(기기 시계 차이는 허용)
 
 
+def _reject_future(observed_at: datetime) -> None:
+    """화선 보고(PER-02) · 정정(PER-03) 공통: 5분 넘게 미래인 관측 시각은 거절(11/11 확정)."""
+    if (observed_at - datetime.now(UTC)).total_seconds() > FUTURE_SLACK_S:
+        raise ApiError(
+            422,
+            "INVALID_OBSERVED_AT",
+            "미래 시각입니다.",
+            [{"field": "observed_at", "reason": "지금보다 늦을 수 없습니다."}],
+        )
+
+
 def _checked_perimeter(db: Session, incident: Incident, geometry: dict, observed_at: datetime):
     """새 화선 도형 · 관측 시각 검사: 면(Polygon · MultiPolygon) · 올바른 도형, 현재 화선보다
     앞선 시각이나 미래 시각은 거절(예측 0시가 거꾸로 가지 않게)."""
@@ -296,13 +328,7 @@ def _checked_perimeter(db: Session, incident: Incident, geometry: dict, observed
             "현재 화선보다 앞선 관측 시각입니다.",
             [{"field": "observed_at", "reason": "현재 화선 관측 시각 이후여야 합니다."}],
         )
-    if (observed_at - datetime.now(UTC)).total_seconds() > FUTURE_SLACK_S:
-        raise ApiError(
-            422,
-            "INVALID_OBSERVED_AT",
-            "미래 시각입니다.",
-            [{"field": "observed_at", "reason": "지금보다 늦을 수 없습니다."}],
-        )
+    _reject_future(observed_at)
     return geom
 
 
@@ -374,6 +400,7 @@ def correct_perimeter(
             "직전 화선보다 앞선 관측 시각입니다.",
             [{"field": "observed_at", "reason": "직전 화선 관측 시각 이후여야 합니다."}],
         )
+    _reject_future(body.observed_at)
     target.corrected_at = datetime.now(UTC)
     p = incidents.add_perimeter(
         db, incident_id=incident_id, geom=geom, observed_at=body.observed_at, reported_by=user.id

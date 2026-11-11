@@ -66,6 +66,23 @@ def linked_counts(session: Session, incident_id: int) -> dict[str, int]:
     return out
 
 
+def release_linked(session: Session, incident_id: int) -> list[Resource]:
+    """산불 종료(INC-04): 이 산불에 투입된 자원을 대기로 돌리고 연결을 푼다(명세 v0.5).
+    풀어 준 자원(id 순)을 돌려준다."""
+    rows = list(
+        session.scalars(
+            select(Resource)
+            .where(Resource.deployed_incident_id == incident_id)
+            .order_by(Resource.id)
+        )
+    )
+    for r in rows:
+        r.status = ResourceStatus.AVAILABLE
+        r.deployed_incident_id = None
+    session.flush()
+    return rows
+
+
 def list_bases(
     session: Session, *, org_type: str | None, after_id: int | None, limit: int
 ) -> list[ResourceBase]:

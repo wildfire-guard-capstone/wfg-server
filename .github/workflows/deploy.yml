@@ -1,6 +1,7 @@
 name: deploy
 
-# main에 머지(= main push)되면 API 이미지를 만들어 EC2에 배포한다.
+# main에 머지(= main push)되면 API 이미지와 ELMFIRE worker 이미지를 만들어 EC2에 배포한다.
+# worker 이미지는 elmfire-image.yml을 불러 만든다 — 다 만들어진 뒤에만 배포한다(받을 이미지가 없는 일 없음).
 # 마이그레이션 · 바탕 데이터 적재는 하지 않는다 — 사람이 직접 실행(deploy/README.md).
 on:
   workflow_dispatch:
@@ -14,10 +15,15 @@ on:
       - "migrations/**"
       - "alembic.ini"
       - "docker/api/**"
+      - "docker/worker/**"
+      - "spread/**"
+      - "config/**"
+      - "evaluation/**"
       - "deploy/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/deploy.yml"
+      - ".github/workflows/elmfire-image.yml"
 
 permissions:
   contents: read
@@ -30,6 +36,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/wfg-api
+  WORKER_IMAGE: ghcr.io/${{ github.repository_owner }}/wfg-worker
 
 jobs:
   test:
@@ -67,8 +74,13 @@ jobs:
           cache-from: type=gha,scope=wfg-api
           cache-to: type=gha,mode=max,scope=wfg-api
 
+  # ELMFIRE worker 이미지(:커밋 · :latest) — app · spread · config가 같은 커밋으로 들어간다
+  worker:
+    needs: test
+    uses: ./.github/workflows/elmfire-image.yml
+
   deploy:
-    needs: build
+    needs: [build, worker]
     runs-on: ubuntu-latest
     env:
       EC2: ubuntu@${{ secrets.EC2_HOST }}
@@ -91,10 +103,12 @@ jobs:
           $SSH "$EC2" bash -s <<EOF
           set -e
           cd /home/ubuntu/wfg
-          echo "API_IMAGE=${IMAGE}:${GITHUB_SHA}" > .env   # compose reads it; pins this version
-          docker compose pull api
+          # compose reads .env; pins this version of both images
+          printf 'API_IMAGE=%s\nWORKER_IMAGE=%s\n' "${IMAGE}:${GITHUB_SHA}" "${WORKER_IMAGE}:${GITHUB_SHA}" > .env
+          touch api.env   # optional API settings, edited by hand on EC2; never overwritten
+          docker compose pull api worker
           docker logout ghcr.io >/dev/null
-          docker compose up -d api
+          docker compose up -d api worker
           EOF
       - name: Health check
         run: |
@@ -103,4 +117,14 @@ jobs:
             sleep 2
           done
           $SSH "$EC2" "cd /home/ubuntu/wfg && docker compose logs --tail 50 api"
+          exit 1
+      - name: Worker health check
+        run: |
+          # worker has no published port: ask it from inside the api container (same network)
+          probe="import urllib.request as u; print(u.urlopen('http://wfg-worker:8100/health', timeout=5).read().decode())"
+          for i in $(seq 1 30); do
+            if $SSH "$EC2" "docker exec wfg-api python -c \"$probe\""; then exit 0; fi
+            sleep 2
+          done
+          $SSH "$EC2" "cd /home/ubuntu/wfg && docker compose logs --tail 50 worker"
           exit 1

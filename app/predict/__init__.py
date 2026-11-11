@@ -2,7 +2,8 @@
 
 새 예측 방법은 이 폴더에 파일 하나를 만들고(base.Predictor 약속을 지킴)
 아래 PREDICTORS에 이름을 더한다.
-지금: synthetic(가짜 타원) · file(P1 ~ P8 GeoJSON). 나중: replay(의성 실제 확산 재현) · elmfire.
+지금: synthetic(가짜 타원) · file(P1 ~ P8 GeoJSON) ·
+elmfire(요청 때 만든 기상 입력으로 ELMFIRE 실행 — 출처 stations · deck).
 """
 
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.predict.synthetic import SyntheticPredictor
 PREDICTORS = {
     "synthetic": SyntheticPredictor,
     "file": FilePredictor,
+    "elmfire": None,  # 쓸 때 불러온다(spread · ELMFIRE는 GPU 서버에만, API 이미지에는 없음)
 }
 
 
@@ -26,6 +28,13 @@ def get_predictor(name: str, **options: Any) -> Predictor:
         options["path"] = Path(options["path"])
         if options.get("weather_path"):
             options["weather_path"] = Path(options["weather_path"])
+    if name == "elmfire":
+        from app.predict.elmfire import ElmfirePredictor
+
+        options["deck"] = Path(options["deck"])
+        if options.get("work_dir"):
+            options["work_dir"] = Path(options["work_dir"])
+        return ElmfirePredictor(**options)
     return PREDICTORS[name](**options)
 
 

@@ -23,6 +23,15 @@ from rules.core.direction import compass16
 
 log = logging.getLogger(__name__)
 REFRESH_DELAY = timedelta(hours=1, minutes=40)  # 다음 정시 자료가 나오는 때 = 정시 + 1시간 40분
+# 예측 기상(predictions.weather)에 저장만 하고 PRED-04 응답에서는 빼는 시간별 칸.
+# wind_max_1min = 시간 안 가장 센 1분 풍속(ELMFIRE 입력 기록) — 화면 · 판정에는 평균 wind_speed만
+STORED_ONLY = ("wind_max_1min",)
+
+
+def prediction_weather_out(w: dict[str, Any]) -> dict[str, Any]:
+    """PRED-04 응답: 저장된 예측 기상에서 저장 전용 칸(STORED_ONLY)을 뺀 명세 Weather 모양."""
+    hours = [{k: v for k, v in h.items() if k not in STORED_ONLY} for h in w.get("hours") or []]
+    return {**w, "hours": hours}
 
 
 def provider_from_settings() -> WeatherProvider:
@@ -35,6 +44,16 @@ def provider_from_settings() -> WeatherProvider:
         "asos": {"auth_key": s.kma_api_key, "station": s.weather_station},
     }.get(s.weather, {})
     return get_weather(s.weather, **options)
+
+
+def asos_provider_from_settings() -> WeatherProvider:
+    """시연 1(DEMO_ELMFIRE)의 기온 · 습도 · 강수 = 의성 지상관측(asos).
+
+    KMA_API_KEY · WEATHER_STATION. 설정 WEATHER와 상관없이 고른다
+    (2025년 산불이라 예보를 받을 수 없음).
+    """
+    s = get_settings()
+    return get_weather("asos", auth_key=s.kma_api_key, station=s.weather_station)
 
 
 def observer_from_settings() -> KmaForecast | None:

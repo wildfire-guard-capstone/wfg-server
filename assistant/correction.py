@@ -211,6 +211,17 @@ VERBS = [
     ),
 ]
 SMS = re.compile(r"(?:재난\s*)?문자\s*(?:를|가|는)?\s*(?:보냈|발송|송출|나갔|했|함|됨)")
+# 「문자는 아직 안 나갔어」 · 「문자 발송 취소」 · 「문자 안 보냈어」 — 송출 기록을 되돌린다
+SMS_NOT = re.compile(
+    r"문자\S*\s*(?:발송|송출)?\S*\s*(?:아직\s*)?(?:안|못)\s*(?:나갔|보냈|보내|발송|송출|갔|했|됐)"
+    r"|문자\S*\s*(?:발송|송출)?\S*\s*(?:취소|철회)"
+    r"|문자\S*\s*(?:발송|송출)\S*\s*(?:하지|되지)\s*않"
+)
+SMS_WORD = re.compile(r"문자|CBS")
+# 값을 「아니오」로 되돌린다는 말(취소 · 잘못 보고 · 아직 안 …) — LLM이 낸 false를 입력과 대조한다
+NEGATION = re.compile(r"취소|철회|해제|잘못|오보|아니|아직|안\s|않|못\s|번복|정정")
+# 인명 피해 구절(「진화대원 2명 부상」)의 수는 투입 수가 아니다
+CASUALTY = re.compile(r"부상|다쳤|다침|사망|숨졌|숨짐|고립|갇혔|실종|연락\s*두절|쓰러")
 NOT_ALLOWED = [
     (
         "stage",
@@ -244,6 +255,7 @@ def _move_target(kind: str, group: str, after: str) -> str:
 def parse_rules(text: str) -> Parsed:
     out = Parsed(source="rules")
     used: list[tuple[int, int]] = []
+    casualty = False
     for m in RES.finditer(text):
         count = read_count(m.group("count"))
         if count is None:
@@ -252,6 +264,12 @@ def parse_rules(text: str) -> Parsed:
         kind = next(k for k, pat in GROUP_WORDS.items() if re.fullmatch(pat, word))
         before, after = _clause_before(text, m.start()), _clause_after(text, m.end())
         around = before + " " + m.group("mid") + " " + after
+        if CASUALTY.search(
+            around
+        ):  # 「진화대원 2명 부상」: 투입 수로 읽지 않는다(아래에서 처리 불가 안내)
+            used.append(m.span())
+            casualty = True
+            continue
         mode = "remove" if REMOVE.search(around) else "set" if SET.search(around) else "add"
         group = _group_of(kind, before + " " + m.group("mid"), word)
         phrase = (before.strip() + " " + m.group(0) + after).strip()
@@ -290,12 +308,16 @@ def parse_rules(text: str) -> Parsed:
                 {"kind": "no_village", "text": (segment + rest[start:end]).strip()}
             )
         pos = end
-    if SMS.search(rest):
+    if SMS_NOT.search(rest):
+        out.drafts.append(Draft("disaster_sms_sent", value=False, text="재난문자 송출 안 함"))
+    elif SMS.search(rest):
         out.drafts.append(Draft("disaster_sms_sent", value=True, text="재난문자 송출"))
     for kind, pat in NOT_ALLOWED:
         m = pat.search(rest)
         if m:
             out.not_allowed.append({"kind": kind, "text": m.group(0)})
+    if casualty and not any(n["kind"] == "injury" for n in out.not_allowed):
+        out.not_allowed.append({"kind": "injury", "text": text.strip()})
     return out
 
 
@@ -603,6 +625,8 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     """
     out = Parsed(source="llm+rules")
     dropped: list[str] = []
+    seen: dict[tuple, int] = {}
+    rules_sms = next((r for r in rules.drafts if r.kind == "disaster_sms_sent"), None)
     # 규칙이 찾은 칸 옮기기(「미상 헬기 2대는 산림청」 → 미상 빼기 + 산림청 더하기)는 규칙 해석을 쓴다.
     # LLM이 한쪽만 내면(산림청 2대 추가) 합계가 늘어나 버린다
     moves = [
@@ -616,6 +640,24 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     for d in llm.drafts:
         if d.kind in GROUPS and (d.kind, d.count) in moved:
             continue
+        # 같은 변화를 되풀이해 내면(11-11 실험: 「헬기 1대 추가」가 두세 번) 한 번만 받는다.
+        # 입력에 그 구절이 정말 여러 번 있으면(규칙이 센 만큼) 그만큼은 받는다
+        same_key = (d.kind, d.group, d.mode, d.count, _stem(d.village), d.emd, d.value)
+        seen[same_key] = seen.get(same_key, 0) + 1
+        in_text = sum(r.kind == d.kind and r.count == d.count for r in rules.drafts)
+        if seen[same_key] > max(1, in_text if d.kind in GROUPS else 1):
+            dropped.append(f"repeat:{d.kind}")
+            continue
+        # 「아니오」로 되돌리는 변화는 입력에 그런 말(취소 · 잘못 · 아직 안 …)이 있을 때만
+        if d.kind not in GROUPS and d.value is False and not NEGATION.search(text + " "):
+            dropped.append(f"{d.kind}:false")
+            continue
+        if d.kind == "disaster_sms_sent":
+            if not SMS_WORD.search(text):  # 입력에 문자 얘기가 없다
+                dropped.append("disaster_sms_sent")
+                continue
+            if rules_sms is not None:  # 송출했다 · 안 했다는 규칙이 읽은 쪽을 따른다
+                d.value = rules_sms.value
         if d.kind in VILLAGE_ITEMS:
             stem = _stem(d.village)
             if not stem or stem not in re.sub(r"\s", "", text):
@@ -641,11 +683,29 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     ]  # 옮기기 둘은 여기서 함께 들어온다
     specific = [n for n in rules.not_allowed if n["kind"] not in ("other",)]
     kinds = {n["kind"] for n in specific}
-    out.not_allowed = specific + [
-        n
-        for n in llm.not_allowed
-        if n.get("kind") not in kinds and not (n.get("kind") == "other" and specific)
-    ]
+    extra: list[dict[str, str]] = []
+    for n in llm.not_allowed:
+        kind = n.get("kind")
+        if kind in kinds or (kind == "other" and specific):
+            continue
+        if kind == "no_village":  # 입력에 대피 얘기가 없는데 LLM이 마을 없는 대피 변화를 낸 것
+            dropped.append("no_village")
+            continue
+        if any(e.get("kind") == kind for e in extra):  # 같은 이유는 한 번만
+            continue
+        extra.append(n)
+    if "injury" in kinds:  # 인명 피해 구절의 수를 LLM이 투입 수로 내도 받지 않는다
+        casualty_counts = {
+            read_count(m.group("count"))
+            for m in RES.finditer(text)
+            if CASUALTY.search(
+                _clause_before(text, m.start()) + m.group("mid") + _clause_after(text, m.end())
+            )
+        }
+        kept = [d for d in out.drafts if not (d.kind in GROUPS and d.count in casualty_counts)]
+        dropped += [f"casualty:{d.kind}" for d in out.drafts if d not in kept]
+        out.drafts = kept
+    out.not_allowed = specific + extra
     if trace is not None and dropped:
         trace["correction_llm_dropped"] = dropped
     return out

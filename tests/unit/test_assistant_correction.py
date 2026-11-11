@@ -302,3 +302,126 @@ def test_llm_broken_json_falls_back_to_rules():
     trace = {}
     out = preview(make_context(), "괴산리 대피 완료", FakeLLM("not json"), trace)
     assert trace["correction_source"] == "rules" and out["type"] == "CORRECTION_PREVIEW"
+
+
+# ── 11-11 실제 EXAONE 실험에서 나온 문제 3가지 ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "진화대원 2명 부상당했어",
+        "소방관 한 명이 다쳤습니다",
+        "공무원 3명 연락 두절",
+        "진화대 5명 고립됐어",
+    ],
+)
+def test_casualty_counts_are_not_deployment(text):
+    """인명 피해 구절의 수는 투입 수가 아니다 — 규칙만으로도, LLM이 그 수를 투입으로 내도."""
+    assert not [d for d in parse_rules(text).drafts if d.kind == "crew"]
+    out = preview(make_context(), text)
+    assert out["type"] == "UNSUPPORTED" and "부상" in out["reason"]
+    n = next(iter(counts_in(text)))
+    llm = FakeLLM({"changes": [change("crew", count=n, group="special_crew")], "not_allowed": []})
+    assert preview(make_context(), text, llm)["type"] == "UNSUPPORTED"
+
+
+def test_casualty_does_not_block_other_changes_in_the_sentence():
+    out = preview(make_context(), "진화대원 2명 부상당했고, 소방차 3대 추가 도착")
+    items = {c["item"] for c in out["changes"]}
+    assert items == {"vehicle.fire_truck", "vehicle.total"}
+    assert any("부상" in i["reason"] for i in out["ignored"])
+
+
+def test_repeated_and_unsupported_llm_changes_are_dropped():
+    """EXAONE이 같은 변화를 되풀이하고 입력에 없는 대피 · 재난문자 변화까지 낸 경우(8번 중 2번)."""
+    heli = change("helicopter", count=1, group="forest", mode="add", text="산림청 헬기 1대 추가")
+    llm = FakeLLM(
+        {
+            "changes": [
+                heli,
+                heli,
+                heli,
+                change("evacuated", value=False, mode="set"),
+                change("evac_order", value=False, mode="set"),
+                change("disaster_sms_sent", value=False, mode="set"),
+                change("disaster_sms_sent", value=False, mode="set"),
+            ],
+            "not_allowed": [
+                {"kind": "weather", "text": "바람"},
+                {"kind": "weather", "text": "바람"},
+            ],
+        }
+    )
+    ctx = make_context()
+    before = ctx.situation["deployed"]["helicopter"]["forest"]
+    trace = {}
+    out = preview(ctx, "산림청 헬기 1대 추가했고 바람이 많이 세졌어", llm, trace)
+    items = {c["item"]: (c["before"], c["after"]) for c in out["changes"]}
+    assert set(items) == {"helicopter.forest", "helicopter.total"}  # 재난문자 변화 없음
+    assert items["helicopter.forest"] == (before, before + 1)  # 세 번이 아니라 한 번
+    assert [i["reason"] for i in out["ignored"]].count(out["ignored"][0]["reason"]) == 1
+    assert "기상" in out["ignored"][0]["reason"] and len(out["ignored"]) == 1
+    assert "repeat:helicopter" in trace["correction_llm_dropped"]
+
+
+def test_same_phrase_twice_in_the_input_is_counted_twice():
+    one = change("helicopter", count=1, group="forest", mode="add")
+    ctx = make_context()
+    before = ctx.situation["deployed"]["helicopter"]["forest"]
+    text = "산림청 헬기 1대 도착했고, 조금 뒤 산림청 헬기 1대 더 왔어"
+    out = preview(ctx, text, FakeLLM({"changes": [one, one], "not_allowed": []}))
+    items = {c["item"]: (c["before"], c["after"]) for c in out["changes"]}
+    assert items["helicopter.forest"] == (before, before + 2)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "재난문자는 아직 안 나갔어. 아까 잘못 입력했어",
+        "재난문자 안 보냈어",
+        "문자 발송 취소됐습니다",
+        "재난문자 송출은 아직 못 했어",
+    ],
+)
+def test_sms_can_be_taken_back(text):
+    """재난문자 송출 되돌리기: 규칙이 읽으므로 LLM이 못 읽거나(8번 중 5번) 거꾸로 읽어도 된다."""
+    assert intent.by_rules(text) == "CORRECTION"
+    for llm in (
+        None,
+        FakeLLM({"changes": [], "not_allowed": [{"kind": "other", "text": text}]}),
+        FakeLLM({"changes": [change("disaster_sms_sent", value=True)], "not_allowed": []}),
+    ):
+        ctx = make_context()
+        ctx.situation["disaster_sms_sent"] = True
+        out = preview(ctx, text, llm)
+        assert out["type"] == "CORRECTION_PREVIEW", out
+        assert [(c["item"], c["before"], c["after"]) for c in out["changes"]] == [
+            ("disaster_sms_sent", True, False)
+        ]
+
+
+def test_sms_sent_still_reads_as_sent():
+    ctx = make_context()
+    ctx.situation["disaster_sms_sent"] = False
+    out = preview(ctx, "재난문자 보냈어")
+    assert [(c["item"], c["after"]) for c in out["changes"]] == [("disaster_sms_sent", True)]
+
+
+def test_false_value_needs_a_negation_in_the_input():
+    """「아니오」로 되돌리는 변화는 입력에 취소 · 잘못 · 아직 같은 말이 있을 때만 받는다."""
+    ctx = make_context()
+    ctx.situation.setdefault("villages", {})["101"] = {"evacuated": True}
+    llm = FakeLLM(
+        {"changes": [change("evacuated", village="괴산리", value=False)], "not_allowed": []}
+    )
+    out = preview(ctx, "괴산리 대피 완료는 잘못 보고된 거야. 아직 대피 중이야", llm)
+    assert [(c["item"], c["before"], c["after"]) for c in out["changes"]] == [
+        ("evacuated", True, False)
+    ]
+    trace = {}
+    llm = FakeLLM(
+        {"changes": [change("evac_order", village="신월리", value=False)], "not_allowed": []}
+    )
+    out = preview(make_context(), "신월리 주민들이 이동하고 있습니다", llm, trace)
+    assert out["type"] == "UNSUPPORTED" and "evac_order:false" in trace["correction_llm_dropped"]

@@ -1,4 +1,5 @@
-"""지도 레이어(명세 7.1): 레이어 id → 테이블 · 속성, 범위(bbox) 안 도형을 GeoJSON으로 읽는다."""
+"""지도 레이어(명세 7.1): 레이어 id → 테이블 · 속성, 범위(bbox) 안 도형을 GeoJSON으로 읽는다.
+지도 대상 하나(MAP-03) · 행정구역 검색(MAP-04)도 같은 속성 칸을 쓴다."""
 
 import json
 from dataclasses import dataclass
@@ -133,3 +134,65 @@ def features(
         props = _props(row)
         out.append({"type": "Feature", "id": props["id"], "geometry": geom, "properties": props})
     return out
+
+
+def entity(session: Session, entity_type: str, entity_id: int) -> dict[str, Any] | None:
+    """지도 대상 하나(명세 4절 DTO 모양). 없으면 None.
+    행정구역 DTO에는 도형이 없다 — 경계는 레이어 도형(MAP-02)으로 받는다."""
+    table, columns = _COLUMNS[entity_type]
+    geom = (
+        ""
+        if entity_type == "admin_area"
+        else ", ST_AsGeoJSON(ST_Transform(geom, 4326), 6) AS __geom"
+    )
+    row = (
+        session.execute(
+            text(f"SELECT {columns}{geom} FROM {table} WHERE id = :id"), {"id": entity_id}
+        )
+        .mappings()
+        .first()
+    )
+    if row is None:
+        return None
+    values = dict(row)
+    shape = values.pop("__geom", None)
+    out = _props(values)
+    if shape is not None:
+        out["geometry"] = json.loads(shape)
+    return out
+
+
+def admin_areas(
+    session: Session,
+    *,
+    level: str | None,
+    parent_id: int | None,
+    q: str | None,
+    home: int | None,
+    after_id: int | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """행정구역 id 순 limit + 1개(도형 없음).
+
+    home = 관할 시군구. 주면 그 시군구 · 그 위 시도 · 그 아래 읍면동만(관할 계정),
+    None이면 전국(전산 관리자)."""
+    _, columns = _COLUMNS["admin_area"]
+    where, params = ["id > :after"], {"after": after_id or 0, "n": limit + 1}
+    if level is not None:
+        where.append("level::text = :level")
+        params["level"] = level
+    if parent_id is not None:
+        where.append("parent_id = :parent")
+        params["parent"] = parent_id
+    if q:
+        where.append("name ILIKE :q ESCAPE '\\'")
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params["q"] = f"%{escaped}%"
+    if home is not None:
+        where.append(
+            "(id = :home OR parent_id = :home"
+            " OR id = (SELECT parent_id FROM admin_areas WHERE id = :home))"
+        )
+        params["home"] = home
+    sql = f"SELECT {columns} FROM admin_areas WHERE {' AND '.join(where)} ORDER BY id LIMIT :n"
+    return [_props(dict(r)) for r in session.execute(text(sql), params).mappings()]

@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from tests.integration.conftest import incident_body as body
 from tests.integration.conftest import square
@@ -59,6 +59,44 @@ def test_end_incident(client, login, anpyeong):
         end, json={"expected_perimeter_id": inc["current_perimeter_id"]}, headers=cmd
     )
     assert again.json()["error"]["code"] == "INCIDENT_ENDED"
+
+
+def test_end_incident_releases_linked_resources(client, login, db, anpyeong):
+    """INC-04: 종료하면 이 산불에 투입된 자원만 대기로 돌아가고 연결이 풀린다."""
+    rep, cmd = login("t_rep5", "REPORTER"), login("t_cmd5", "COMMANDER")
+    inc = client.post(URL, json=body(*anpyeong), headers=rep).json()["data"]
+    other = client.post(URL, json=body(*anpyeong), headers=rep).json()["data"]
+    a, b, c = db.scalars(text("SELECT id FROM resources ORDER BY id LIMIT 3")).all()
+    link = "UPDATE resources SET status = 'DEPLOYED', deployed_incident_id = :inc WHERE id = :id"
+    for rid, inc_id in ((a, inc["id"]), (b, inc["id"]), (c, other["id"])):
+        db.execute(text(link), {"inc": int(inc_id), "id": rid})
+    db.flush()
+
+    r = client.post(
+        f"{URL}/{inc['id']}/end",
+        json={"expected_perimeter_id": inc["current_perimeter_id"]},
+        headers=cmd,
+    )
+    assert r.status_code == 200, r.text
+    rows = db.execute(
+        text(
+            "SELECT id, status::text, deployed_incident_id FROM resources WHERE id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": [a, b, c]},
+    ).all()
+    state = {i: (s, d) for i, s, d in rows}
+    assert state[a] == state[b] == ("AVAILABLE", None)
+    assert state[c] == ("DEPLOYED", int(other["id"]))  # 다른 산불 자원은 그대로
+
+    logs = db.execute(
+        text("SELECT action, details FROM event_logs WHERE incident_id = :i ORDER BY id"),
+        {"i": int(inc["id"])},
+    ).all()
+    released = [d for act, d in logs if act == "RESOURCE_UPDATED"]
+    assert [d["resource_id"] for d in released] == [a, b]
+    assert all(d["op"] == "released" for d in released)
+    ended = [d for act, d in logs if act == "INCIDENT_ENDED"]
+    assert ended == [{"released_resource_ids": [a, b]}]
 
 
 def test_other_jurisdiction_is_hidden(client, login, make_user, db, anpyeong):

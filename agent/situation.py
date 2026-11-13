@@ -10,6 +10,8 @@
 
 from typing import Any
 
+from agent.situate import stage_key
+
 STAGE_NO = {"초기대응": 0, "1단계": 1, "2단계": 2, "3단계": 3}
 LARGE_HA = 100  # 대형산불 = 피해면적 100 ha 이상(시행령 제21조① · 매뉴얼 p.114)
 UPPER = ("도지사", "특별시장", "광역시장", "특별자치", "산림청장")
@@ -24,8 +26,8 @@ def flags(
 ) -> dict[str, Any]:
     b = bundles
     st, cm, area = b.get("stage", {}), b.get("commander", {}), b.get("area", {})
-    now_no = STAGE_NO.get(st.get("now", {}).get("stage"), 0)
-    p5_no = STAGE_NO.get(st.get("p5", {}).get("stage"), 0)
+    now_no = STAGE_NO.get(stage_key(st.get("now", {}).get("stage")), 0)
+    p5_no = STAGE_NO.get(stage_key(st.get("p5", {}).get("stage")), 0)
     now_ha = area.get("now_ha") or 0
     slices = area.get("slices") or []
     p5_ha = next((s.get("ha") for s in slices if s.get("p") == 5), now_ha) or 0

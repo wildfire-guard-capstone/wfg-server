@@ -244,7 +244,10 @@ def check_one(
     def _stage_key(s: str) -> str:
         return "초기대응" if "초기대응" in s else re.sub(r"\D", "", s)
 
-    judged_stages = {_stage_key(s) for s in STAGE.findall(judged_text)}
+    # 판정의 「초기 대응」(규칙 엔진, 띄어 씀)도 단계로 읽는다. 제안 쪽은 그대로 「초기대응」만 단계로 본다
+    judged_stages = {
+        _stage_key(s) for s in STAGE.findall(judged_text.replace("초기 대응", "초기대응"))
+    }
     for s in STAGE.findall(text):
         if _stage_key(s) not in judged_stages:
             errs.append(f"판정에 없는 단계 「{s}」")

@@ -13,6 +13,9 @@ from typing import Any
 STAGE_NO = {"초기대응": 0, "1단계": 1, "2단계": 2, "3단계": 3}
 LARGE_HA = 100  # 대형산불 = 피해면적 100 ha 이상(시행령 제21조① · 매뉴얼 p.114)
 UPPER = ("도지사", "특별시장", "광역시장", "특별자치", "산림청장")
+WIND_RISE_MS = (
+    1.5  # 바람이 세짐 = 8시간 안 최대 풍속 ≥ 지금 풍속 + 1.5 m/s(rules/sections/s4.py도 같은 값)
+)
 
 
 def _any_night(rows: list[dict[str, Any]]) -> bool:
@@ -65,7 +68,7 @@ def flags(
         "wind_now_ms": (w.get("now") or {}).get("ms"),
         "wind_max_ms": (w.get("max") or {}).get("ms"),
         "wind_rising": ((w.get("max") or {}).get("ms") or 0)
-        >= ((w.get("now") or {}).get("ms") or 0) + 1.5,
+        >= ((w.get("now") or {}).get("ms") or 0) + WIND_RISE_MS,
         "villages_burning": len(vil.get("burning") or []),
         "villages_p5": len(vil.get("p5") or []),
         "villages_p8": len(vil.get("p8") or []),

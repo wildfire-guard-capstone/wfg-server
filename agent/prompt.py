@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent import guides
+
 CATEGORIES = ["즉시", "대기", "협의", "요청"]
 MAX_PROPOSALS = 5
 MAX_EVIDENCE = 4
@@ -82,11 +84,17 @@ def action_part(text: str) -> str:
 
 
 def examples_of(
-    item_id: str, names: set[str] = frozenset(), action_only: set[str] = frozenset()
+    item_id: str,
+    names: set[str] = frozenset(),
+    action_only: set[str] = frozenset(),
+    flags: dict[str, Any] | None = None,
 ) -> list[str]:
-    """같은 항목의 v3 목표 문단(값을 가림). action_only의 주제는 상황 문장을 코드가 붙이므로 할 일 문장만 보인다."""
+    """같은 항목의 v3 목표 문단(값을 가림). action_only의 주제는 상황 문장을 코드가 붙이므로 할 일 문장만 보인다.
+    예시에 when(지침 줄과 같은 깃발 식)이 있으면 그 상황에서만 보인다(깃발이 없으면 모두)."""
     out = []
     for p in STYLE.get(item_id, []):
+        if flags is not None and not guides.holds(p.get("when", ""), flags):
+            continue
         text = action_part(p["text"]) if p.get("action") in action_only else p["text"]
         if text:
             out.append(mask_example(text, names))
@@ -226,7 +234,7 @@ def messages(
         )
     if guide:
         parts.append("[이 항목 작성 지침 — 이번 상황에 맞춘 것]\n" + guide)
-    ex = examples_of(judgment["id"], names, action_only)
+    ex = examples_of(judgment["id"], names, action_only, common.get("situation"))
     if ex:
         parts.append(
             "[문단 꼴 예시] 같은 항목의 목표 문단입니다(다른 시각 · 상황, 값은 N · HH:MM · ○○로 가림). 문장 구조와 구체성(상황 → 할 일)만 따르고, "

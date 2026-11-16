@@ -12,7 +12,8 @@ One run folder:
   outputs/         time_of_arrival_*.tif (seconds after band 1; 0 / negative = not burned)
 
 Ranges follow the service definition: P0 = start perimeter, Pn = P0 + cells burned by t0 + n h.
-Holes are filled (a range is an envelope, like 산불영향구역),
+Pn is drawn along the time-of-arrival contour (not 30 m stairs) and widened evenly so its area
+equals the burned-cell area. Holes are filled (a range is an envelope, like 산불영향구역),
 so P0 <= P1 <= ... <= P8 by construction.
 
 Runs where ELMFIRE is installed (worker / GPU server): rasterio is imported inside functions.
@@ -273,12 +274,110 @@ def run(
 
 
 def ranges(res: RunResult, start: BaseGeometry, hours: int = 8) -> list[BaseGeometry]:
-    """P0 (the observed start, as given) and P1..P8 polygons cut from one run."""
+    """P0 (the observed start, as given) and P1..P8 polygons cut from one run.
+
+    Pn 모양 = 도착시간 등고선, 면적 = 30 m 칸 수(smooth_range).
+    """
     out = [start]
     for h in range(1, hours + 1):
-        poly = polygonize(res.burned_by(res.t_start_s + h * HOUR_S), res.transform)
-        out.append(unary_union([poly, out[-1]]))  # keep nesting exact after simplification
+        poly = smooth_range(res, res.t_start_s + h * HOUR_S)
+        # 누적. 등고선 좌표는 칸 격자에 안 맞아 합칠 때 cm² 단위 오차가 남을 수 있다
+        # (저장 검사 check_slices는 면적 비율로 봐준다)
+        out.append(unary_union([poly, out[-1]]))
     return out
+
+
+# ── 매끈한 범위: 도착시간 등고선 모양 + 칸 면적 ──────────────────────────────
+
+
+def _contour_segments(z: np.ndarray, level: float) -> list[tuple]:
+    """칸 가운데 점을 꼭짓점으로 한 격자에서 z = level 선분(행 · 열 좌표).
+
+    마칭 스퀘어: 네 꼭짓점의 안(z <= level) · 밖이 섞인 사각형마다 변 위 교점을 선형 보간으로
+    찾아 잇는다. 안팎이 엇갈린 사각형(교점 4개)은 네 값의 평균으로 짝을 정한다.
+    """
+    a, b = z[:-1, :-1], z[:-1, 1:]  # 위 왼쪽 · 위 오른쪽
+    c, d = z[1:, 1:], z[1:, :-1]  # 아래 오른쪽 · 아래 왼쪽
+    ia, ib, ic, id_ = (a <= level), (b <= level), (c <= level), (d <= level)
+    rr, cc = np.nonzero(~((ia == ib) & (ib == ic) & (ic == id_)))
+    va, vb, vc, vd = a[rr, cc], b[rr, cc], c[rr, cc], d[rr, cc]
+    ia, ib, ic, id_ = ia[rr, cc], ib[rr, cc], ic[rr, cc], id_[rr, cc]
+
+    def t(p, q):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f = (level - p) / (q - p)
+        return np.clip(np.nan_to_num(f, nan=0.5), 0.0, 1.0)
+
+    # 변 0 위(a→b) · 1 오른쪽(b→c) · 2 아래(d→c) · 3 왼쪽(a→d)
+    pts = [
+        (rr + 0.0, cc + t(va, vb)),
+        (rr + t(vb, vc), cc + 1.0),
+        (rr + 1.0, cc + t(vd, vc)),
+        (rr + t(va, vd), cc + 0.0),
+    ]
+    cut = [ia != ib, ib != ic, id_ != ic, ia != id_]
+    centre_in = (va + vb + vc + vd) / 4 <= level
+    segs = []
+    for i in range(len(rr)):
+        p = [(pts[e][0][i], pts[e][1][i]) for e in range(4) if cut[e][i]]
+        if len(p) == 2:
+            segs.append((p[0], p[1]))
+        elif len(p) == 4:  # 안장점
+            if ia[i] == centre_in[i]:
+                segs += [(p[0], p[1]), (p[2], p[3])]
+            else:
+                segs += [(p[3], p[0]), (p[1], p[2])]
+    return segs
+
+
+def smooth_range(res: RunResult, t_s: float, simplify_m: float = 3.0) -> BaseGeometry:
+    """t_s까지 탄 범위를 매끈한 경계로(구멍 메움, 덱 좌표계).
+
+    1. 면적 기준 = 칸 범위(burned_by, 구멍 메움)의 칸 수 × 칸 면적 — 지금까지와 같은 값
+    2. 모양 = 도착시간 등고선(칸 가운데 사이 선형 보간). 시작 화선 칸은 시작 시각으로 본다
+    3. 등고선은 칸 바깥 모서리보다 반 칸쯤 안쪽을 지나므로, 단순화한 뒤 둘레를 고르게 넓혀
+       1의 면적에 맞춘다(이분 탐색, 0 ~ 30 m)
+    """
+    from shapely import linestrings
+    from shapely import polygonize as shp_polygonize
+
+    mask = fill_holes_mask(res.burned_by(t_s))  # 1
+    if not mask.any():
+        return Polygon()
+    target = float(mask.sum()) * abs(res.transform.a * res.transform.e)
+
+    rows, cols = np.nonzero(mask)  # 2: 탄 곳 둘레만 잘라 계산
+    r0, r1 = max(rows.min() - 2, 0), min(rows.max() + 3, mask.shape[0])
+    c0, c1 = max(cols.min() - 2, 0), min(cols.max() + 3, mask.shape[1])
+    big = t_s + 10 * HOUR_S
+    win = (slice(r0, r1), slice(c0, c1))
+    z = np.where(np.isfinite(res.toa[win]), res.toa[win], big)
+    z = np.where(res.start_mask[win], np.minimum(z, res.t_start_s), z)
+    z = np.where(mask[win], np.minimum(z, t_s), z)  # 메운 구멍은 안으로
+    z = np.pad(z, 1, constant_values=big)  # 가장자리에서 선이 닫히게
+    tr = res.transform
+    off_r, off_c = r0 - 1 + 0.5, c0 - 1 + 0.5  # 패딩 1칸 · 칸 가운데
+
+    def xy(p):
+        return (tr.c + (p[1] + off_c) * tr.a, tr.f + (p[0] + off_r) * tr.e)
+
+    lines = linestrings([[xy(p), xy(q)] for p, q in _contour_segments(z, t_s)])
+    faces = shp_polygonize(lines)
+    shape_ = unary_union([Polygon(g.exterior) for g in getattr(faces, "geoms", [faces])])
+    if shape_.is_empty:
+        return polygonize(mask, tr)
+    if simplify_m:  # 3: 단순화를 먼저 해야 맞춘 면적이 그대로 남는다
+        shape_ = shape_.simplify(simplify_m, preserve_topology=True)
+    if shape_.area >= target:
+        return shape_
+    lo, hi = 0.0, 30.0
+    for _ in range(20):
+        mid = (lo + hi) / 2
+        if shape_.buffer(mid, quad_segs=2).area < target:
+            lo = mid
+        else:
+            hi = mid
+    return shape_.buffer(hi, quad_segs=2)
 
 
 # ── calibration (회차마다 직전 구간, 11/7 사용자 결정) ─────────────────────

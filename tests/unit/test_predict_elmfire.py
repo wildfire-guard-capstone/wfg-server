@@ -22,6 +22,7 @@ from app.predict import get_predictor
 from app.predict.base import HOURS, PredictionRequest
 from app.predict.elmfire import ElmfirePredictor, weather_namelist
 from app.predict.geojson import slices_geojson
+from app.repositories.predictions import check_slices
 from app.weather.base import KST, WeatherRequest, WeatherUnavailable
 from app.weather.deck import DeckWeather
 from app.weather.elmfire_input import (
@@ -211,8 +212,7 @@ def test_predict_writes_input_grids_and_cuts_hourly_ranges(fake_deck, tmp_path):
     assert result.weather is inp.weather and result.source == "elmfire"
 
     assert len(result.slices) == HOURS
-    for small, big in zip([START, *result.slices], result.slices, strict=False):
-        assert big.covers(small)
+    check_slices(START, result.slices)  # 누적(P0 ⊆ P1 ⊆ … ⊆ P8) — 저장 때와 같은 검사
     # 동쪽으로 한 시간에 6칸(180 m)
     assert result.slices[0].bounds[2] == pytest.approx(START.bounds[2] + 180, abs=CELL)
     assert result.slices[1].area > result.slices[0].area

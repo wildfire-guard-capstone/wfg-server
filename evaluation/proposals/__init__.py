@@ -4,7 +4,7 @@
 - harness.py  replay(EC2: DB에 저장된 엔진 입력 → 실제 작성기) · check(CSV · JSONL)
               · compare(고치기 전 · 후)
 
-    python -m evaluation.proposals replay --proposals 1-11 --distinct --repeat 3 --label before
+    python -m evaluation.proposals replay --proposals 1-11 --distinct --rebuild-items --label before
     python -m evaluation.proposals check proposal_items.csv
     python -m evaluation.proposals compare results/proposals/before results/proposals/after
 

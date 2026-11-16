@@ -143,7 +143,9 @@ DB에 저장된 제안서의 엔진 입력(`proposals.context` · `proposal_item
 ```bash
 cd /home/ubuntu/wfg
 # 1. 고치기 전(지금 배포된 코드) — 입력이 같은 제안서는 한 번만, 제안서마다 3번. 터미널을 닫아도 돈다
-docker exec -d wfg-api sh -c "python -m evaluation.proposals replay --proposals 1-11 --distinct --repeat 3 --label before > results/before.log 2>&1"
+#    --rebuild-items: 항목 입력을 저장된 것 대신 지금 코드(rules/items · sections)로 — 고치는 PR이 rules/를
+#    바꿔도 전 · 후가 같은 조건이 되게 둘 다 붙인다
+docker exec -d wfg-api sh -c "python -m evaluation.proposals replay --proposals 1-11 --distinct --rebuild-items --repeat 3 --label before > results/before.log 2>&1"
 tail -f results/before.log            # 진행 상황(Ctrl+C는 보기만 끔). 끝나면 표가 나온다
 
 # 2. 고친 PR을 배포한 뒤 같은 명령에서 --label after(로그도 after.log)
@@ -155,7 +157,7 @@ docker exec wfg-api python -m evaluation.proposals compare results/proposals/bef
   재배포해도 남는다. **근거 원문이 들어 있으니 레포 · 팀 밖으로 올리지 않는다** — 공유는 `report.md`의 건수만
 - 터널 · vLLM이 끊겨 멈추면 같은 명령을 다시 준다(끝난 출력은 건너뛰고 이어서). 다른 설정으로 돌리려면 `--label`을 바꾼다
 - 시간: 출력 하나 = 제안서 한 번 만드는 시간. 8개 × 3번이면 그 24배. 시연 · 사용 중일 때는 돌리지 않는다(같은 GPU)
-- GPU 없이 DB 읽기만 확인: `--writer fake --label dry`. 항목 입력을 지금 규칙 코드로 다시 만들려면 `--rebuild-items`
+- GPU 없이 DB 읽기만 확인: `--writer fake --label dry`. 저장된 항목 입력 그대로(그때 LLM이 받은 것) 돌리려면 `--rebuild-items`를 뺀다
 - DB에서 내보낸 `proposal_items` CSV를 검사만(내 컴퓨터, DB · GPU 필요 없음):
   `uv run python -m evaluation.proposals check proposal_items.csv`
 

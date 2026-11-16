@@ -30,6 +30,10 @@ COPY assistant ./assistant
 COPY risk ./risk
 COPY spread ./spread
 COPY config ./config
+# 제안서 하네스만(python -m evaluation.proposals — 저장된 입력으로 작성기 다시 돌리기 · 버그 건수).
+# 확산 평가(evaluation의 나머지)는 넣지 않는다.
+COPY evaluation/__init__.py ./evaluation/__init__.py
+COPY evaluation/proposals ./evaluation/proposals
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

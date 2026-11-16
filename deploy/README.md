@@ -134,6 +134,33 @@ cd /home/ubuntu/wfg && docker compose up -d api
 - 터널이나 vLLM이 꺼져 있으면 예측 작업은 `PROPOSAL_FAILED`로 끝나고 예측 · 제안서 모두 저장하지 않는다. 가짜 작성기로 되돌리려면 `api.env`에서 `PROPOSAL_WRITER` 줄을 지우고 다시 켠다
 - 공용 GPU라 vLLM은 쓸 때만 켠다(상시 실행은 관리자 허락 뒤)
 
+## 제안서 하네스 (버그 고치기 전 · 후 비교)
+
+DB에 저장된 제안서의 엔진 입력(`proposals.context` · `proposal_items.detail`)을 그대로 지금 작성기(EXAONE)에
+다시 넣고, 알려진 버그(B01 ~ B07, `evaluation/proposals/checks.py`)가 몇 건 나오는지 센다. API와 같은
+`writer.write()`를 부르고 DB에는 쓰지 않는다. LLM 출력은 매번 달라서 제안서마다 여러 번 돌린다.
+
+```bash
+cd /home/ubuntu/wfg
+# 1. 고치기 전(지금 배포된 코드) — 입력이 같은 제안서는 한 번만, 제안서마다 3번. 터미널을 닫아도 돈다
+#    --rebuild-items: 항목 입력을 저장된 것 대신 지금 코드(rules/items · sections)로 — 고치는 PR이 rules/를
+#    바꿔도 전 · 후가 같은 조건이 되게 둘 다 붙인다
+docker exec -d wfg-api sh -c "python -m evaluation.proposals replay --proposals 1-11 --distinct --rebuild-items --repeat 3 --label before > results/before.log 2>&1"
+tail -f results/before.log            # 진행 상황(Ctrl+C는 보기만 끔). 끝나면 표가 나온다
+
+# 2. 고친 PR을 배포한 뒤 같은 명령에서 --label after(로그도 after.log)
+# 3. 비교
+docker exec wfg-api python -m evaluation.proposals compare results/proposals/before results/proposals/after
+```
+
+- 결과는 EC2 `results/proposals/<label>/`(`report.md` 표 · `summary.json` 건수 · `rows.jsonl` 출력 · `logs.jsonl` 검사 오류).
+  재배포해도 남는다. **근거 원문이 들어 있으니 레포 · 팀 밖으로 올리지 않는다** — 공유는 `report.md`의 건수만
+- 터널 · vLLM이 끊겨 멈추면 같은 명령을 다시 준다(끝난 출력은 건너뛰고 이어서). 다른 설정으로 돌리려면 `--label`을 바꾼다
+- 시간: 출력 하나 = 제안서 한 번 만드는 시간. 8개 × 3번이면 그 24배. 시연 · 사용 중일 때는 돌리지 않는다(같은 GPU)
+- GPU 없이 DB 읽기만 확인: `--writer fake --label dry`. 저장된 항목 입력 그대로(그때 LLM이 받은 것) 돌리려면 `--rebuild-items`를 뺀다
+- DB에서 내보낸 `proposal_items` CSV를 검사만(내 컴퓨터, DB · GPU 필요 없음):
+  `uv run python -m evaluation.proposals check proposal_items.csv`
+
 ## 웹 포트 — Caddy (문지기)
 
 브라우저 · 프론트가 SSH 키 없이 API를 부르게 하는 입구. `deploy/caddy/Caddyfile`

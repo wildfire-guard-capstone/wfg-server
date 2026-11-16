@@ -10,6 +10,8 @@
 #                 The deploy job creates it empty when missing and never overwrites it.
 #   deck/elmfire_deck/  ELMFIRE deck (release deck-20261110), read-only for api and worker.
 #   caddy/Caddyfile     front door on port 80 (deploy/caddy/Caddyfile, copied by each deploy).
+#   results/      proposal harness output (python -m evaluation.proposals), kept across deploys.
+#                 Holds manual excerpts (evidence) — do not share outside the team.
 # ELMFIRE runs only in the worker (structure B): the API builds the weather input and sends it
 # to http://wfg-worker:8100/run. Predictions stay synthetic until api.env sets PREDICTOR=elmfire.
 # See deploy/README.md.
@@ -37,6 +39,7 @@ services:
       - ./data/base:/data/base:ro
       - ./data/risk:/data/risk:ro
       - ./deck/elmfire_deck:/deck:ro
+      - ./results:/app/results # proposal harness output (deploy/README.md 「제안서 하네스」)
     # 8000 stays inside EC2; from outside the API is reached through the web container (port 80).
     ports:
       - "127.0.0.1:8000:8000"

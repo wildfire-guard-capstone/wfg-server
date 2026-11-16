@@ -1,10 +1,15 @@
 # ruff: noqa: E501
 """상황 깃발(situation) → 항목별 작성 지침(guides): 불이 크면 · 작으면 · 밤이면 · 도지사면 켜지는 줄, 덧붙일 주제, 스키마."""
 
-import pytest
+import json
 
-from agent import guides, prompt, situation
+import pytest
+from rules_example import full_inputs
+
+from agent import guides, judgment, prompt, situation
 from agent.generate import Agent, assemble
+from rules.llm_input import build_llm_input
+from rules.sections import s4 as s4_sections
 
 
 def bundles(
@@ -239,3 +244,30 @@ def test_agent_puts_guide_in_prompt_and_queries():
     assert any("통합지휘본부 구성" in q for q in ev.queries)  # 지침 질의로도 검색
     assert items[0]["state"] == "ok"  # 덧붙일 주제는 빠져도 partial이 아니다
     assert logs[0]["extras"] == ["통합지휘본부 운영"]
+
+
+CALM = situation.flags(
+    bundles() | {"weather": {"now": {"ms": 2.0}, "max": {"ms": 3.4}}}, [], COMMON
+)
+REDEPLOY = "강풍이 풀리면"
+
+
+def test_heli_redeploy_only_when_wind_rises():
+    """「강풍이 풀리면 헬기 재투입」 지침 · 예시는 바람이 세질 때만(B03) — 엔진 S4 섹션과 같은 기준."""
+    assert GROWING["wind_rising"] and not CALM["wind_rising"]  # 3.4 → 7.2 · 2.0 → 3.4 m/s
+    assert "[헬기 재투입]" in guides.render("S4", GROWING)
+    assert "[헬기 재투입]" not in guides.render("S4", CALM)
+    assert any(REDEPLOY in e for e in prompt.examples_of("S4", flags=GROWING))
+    assert not any(REDEPLOY in e for e in prompt.examples_of("S4", flags=CALM))
+    assert any(REDEPLOY in e for e in prompt.examples_of("S4"))  # 깃발이 없으면 예전처럼 모두
+    assert situation.WIND_RISE_MS == s4_sections.WIND_RISE_MS
+
+
+def test_prompt_hides_redeploy_example_when_calm():
+    out = build_llm_input(full_inputs(), {"name": "산불", "sigungu": "의성군", "emd": "안평면"})
+    s4 = next(it for it in out["items"] if it["id"] == "S4")
+    flags = situation.flags(out["bundles"], out["items"], out["common"])
+    for rising in (True, False):
+        common = out["common"] | {"situation": flags | {"wind_rising": rising}}
+        msgs = prompt.messages(common, judgment.judgment_of(s4), [])
+        assert (REDEPLOY in json.dumps(msgs, ensure_ascii=False)) is rising

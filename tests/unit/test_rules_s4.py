@@ -50,3 +50,27 @@ def test_night_status_and_missing_direction_errors():
     assert s4["status"] == "night"
     with pytest.raises(ValueError, match="풍향"):
         build_bundles(build_context(inputs(wind_ms=WIND, wind_deg={0: 270.0})))
+
+
+def test_heli_redeploy_section_only_when_wind_rises():
+    """바람이 세지지 않으면 「2. 헬기 재투입」을 만들지 않는다(B03, 11/16) — ※는 1에."""
+    _, _, rising = _run()  # 3.4 → 최대 8 m/s
+    assert [s["title"] for s in rising["sections"]] == ["1. 시간대 · 바람", "2. 헬기 재투입"]
+    calm = s4_sections(
+        s4_input(
+            build_bundles(build_context(inputs(wind_ms=dict.fromkeys(range(9), 2.0), wind_deg=DEG)))
+        )
+    )
+    assert [s["title"] for s in calm["sections"]] == ["1. 시간대 · 바람"]
+    assert [b.get("topic") or b["type"] for b in calm["sections"][0]["blocks"]] == [
+        "시간대",
+        "바람",
+        "note",
+    ]
+
+    def titles(now, top):
+        s4 = {"facts": {"now": {"wind_ms": now}, "max": {"ms": top}}, "withheld": []}
+        return [s["title"] for s in s4_sections(s4)["sections"]]
+
+    assert titles(2.0, 3.5) == ["1. 시간대 · 바람", "2. 헬기 재투입"]  # +1.5 m/s부터 세짐
+    assert titles(2.0, 3.4) == ["1. 시간대 · 바람"]

@@ -88,6 +88,8 @@ def _block(b: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in b.items() if k not in HIDDEN}
     if b.get("type") == "paragraph":
         out["category"] = category_code(b.get("category"))  # 「즉시」 → IMMEDIATE
+        if b.get("details"):  # 그 제안의 자세한 자료(목록 · 표, 11/18) — 같은 꼴로
+            out["details"] = [_block(d) for d in b["details"]]
     return out
 
 

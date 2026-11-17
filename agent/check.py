@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any
 
-from agent.prompt import CATEGORIES
+from agent.prompt import CATEGORIES, FACT_STEPS, STEP_NAMES
 
 TIME = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)")
 NUM = re.compile(r"(?<![A-Za-z\d.])\d+(?:,\d{3})*(?:\.\d+)?")
@@ -45,7 +45,7 @@ PLACEHOLDER = re.compile(
     r"HH:MM|○○|(?<![A-Za-z가-힣])N(?=\s?(?:~|m/s|ha|시|분|명|동|km|대|곳|%|개|가구))|N~N"
 )
 META = re.compile(
-    r"판정 자료|근거 발췌|규칙 엔진|evidence|withheld|do_not_state|finding|facts|JSON|입력에|○○"
+    r"판정 자료|근거 발췌|규칙 엔진|판단 계산 값|판정 값 문장|evidence|withheld|do_not_state|finding|facts|JSON|입력에|○○"
 )
 FORBID = {
     "S3": [
@@ -64,16 +64,112 @@ FORBID = {
         (re.compile(r"\d[\d,]*\s*명을?\s*(?:배정|수용하)"), "대피소별 배정 인원은 쓰지 마십시오"),
         (re.compile(r"대피\s*경로|이동\s*경로|경로를 따라"), "대피 경로는 쓰지 마십시오"),
     ],
+    # 「○○리 주민은 ○○학교로」 같은 마을–대피 장소 짝(11/17 사용자 결정)은 문안이 아니다 — strip_pairs가 먼저 지운다
     "E5": [(re.compile(r"[「“\"][^」”\"]{12,}[」”\"]|문안"), "재난문자 문안은 쓰지 마십시오")],
 }
+_PAIR = r"[가-힣]+리(?:\s?·\s?[가-힣]+리)*\s?주민은\s?[^,」”\"]+?(?:으로|로)"
+PAIR_QUOTE = re.compile(rf"[「“\"]\s?{_PAIR}(?:\s?,\s?{_PAIR})*\s?[」”\"]")
+
+
+def strip_pairs(text: str) -> str:
+    """금칙 검사 전에 마을–대피 장소 짝 인용(「양곡리 주민은 의성국민체육센터로, …」)을 지운다."""
+    return PAIR_QUOTE.sub("", text)
+
+
+# 판정에 없는 산불 이름(회차 1 시험: 「고장산 산불」 「고산불」). 「산불」 바로 앞 낱말이 판정에 없으면 걸린다
+FIRE_NAME = re.compile(r"(?<![가-힣])([가-힣]{1,6})(\s?)산불")
+FIRE_WORD_OK = {
+    "대형",
+    "이번",
+    "해당",
+    "현재",
+    "지금",
+    "이",
+    "그",
+    "같은",
+    "이웃",
+    "인접",
+    "주변",
+    "중소형",
+}
+
+
+PLACE_END = ("산", "면", "리", "군", "시", "구", "읍", "동", "봉", "령", "재")
+
+
+def fire_name_errors(text: str, blob: str) -> list[str]:
+    """띄어 쓴 앞말은 지명 꼴(「고장산 산불」)일 때만, 붙여 쓴 앞말(「고산불」)은 판정에 그 말이 없을 때 걸린다
+    (「바람이 세져 산불 확산」 같은 서술은 걸지 않는다)."""
+    out = []
+    for m in FIRE_NAME.finditer(text):
+        word, spaced = m.group(1), bool(m.group(2))
+        if word in FIRE_WORD_OK:
+            continue
+        if spaced and (not word.endswith(PLACE_END) or word in blob):
+            continue
+        if not spaced and f"{word}산불" in blob:
+            continue
+        out.append(
+            f"판정에 없는 산불 이름 「{m.group(0)}」 — 「산불」 또는 입력의 산불 이름만 쓰십시오"
+        )
+    return out
+
+
+# 영어 문장(회차 1 2차: 「Information on evacuation shelters …」)과 규칙 엔진 내부 코드(「p5 구역」)
+ASCII_WORDS = re.compile(r"[A-Za-z]{3,}")
+ZONE_CODE = re.compile(r"(?<![A-Za-z])(?:p[0-9]|burning)(?![A-Za-z0-9])")
+
+
+def language_errors(text: str) -> list[str]:
+    errs = []
+    if len(ASCII_WORDS.findall(text)) >= 4:
+        errs.append("한국어로 쓰십시오(영어 문장)")
+    if ZONE_CODE.search(text):
+        errs.append(
+            "「p5 · p8 · burning」 같은 내부 코드 대신 「5시간 범위 · 이미 불이 닿은」처럼 쓰십시오"
+        )
+    return errs
+
+
+def now_area_errors(text: str, now_at: str, now_ha: Any) -> list[str]:
+    """지금 면적을 다른 시각과 묶은 것(회차 1: 「14:50 무렵 48.5 ha로 확산」 — 48.5 ha는 12:50 면적)."""
+    if not now_at or now_ha in (None, ""):
+        return []
+    ha = re.escape(str(now_ha).removesuffix(".0"))
+    out = []
+    for m in re.finditer(rf"(\d{{1,2}}:\d{{2}})([^.]{{0,14}}?)(?<![\d.]){ha}\s?ha", text):
+        # 「11:24에 시작되어 현재 48.5 ha」처럼 사이에 「현재 · 지금」이 있으면 짝이 아니다
+        if m.group(1).lstrip("0") != now_at.lstrip("0") and not re.search(r"현재|지금", m.group(2)):
+            out.append(
+                f"지금({now_at}) 면적 {now_ha} ha를 {m.group(1)}와 묶었습니다. 시각과 값은 판정의 짝대로 쓰십시오"
+            )
+    return out
+
+
 UPPER = re.compile(r"도지사|특별시장|광역시장|특별자치|산림청장")
 VAGUE = re.compile(r"(?:보호|대응|필요한|적절한|관련)\s?조치를\s?취하|철저히\s?하|만전을\s?기하")
 MAX_LEN = 450
 MAX_SENTENCES = 4
+# S6 대책회의 제안은 「대책회의를 열어 …」 + 기관별 요청이라 길다(회차 1 3차: 5문장으로 빠짐)
+MAX_SENTENCES_OF = {"S6": 6}
+MAX_LEN_OF = {"S6": 700}
+# 「정보가 없습니다」 군말(회차 1: S1 · E6 상태에 그 항목과 상관없는 「대피소 · 병원 정보 없음」을 늘어놓음)
+NOINFO = re.compile(
+    r"정보가 없|정보는 없|확인되지 않|명시되지 않|제공되지 않|자료가 없|알 수 없|파악할 수 없"
+)
 
 
-def parse(text: str) -> list[dict[str, Any]]:
-    """LLM 답 → proposals. 추론 모드의 <think> … </think>와 코드 울타리를 걷어 낸다."""
+def is_noinfo_filler(s: str, withheld: list[str]) -> bool:
+    """숫자가 없는 「정보 없음」 문장 가운데 withheld(판단하지 않은 것)의 낱말이 하나도 없는 것 — 뺀다(다시 쓰게 하지 않음)."""
+    if not NOINFO.search(s) or re.search(r"\d", s):
+        return False
+    words = {w for f in withheld for w in re.split(r"[\s·,()]+", f.split("(")[0]) if len(w) >= 2}
+    return not any(w in s for w in words)
+
+
+def parse_out(text: str) -> dict[str, Any]:
+    """LLM 답 → {situation, status, judgment, proposals}(11/17 네 단계). 추론 모드의 <think> … </think>와
+    코드 울타리를 걷어 낸다. 상황 · 상태 · 판단이 없는 답(예전 꼴)은 빈 글로 채운다."""
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
     text = text.strip()
@@ -90,7 +186,13 @@ def parse(text: str) -> list[dict[str, Any]]:
     props = out.get("proposals")
     if not isinstance(props, list):
         raise ValueError("proposals가 목록이 아닙니다")
-    return [p for p in props if isinstance(p, dict)]
+    facts = {k: out.get(k) if isinstance(out.get(k), str) else "" for k in FACT_STEPS}
+    return facts | {"proposals": [p for p in props if isinstance(p, dict)]}
+
+
+def parse(text: str) -> list[dict[str, Any]]:
+    """LLM 답 → proposals만."""
+    return parse_out(text)["proposals"]
 
 
 VILLAGE = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=[\s·,~)\]와과의에를은는도]|$)")
@@ -103,6 +205,7 @@ NOT_VILLAGE = {"일자리", "마무리", "잠자리", "실마리", "갈무리", 
 def tidy(text: str) -> str:
     """표기만 고른다: LLM이 붙인 근거 괄호는 지우고(표기는 cite.py가 붙임) 끝 마침표를 채운다."""
     text = BRACKET.sub("", (text or "").strip())
+    text = re.sub(r"(?<!\d)(\d{1,2})시\s?(\d{2})분", r"\1:\2", text)  # 「15시 50분」 → 「15:50」
     text = re.sub(r"\s+([.,])", r"\1", text)
     text = re.sub(r"\.{2,}", ".", text)
     text = re.sub(
@@ -191,45 +294,20 @@ def quote_ok(quote: str, texts: list[str]) -> bool:
     return False
 
 
-def check_one(
-    item_id: str,
-    p: dict[str, Any],
-    evidence_ids: set[str],
+def _stage_key(s: str) -> str:
+    """단계는 번호(초기대응 · 1 · 2 · 3)로 비교한다: 판정 「2단계」와 제안 「확산대응 2단계」는 같은 단계."""
+    return "초기대응" if "초기대응" in s else re.sub(r"\D", "", s)
+
+
+def value_errors(
+    text: str,
     allowed: tuple[set[str], set[str], str],
     judged_text: str,
     known_names: set[str],
-    reader: str,
-    texts: dict[str, str] | None = None,
-    strict_quote: bool = False,
 ) -> list[str]:
-    """제안 하나의 문제 목록(빈 목록 = 통과). judged_text = 판정 · 상황 글(이름 · 단계 출처),
-    texts = 근거 청크 ID → 원문(있으면 quote가 단 근거에서 왔는지 본다). 「_data」 = 규칙 엔진 판정 자료(목록 · 표):
-    S6 · E6 요청 표처럼 규칙 엔진이 근거를 붙여 판정한 행에서 옮긴 quote도 인정한다."""
+    """값 검사(제안 · 상황 · 상태 · 판단 공통): 숫자 · 시각 · 한글 수사 · 단계 · 이름이 판정 · 계산 값 · 근거에 있는지,
+    예시의 가린 값 · 입력 설명을 옮기지 않았는지."""
     errs: list[str] = []
-    text = p.get("text") or ""
-    if p.get("category") not in CATEGORIES:
-        errs.append(f"category는 {CATEGORIES} 중 하나여야 합니다")
-    if not text.strip():
-        return errs + ["제안이 비었습니다"]
-    ev = [e for e in p.get("evidence") or [] if e in evidence_ids]
-    if not ev:
-        errs.append(
-            "근거 발췌 ID(evidence)가 없습니다. 근거 발췌에 적힌 조치만 쓰고 그 ID를 다십시오"
-        )
-    elif (
-        texts is not None
-        and strict_quote
-        and not quote_ok(
-            p.get("quote", ""), [texts.get(e, "") for e in ev] + [texts.get("_data", "")]
-        )
-    ):
-        # 11/8 저녁: quote는 기본으로 기록만 한다(근거 뒷받침은 verify.py가 잰다). 제안을 빼는 조건으로 쓰면
-        # 숫자 · 이름을 많이 쓴 풍부한 문단일수록 걸려 짧은 문장만 남았다(tune4 ~ 7)
-        errs.append(
-            "quote가 단 근거 원문에 없습니다. evidence로 단 발췌에서 조치를 적은 문장을 글자 그대로 옮기십시오"
-        )
-    if len(text) > MAX_LEN:
-        errs.append(f"너무 깁니다({len(text)}자, {MAX_LEN}자 이하)")
     times_ok, nums_ok, blob = allowed
     times, nums = _nums(text)
     if bad := sorted(times - times_ok):
@@ -239,11 +317,6 @@ def check_one(
     for word, cnt in KOR_COUNT.findall(text):
         if str(KOR_NUM[word]) not in nums_ok:
             errs.append(f"판정 · 근거에 없는 수 「{word} {cnt}」")
-
-    # 단계는 번호(초기대응 · 1 · 2 · 3)로 비교한다: 판정 「2단계」와 제안 「확산대응 2단계」는 같은 단계
-    def _stage_key(s: str) -> str:
-        return "초기대응" if "초기대응" in s else re.sub(r"\D", "", s)
-
     judged_stages = {_stage_key(s) for s in STAGE.findall(judged_text)}
     for s in STAGE.findall(text):
         if _stage_key(s) not in judged_stages:
@@ -266,16 +339,59 @@ def check_one(
         )
     if META.search(text):
         errs.append("입력 설명(판정 자료 · 근거 발췌 · evidence)을 문장에 옮기지 마십시오")
+    return errs
+
+
+def check_one(
+    item_id: str,
+    p: dict[str, Any],
+    evidence_ids: set[str],
+    allowed: tuple[set[str], set[str], str],
+    judged_text: str,
+    known_names: set[str],
+    reader: str,
+    texts: dict[str, str] | None = None,
+    strict_quote: bool = False,
+) -> list[str]:
+    """제안 하나의 문제 목록(빈 목록 = 통과). judged_text = 판정 · 상황 글(이름 · 단계 출처),
+    texts = 근거 청크 ID → 원문(있으면 quote가 단 근거에서 왔는지 본다). 11/17: quote는 근거 원문과만 대조한다
+    (판정 자료와도 대조하면 매뉴얼에 없는 병원 이름 목록이 인용문으로 통과했다 — E6, 회차 1)."""
+    errs: list[str] = []
+    text = p.get("text") or ""
+    if p.get("category") not in CATEGORIES:
+        errs.append(f"category는 {CATEGORIES} 중 하나여야 합니다")
+    if not text.strip():
+        return errs + ["제안이 비었습니다"]
+    ev = [e for e in p.get("evidence") or [] if e in evidence_ids]
+    if not ev:
+        errs.append(
+            "근거 발췌 ID(evidence)가 없습니다. 근거 발췌에 적힌 조치만 쓰고 그 ID를 다십시오"
+        )
+    elif (
+        texts is not None
+        and strict_quote
+        and not quote_ok(p.get("quote", ""), [texts.get(e, "") for e in ev])
+    ):
+        # 11/8 저녁: quote는 기본으로 기록만 한다(근거 뒷받침은 verify.py가 잰다). 제안을 빼는 조건으로 쓰면
+        # 숫자 · 이름을 많이 쓴 풍부한 문단일수록 걸려 짧은 문장만 남았다(tune4 ~ 7)
+        errs.append(
+            "quote가 단 근거 원문에 없습니다. evidence로 단 발췌에서 조치를 적은 문장을 글자 그대로 옮기십시오"
+        )
+    max_len = MAX_LEN_OF.get(item_id, MAX_LEN)
+    if len(text) > max_len:
+        errs.append(f"너무 깁니다({len(text)}자, {max_len}자 이하)")
+    errs += value_errors(text, allowed, judged_text, known_names)
     if neg := NEG.search(text):
         errs.append(f"「{neg.group(0)}」처럼 할 일을 부정하지 말고 할 일을 쓰십시오")
     if reader and re.search(rf"{re.escape(reader)}(?:에게|께)", text):
         errs.append(f"읽는 사람({reader}) 자신에게 지시하지 말고 직접 「…하십시오」로 쓰십시오")
     if "십시오" not in text:
         errs.append(
-            "할 일 문장이 없습니다. 상황 문장 뒤에 읽는 사람이 할 일을 「…하십시오」로 이어 쓰십시오(「○○은 …하라」 · 「…해야 합니다」 · 「…에 해당합니다」로 끝내지 말고 「…하십시오」 또는 「○○에게 …하도록 지시하십시오」)"
+            "할 일 문장이 없습니다. 제안에는 읽는 사람이 할 일을 「…하십시오」로 쓰십시오(「○○은 …하라」 · 「…해야 합니다」 · 「…에 해당합니다」로 끝내지 말고 「…하십시오」 또는 「○○에게 …하도록 지시하십시오」). 상황 · 상태 · 판단은 situation · status · judgment에 씁니다"
         )
-    if (n := len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", text))) > MAX_SENTENCES:
-        errs.append(f"{MAX_SENTENCES}문장 이하로 쓰십시오({n}문장)")
+    most = MAX_SENTENCES_OF.get(item_id, MAX_SENTENCES)
+    if (n := len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", text))) > most:
+        errs.append(f"{most}문장 이하로 쓰십시오({n}문장)")
     if m := VAGUE.search(text):
         errs.append(
             f"「{m.group(0)}」처럼 방법이 빠진 말 대신 근거 발췌의 구체적인 방법을 쓰십시오"
@@ -296,7 +412,7 @@ def check_one(
         near = text[max(0, m.start() - 12) : m.end() + 3].strip()
         errs.append(f"「{near}」의 「등」을 지우십시오(대상을 모두 쓰거나 빼십시오)")
     for pat, msg in FORBID.get(item_id, []):
-        if pat.search(text):
+        if pat.search(strip_pairs(text)):
             errs.append(msg)
     return errs
 
@@ -312,6 +428,26 @@ def overlap(a: str, b: str) -> float:
 
 def split_sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.?!])\s+", (text or "").strip()) if s]
+
+
+def drop_repeated(props: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[int]]:
+    """같은 항목 안에서 앞 제안과 거의 같은 문장(네 글자 조각 80% 이상 겹침)을 뒤 제안에서 지운다(회차 1 시험:
+    S1 · S3에서 같은 할 일 문장이 두 제안에 되풀이됨). → (지운 문장 기록, 모든 문장이 겹친 제안 번호).
+    모든 문장이 겹치면 글은 그대로 두고 번호만 돌려준다(check가 「앞 제안과 같은 내용」으로 다시 쓰게 함)."""
+    seen: list[str] = []
+    removed: list[dict[str, Any]] = []
+    whole: set[int] = set()
+    for i, p in enumerate(props):
+        sents = split_sentences(p.get("text") or "")
+        keep = [s for s in sents if not any(overlap(s, t) >= 0.8 for t in seen)]
+        if len(keep) < len(sents):
+            if any("십시오" in s for s in keep):
+                removed += [{"i": i, "text": s} for s in sents if s not in keep]
+                p["text"] = " ".join(keep)
+            else:
+                whole.add(i)
+        seen += sents
+    return removed, whole
 
 
 def drop_restated(text: str, situation: str) -> str:
@@ -358,6 +494,110 @@ def hard(errs: list[str]) -> list[str]:
     return [e for e in errs if not e.startswith(SOFT)]
 
 
+# ── 상황 · 상태 · 판단(11/17 네 단계) ─────────────────────────────────────
+FACT_MAX = {"situation": 700, "status": 800, "judgment": 450}
+FACT_FORBID_IDS = ("S3", "S4")  # 사실부에도 거는 금칙: 추가 투입 대수 · 헬기 운항 단정
+# 문단 앞 이름 · 기호(회차 1 시험: 「: 현재 …」 「(판단) 산불이 …」 「situation: …」)
+_STEP_LABEL = re.compile(
+    r"^(?:[\s:：\-–·]+|\(?(?:상황|상태|판단|situation|status|judgment)\)?\s*[:：]?\s*)+"
+)
+_KOR_TIME = re.compile(r"(?<!\d)(\d{1,2})시\s?(\d{2})분")  # 「14시 50분」 → 「14:50」
+
+
+def tidy_fact(text: str) -> str:
+    """상황 · 상태 · 판단 문단의 표기만 고른다(근거 괄호 · 문단 이름 지움, 끝 마침표)."""
+    text = BRACKET.sub("", (text or "").strip())
+    text = _STEP_LABEL.sub("", re.sub(r"\s+", " ", text))
+    text = _KOR_TIME.sub(r"\1:\2", text)
+    text = re.sub(r"\s+([.,])", r"\1", text)
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"(\d{1,2}:\d{2})시(?![가-힣])", r"\1", text)
+    text = re.sub(r"(\d{1,2}:\d{2})시([에부까])", r"\1\2", text)
+    if text and text[-1] not in ".?!":
+        text += "."
+    return text
+
+
+def fact_sentence_errors(
+    item_id: str,
+    s: str,
+    allowed: tuple[set[str], set[str], str],
+    judged_text: str,
+    known_names: set[str],
+    now: tuple[str, Any] | None = None,
+) -> list[str]:
+    """상황 · 상태 · 판단의 문장 하나: 값 오류 · 할 일(「~하십시오」) · 영어 · 내부 코드 · 지어낸 산불 이름 ·
+    지금 면적과 다른 시각의 짝이 있으면 그 문장을 뺀다. now = (기준 시각 HH:MM, 지금 면적 ha)."""
+    errs = value_errors(s, allowed, judged_text, known_names)
+    # 산불 이름은 사실부에만: 제안에는 「중앙산불방지대책본부」 같은 기관 이름이 섞인다
+    errs += fire_name_errors(s, allowed[2])
+    errs += language_errors(s)
+    if now:
+        errs += now_area_errors(s, *now)
+    if "십시오" in s:
+        errs.append("할 일(「~하십시오」)은 상황 · 상태 · 판단이 아니라 제안(proposals)에 쓰십시오")
+    if item_id in FACT_FORBID_IDS:
+        errs += [msg for pat, msg in FORBID.get(item_id, []) if pat.search(s)]
+    return errs
+
+
+def check_facts(
+    item_id: str,
+    facts: dict[str, Any],
+    allowed: tuple[set[str], set[str], str],
+    judged_text: str,
+    known_names: set[str],
+    now: tuple[str, Any] | None = None,
+    withheld: list[str] | None = None,
+) -> tuple[dict[str, str], list[str], list[dict[str, Any]]]:
+    """상황 · 상태 · 판단 검사 → (고친 글, 문제 목록, 뺀 문장). now = (기준 시각, 지금 면적),
+    withheld = 판정의 「판단하지 않은 것」(주면 그와 상관없는 「정보 없음」 군말을 뺀다 — 문제 목록에는 안 넣음).
+
+    값 오류(판정 · 계산 값에 없는 숫자 · 시각 · 이름)나 할 일이 든 문장은 빼고 나머지는 그대로 둔다 — 문단 전체를
+    버리면 맞는 사실까지 사라지기 때문이다. 문제 목록은 다시 쓰기 메시지에 쓴다. SOFT(길이 · 「최소」 · 「등」)는
+    다시 쓰게만 하고 문장을 빼지 않는다. 상황은 꼭 있어야 하고, 상태 · 판단은 쓸 거리가 없으면 비어도 된다."""
+    clean: dict[str, str] = {}
+    errs: list[str] = []
+    removed: list[dict[str, Any]] = []
+    mins = set(re.findall(r"최소 (\d[\d,]*)동", judged_text))
+    for step in FACT_STEPS:
+        name = STEP_NAMES[step]
+        keep = []
+        for s in split_sentences(tidy_fact(facts.get(step) or "")):
+            if withheld is not None and is_noinfo_filler(s, withheld):
+                removed.append(
+                    {
+                        "step": step,
+                        "text": s,
+                        "errors": ["정보 없음 군말(자동으로 뺌)"],
+                        "filler": True,
+                    }
+                )
+                continue
+            e = fact_sentence_errors(item_id, s, allowed, judged_text, known_names, now)
+            if e:
+                errs.append(f"{name} 문장 「{s[:60]}」: {'; '.join(e)}")
+                removed.append({"step": step, "text": s, "errors": e})
+                continue
+            keep.append(s)
+            for m in re.finditer(r"(\d[\d,]*)동", s):
+                if m.group(1) in mins and s[max(0, m.start() - 3) : m.start()] != "최소 ":
+                    errs.append(
+                        SOFT + f"{name}: 주택 · 시설 동수는 「최소 {m.group(1)}동」으로 쓰십시오"
+                    )
+                    break
+            if ETC.search(s):
+                errs.append(SOFT + f"{name}: 「등」을 지우고 대상을 모두 쓰거나 빼십시오")
+        clean[step] = " ".join(keep)
+        if len(clean[step]) > FACT_MAX[step]:
+            errs.append(
+                SOFT + f"{name} 문단이 너무 깁니다({len(clean[step])}자, {FACT_MAX[step]}자 이하)"
+            )
+    if not (facts.get("situation") or "").strip():
+        errs.append("상황 문단이 비었습니다. situation에 무엇이 언제 닥치는지 쓰십시오")
+    return clean, errs, removed
+
+
 def check(
     item_id: str,
     proposals: list[dict[str, Any]],
@@ -370,9 +610,11 @@ def check(
     topics: list[str] | None = None,
     strict_quote: bool = False,
     situations: dict[str, str] | None = None,
+    repeated: set[int] | None = None,
 ) -> dict[int, list[str]]:
     """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다.
-    situations = {주제: 코드가 쓴 상황 문장}: 그 주제의 text(할 일 문장)는 상황 문장에 없는 숫자를 쓸 수 없다."""
+    situations = {주제: 코드가 쓴 상황 문장}: 그 주제의 text(할 일 문장)는 상황 문장에 없는 숫자를 쓸 수 없다.
+    repeated = drop_repeated가 찾은, 모든 문장이 앞 제안과 겹친 제안 번호."""
     out: dict[int, list[str]] = {}
     seen: list[str] = []
     shapes: list[str] = []
@@ -393,8 +635,8 @@ def check(
         for n in names:
             shape = shape.replace(n, "")
         shape = re.sub(r"[^가-힣]", "", re.sub(r"\d+", "", shape))
-        if key and key in seen:
-            errs.append("앞 제안과 같은 내용입니다")
+        if (key and key in seen) or i in (repeated or set()):
+            errs.append("앞 제안과 같은 내용입니다. 주제마다 다른 할 일을 쓰십시오")
         elif len(shape) >= 8 and shape in shapes:
             errs.append("같은 조치를 대상만 바꿔 나눴습니다. 대상을 한 제안에 모아 쓰십시오")
         seen.append(key)

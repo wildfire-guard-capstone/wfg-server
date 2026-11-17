@@ -60,6 +60,20 @@ def test_only_llm_wording_is_not_a_change():
     assert changed_count([a], [b]) == 0
 
 
+def test_fact_blocks_count_as_wording():
+    """11/17 네 단계: 상황 · 상태 · 판단(fact 블록)은 LLM이 쓴 글이라 바뀌어도 「표현만」이다."""
+
+    def with_fact(text: str) -> Item:
+        a = item()
+        fact = {"type": "fact", "step": "situation", "text": text}
+        sec = a.sections[0] | {"blocks": [fact, *a.sections[0]["blocks"]]}
+        return replace(a, sections=[sec])
+
+    a, b = with_fact("헬기 23대가 투입되어 있습니다."), with_fact("지금 헬기 23대가 떠 있습니다.")
+    assert change_of(a, b) == "WORDING_ONLY"
+    assert change_of(a, with_fact("헬기 23대가 투입되어 있습니다.")) == "SAME"
+
+
 def test_engine_side_changes():
     a = item()
     assert change_of(a, item(finding="투입: 헬기 29")) == "CHANGED"
@@ -122,3 +136,41 @@ def test_table_rows_in_head_order():
         ],
     }
     assert rows_of([{"blocks": [table]}]) == ["군 · 제50사단 · 헬기 · 진화 · p.79"]
+
+
+def test_detail_rows_count_as_engine_side():
+    """11/18: 제안 문단에 붙은 자세한 자료(details)의 목록 줄이 바뀌면 「변경」이다."""
+
+    def with_detail(row: str) -> Item:
+        a = item(rows=())
+        p = a.sections[0]["blocks"][0] | {"details": [{"type": "list", "rows": [{"text": row}]}]}
+        return replace(a, sections=[{"title": "", "blocks": [p]}])
+
+    assert rows_of(with_detail("**괴산리**(147명)").sections) == ["괴산리(147명)"]
+    assert change_of(with_detail("괴산리(147명)"), with_detail("괴산리(150명)")) == "CHANGED"
+
+
+def test_api_view_formats_detail_tables_like_top_level():
+    """11/18: PROP-02 응답에서 details의 표도 열 순서 배열로, 문단 구분은 영문 코드로."""
+    from app.services.proposal_view import sections_out
+
+    para = {
+        "type": "paragraph",
+        "category": "즉시",
+        "body": "회의를 여십시오.",
+        "action": "S6-a1",
+        "quote_ok": True,
+        "details": [
+            {
+                "type": "table",
+                "head": ["관련 기관"],
+                "rows": [{"group": "소방", "agency": "의성소방서"}],
+            },
+            {"type": "list", "style": "bullet", "rows": [{"text": "괴산리", "id": "v1"}]},
+        ],
+    }
+    (sec,) = sections_out([{"title": "", "blocks": [para]}])
+    out = sec["blocks"][0]
+    assert out["category"] == "IMMEDIATE" and "action" not in out and "quote_ok" not in out
+    assert out["details"][0]["rows"] == [["소방", "의성소방서", None, None, None]]
+    assert out["details"][1] == {"type": "list", "style": "bullet", "rows": [{"text": "괴산리"}]}

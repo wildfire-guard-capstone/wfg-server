@@ -1,6 +1,7 @@
 """가짜 작성기: LLM 없이 제안서를 채운다(흐름 · 저장 · 화면 시험용).
 
-문장 · 구분 · 근거만 가짜이고, 소제목 · 표 · 목록 · ※는 규칙 엔진 값 그대로다.
+문장 · 구분 · 근거와 상황 · 상태 · 판단 문단만 가짜이고,
+소제목 · 표 · 목록 · ※는 규칙 엔진 값 그대로다.
 다룰 주제마다 테스트 제안을 하나씩 만들어 팀원 조립 함수(agent.generate.assemble)에 넣으므로
 결과 모양이 진짜 에이전트와 같다.
 구분은 즉시 · 대기 · 협의 · 요청을 돌아가며 단다(화면에서 넷 다 보이게).
@@ -53,5 +54,10 @@ def _item(item: dict[str, Any], categories: Iterator[str]) -> WrittenItem:
         }
         for topic in topics
     ]
-    out = assemble(item, proposals, {TEST_CHUNK["chunk_id"]: TEST_CHUNK}, "ok")
+    facts = {  # 11/17 네 단계: 진짜 작성기처럼 상황 · 상태 · 판단 문단(fact 블록)도 채운다
+        "situation": f"[테스트] {item.get('finding') or item.get('name', '')}",
+        "status": "[테스트] 상태 문단입니다.",
+        "judgment": "[테스트] 판단 문단입니다.",
+    }
+    out = assemble(item, proposals, {TEST_CHUNK["chunk_id"]: TEST_CHUNK}, "ok", facts)
     return out | {"input_key": None}

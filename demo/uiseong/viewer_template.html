@@ -62,9 +62,11 @@ th{background:#f9fafb}
 .evc{border-left:3px solid #cbd5e1;padding:2px 8px;margin:6px 0}
 .evc pre{white-space:pre-wrap;font:12px/1.5 inherit;margin:4px 0 0;max-height:220px;overflow:auto}
 .b-partial{color:#92400e;border-color:#fde68a;background:#fffbeb}
-.para.has-ev{border-left:3px solid transparent;padding:2px 0 2px 8px;margin-left:-11px;border-radius:2px;cursor:help}
-.para.has-ev.k-즉시{border-left-color:var(--now)}.para.has-ev.k-대기{border-left-color:var(--wait)}.para.has-ev.k-협의{border-left-color:var(--talk)}.para.has-ev.k-요청{border-left-color:var(--ask)}
-.para.has-ev:hover,.para.has-ev.pin{background:#f1f5f9}
+.para.fact{margin:6px 0}
+.para.props{margin:6px 0}
+.sent.has-ev{border-bottom:2px solid transparent;cursor:help;border-radius:2px}
+.sent.has-ev.k-즉시{border-bottom-color:var(--now)}.sent.has-ev.k-대기{border-bottom-color:var(--wait)}.sent.has-ev.k-협의{border-bottom-color:var(--talk)}.sent.has-ev.k-요청{border-bottom-color:var(--ask)}
+.sent.has-ev:hover,.sent.has-ev.pin{background:#f1f5f9}
 .evdot{display:inline-block;font-size:10px;color:#94a3b8;margin-left:4px;vertical-align:1px}
 #tip{position:fixed;z-index:1000;display:none;max-width:min(560px,92vw);max-height:56vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.18);padding:10px 12px;font-size:12.5px;line-height:1.55}
 #tip .th{display:flex;gap:6px;align-items:baseline;margin-bottom:6px}
@@ -108,6 +110,7 @@ const D = /*__DATA__*/null;
 const PCOL = ["#7f1d1d","#c2410c","#ea580c","#f97316","#fb923c","#fdba74","#fcd34d","#fde68a","#fef3c7"];
 const ZCOL = {burning:"#b91c1c", p5:"#ea580c", p8:"#ca8a04"};
 const ZNAME = {burning:"이미 닿음", p5:"위험구역(5시간)", p8:"잠재 위험구역(8시간)"};
+const STEP = {situation:"상황", status:"상태", judgment:"판단"};
 const STATE = {ok:"생성", partial:"일부 생성(검사 실패 제안 뺌)", reused:"직전 재사용", failed:"제안 없음", not_run:"LLM 미실행"};
 let cur = 0, tab = "proposal", collapsedAll = false;
 const map = L.map("map", {preferCanvas:true});
@@ -163,12 +166,26 @@ function excerpt(text, quote) {
   }
   return esc(text.slice(0, 420)) + (text.length > 420 ? " …" : "");
 }
+function sent(b, it) {
+  // 제안 하나 = 네 번째 문단 안의 한 덩어리(마우스를 올리면 그 제안의 근거)
+  const ev = (b.evidence || []).map(id => (it.evidence || []).find(e => e.chunk_id === id)).filter(Boolean);
+  const i = TIPS.push({b, ev}) - 1;
+  return `<span class="sent has-ev k-${esc(b.category)}" data-tip="${i}">${md(bodyOf(b))}<span class="evdot" aria-hidden="true">근거</span></span>`;
+}
+function blocks(list, it) {
+  // 11/17 네 단계: fact(상황 · 상태 · 판단)는 문단 하나씩, 이어진 paragraph(제안)는 한 문단으로 묶는다
+  let h = "", run = [];
+  // 11/18: 제안 문단에 붙은 자세한 자료(details, 목록 · 표)는 제안 문단 아래 「자세히 보기」로
+  const details = (bs) => bs.filter(b => (b.details || []).length).map(b =>
+    `<details class="detail"><summary class="small">자세히 보기 — ${esc(b.topic || "")}</summary>${b.details.map(d => block(d, it)).join("")}</details>`).join("");
+  const flush = () => { if (run.length) { h += `<p class="para props">${run.map(b => sent(b, it)).join(" ")}</p>` + details(run); run = []; } };
+  for (const b of list) { if (b.type === "paragraph") { run.push(b); continue; } flush(); h += block(b, it); }
+  flush();
+  return h;
+}
 function block(b, it) {
-  if (b.type === "paragraph") {
-    const ev = (b.evidence || []).map(id => (it.evidence || []).find(e => e.chunk_id === id)).filter(Boolean);
-    const i = TIPS.push({b, ev}) - 1;
-    return `<p class="para has-ev k-${esc(b.category)}" data-tip="${i}">${md(bodyOf(b))}<span class="evdot" aria-hidden="true">근거</span></p>`;
-  }
+  if (b.type === "fact") return `<p class="para fact s-${esc(b.step)}" title="${esc(STEP[b.step] || b.step)}">${md(b.text)}</p>`;
+  if (b.type === "paragraph") return `<p class="para props">${sent(b, it)}</p>`;
   if (b.type === "failed") return `<p class="para failed">${esc(b.text)}</p>`;
   if (b.type === "list") { const tag = b.style === "numbered" ? "ol" : "ul"; return `<${tag} class="rows">${b.rows.map(r => `<li>${md(r.text)}</li>`).join("")}</${tag}>`; }
   if (b.type === "table") { const keys = ["group","agency","ask","item","basis"];
@@ -187,13 +204,13 @@ function proposal(r) {
     <div class="kv"><span>지휘권자</span><b>${esc(c.now.title)} → ${esc(c.next.title)}</b></div>
     <div class="kv"><span>면적 P0 / P5 / P8</span><b>${a[0]} / ${a[5]} / ${a[8]} ha</b></div>
     <div class="kv"><span>위험도 R(P5)</span><b>${r.risk && r.risk.score != null ? r.risk.score.toFixed(2) + " / 5" : "—"}</b></div></div>
-    <p class="small">기준 화선: ${esc(r.round.report)} ${esc(r.round.at)} (${esc(r.round.note)}) · <a href="#" id="tog">${collapsedAll?"모두 펼치기":"모두 접기"}</a> · 제안 문단에 마우스를 올리면(누르면 고정) 근거가 보입니다</p>`;
+    <p class="small">기준 화선: ${esc(r.round.report)} ${esc(r.round.at)} (${esc(r.round.note)}) · <a href="#" id="tog">${collapsedAll?"모두 펼치기":"모두 접기"}</a> · 상황 → 상태 → 판단 → 제안 순서 · 제안 문장(밑줄 색 = 구분)에 마우스를 올리면(누르면 고정) 근거가 보입니다</p>`;
   for (const it of r.proposal) {
     const wh = (it.withheld||[]).map(w => `${esc(w.field)}(${esc(w.reason)})`).join(" · ");
     h += `<div class="item ${collapsedAll?"collapsed":""}"><div class="ih"><span class="id">${esc(it.id)}</span><span class="nm">${esc(it.name)}</span>
       <span class="badge b-${it.state}">${STATE[it.state]||it.state}</span></div><div class="body">
       <div class="finding">${esc(it.finding)}</div>
-      ${it.sections.map(sec => `<div class="sec">${sec.title?`<h4>${esc(sec.title)}</h4>`:""}${sec.blocks.map(b => block(b, it)).join("")}</div>`).join("")}
+      ${it.sections.map(sec => `<div class="sec">${sec.title?`<h4>${esc(sec.title)}</h4>`:""}${blocks(sec.blocks, it)}</div>`).join("")}
       ${wh?`<div class="withheld">빠진 정보: ${wh}</div>`:""}</div></div>`;
   }
   return h;
@@ -272,9 +289,9 @@ function showTip(el) {
 function hideTip(now) { if (pinned) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tip.style.display = "none", now ? 0 : 180); }
 tip.onmouseenter = () => clearTimeout(hideTimer);
 tip.onmouseleave = () => hideTip();
-document.addEventListener("click", e => { if (!tip.contains(e.target) && !e.target.closest(".para.has-ev") && pinned) { pinned.classList.remove("pin"); pinned = null; hideTip(true); } });
+document.addEventListener("click", e => { if (!tip.contains(e.target) && !e.target.closest(".has-ev") && pinned) { pinned.classList.remove("pin"); pinned = null; hideTip(true); } });
 function bindTips(pane) {
-  pane.querySelectorAll(".para.has-ev").forEach(el => {
+  pane.querySelectorAll(".has-ev").forEach(el => {
     el.onmouseenter = () => { if (!pinned) showTip(el); };
     el.onmouseleave = () => hideTip();
     el.onclick = () => { if (pinned) pinned.classList.remove("pin"); if (pinned === el) { pinned = null; hideTip(true); return; } pinned = el; el.classList.add("pin"); showTip(el); };

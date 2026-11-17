@@ -95,7 +95,10 @@ def s_rows(b: dict[str, Any]) -> list[dict[str, str]]:
 def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
     """대피 쪽 요청(E2 · E3 · E4 · E5 대상).
 
-    1. 보건복지(p.89 · 95): 취약시설 → 보건복지부(매뉴얼 기관별 임무)
+    1. 보건(p.22 · 89): 취약시설 거주자 이송 → 관할 시군 보건소장(11/17 사용자 결정).
+       매뉴얼 p.22 현장응급의료소장(보건소장)이 응급의료 자원을 총괄하고 사상자를
+       분류 · 처치 · 이송한다. 백서에서도 보건소장이 병상 확보 · 구급차 배정을 맡았다.
+       전에는 p.89 · 95 기관별 임무대로 보건복지부였다.
     2. 의료(p.89): 5시간 안 취약시설이 있고 응급의료기관이 있으면
     3. 교통(p.79 · 83 · 95): 큰 도로 구간마다 → 가까운 경찰서 · 한국도로공사(p.83 · 95 기관별 임무
        「고속도로, 국도, 지방도 등 교통통제」)
@@ -114,7 +117,10 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
         ask = f"소관 시설 거주자 이송: {ask}" if ask else ""
         if later:
             ask += (". " if ask else "") + f"{_join(r['name'] for r in later)} 이송 준비"
-        rows.append(_row("보건복지", "보건복지부", ask, "E3", "p.89·95"))  # p.89 · 95 소관시설 이송
+        health = (
+            f"{b['agencies']['home']}보건소장" if b["agencies"].get("home") else "관할 보건소장"
+        )
+        rows.append(_row("보건", health, ask, "E3", "p.22·89"))  # p.22 현장응급의료소 · p.89 이송
         medical = b["agencies"]["emergency_medical"]
         if now and medical:  # 2
             rows.append(

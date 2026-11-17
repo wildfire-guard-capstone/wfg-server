@@ -26,7 +26,9 @@ def written(engine):
 
 
 def blocks(item, *types):
-    return [b for s in item["sections"] for b in s["blocks"] if b["type"] in types]
+    """문서 순서대로(제안 문단 뒤에 그 문단의 자세한 자료 details, 11/18)."""
+    flat = [d for s in item["sections"] for b in s["blocks"] for d in [b, *b.get("details", [])]]
+    return [b for b in flat if b["type"] in types]
 
 
 def test_one_result_per_engine_item_in_order(engine, written):
@@ -47,14 +49,23 @@ def test_one_result_per_engine_item_in_order(engine, written):
     json.dumps(list(written.values()), ensure_ascii=False)  # jsonb로 저장할 수 있다
 
 
-def test_test_paragraph_per_topic_next_to_engine_list(written):
+def test_four_steps_then_engine_lists(written):
+    """11/17 배치: 상황 · 상태 · 판단(fact) → 주제별 제안(paragraph).
+    11/18: 주제 자리 뒤의 목록은 그 제안의 자세한 자료(details)로 붙는다
+    (E2는 주제마다 마을 목록 하나씩)."""
     e2 = written["E2"]
-    assert [b["type"] for b in blocks(e2, "paragraph", "list")] == [
+    assert [b["type"] for b in blocks(e2, "fact", "paragraph", "list")] == [
+        "fact",
+        "fact",
+        "fact",
         "paragraph",
         "list",
         "paragraph",
         "list",
     ]
+    assert len(e2["sections"]) == 1  # 목록이 모두 제안에 붙어 따로 남은 판정 자료 섹션이 없다
+    assert all(len(p["details"]) == 1 for p in blocks(e2, "paragraph"))
+    assert [b["step"] for b in blocks(e2, "fact")] == ["situation", "status", "judgment"]
     first, second = blocks(e2, "paragraph")
     assert first["topic"] == "위험구역 마을 대피"
     assert second["topic"] == "잠재 위험구역 사전대피"
@@ -73,7 +84,7 @@ def test_engine_tables_lists_notes_kept_as_is(engine, written):
 
 def test_item_without_topics_gets_one_proposal_first(written):
     e6 = written["E6"]  # 다룰 주제 없음(엔진 action 블록 없음)
-    assert e6["sections"][0]["title"] == "대응 제안"
+    assert e6["sections"][0]["title"] == ""  # 네 단계 섹션은 소제목 없음
     (para,) = blocks(e6, "paragraph")
     assert para["topic"] is None
     assert blocks(e6, "table")  # 요청 표는 그대로

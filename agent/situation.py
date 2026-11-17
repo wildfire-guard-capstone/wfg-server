@@ -99,7 +99,10 @@ def summary(f: dict[str, Any]) -> str:
     if f["large_now"]:
         size = f"대형산불(지금 {f['now_ha']} ha, 100 ha 이상)"
     elif f["large_soon"]:
-        size = f"지금 {f['now_ha']} ha, {f['large_at']} 무렵 대형산불 기준 100 ha를 넘을 수 있음"
+        # 11/17: 「지금 48.5 ha, 14:50 무렵 …」을 LLM이 「14:50 무렵 48.5 ha」로 뭉개서 시각을 뒤로 뺐다
+        size = (
+            f"지금 면적 {f['now_ha']} ha, 대형산불 기준 100 ha를 넘을 수 있는 시각 {f['large_at']}"
+        )
     else:
         size = f"중소형 산불(지금 {f['now_ha']} ha, 8시간 안에 100 ha를 넘지 않음)"
     parts = [

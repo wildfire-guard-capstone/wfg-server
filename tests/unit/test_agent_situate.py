@@ -245,10 +245,17 @@ def test_action_check_and_restated_sentence():
     )  # 할 일이 없으면 그대로(검사가 다시 쓰게)
 
 
-def test_examples_show_action_part_only():
-    ex = prompt.examples_of("S1", action_only={"S1-a1"})
-    assert ex[0] == "확산대응 N단계 발령을 산림청장과 협의하십시오."  # 상황 부분(값)은 빠짐
-    assert "피해면적이 HH:MM에 N ha" in ex[1]  # 상황 문장이 없는 주제는 그대로
+def test_examples_are_four_step_and_masked():
+    """11/17: 문단 꼴 예시 = 문서 9장 회차 1의 네 단계(값 가림). 항목 12개 모두 있다."""
+    assert set(prompt.STYLE) == {f"S{i}" for i in range(1, 7)} | {f"E{i}" for i in range(1, 7)}
+    ex = prompt.examples_of("S1")[0]
+    assert set(ex) == {"situation", "status", "judgment", "proposals"}
+    assert ex["situation"].startswith("HH:MM 현재 피해면적은 N ha입니다.")
+    assert "산림청장과 협의하십시오" in ex["proposals"]
+    assert not any(ch.isdigit() for v in ex.values() for ch in v)  # 숫자는 모두 가림
+    assert "judgment" not in prompt.examples_of("S6")[0]  # 판단할 거리가 없는 예
+    e6 = prompt.examples_of("E6")[0]["proposals"]
+    assert "보건복지부" not in e6 and "이송을 HH:MM 전에 시작하도록 지시하십시오" in e6
 
 
 ITEM = S1_R1 | {
@@ -280,6 +287,9 @@ class _Ev:
         return [CHUNK | {"score": 0.6}]
 
 
+S1_NOW = "피해면적 48.5 ha, 평균풍속 3.4 m/s, 시설피해 우려 최소 1동으로 세 기준 모두 판정 기준상 확산대응 1단계에 해당합니다."
+
+
 class _LLM:
     def __init__(self, text):
         self.text, self.seen = text, []
@@ -288,6 +298,9 @@ class _LLM:
         self.seen.append(messages)
         return json.dumps(
             {
+                "situation": "현재 피해면적은 48.5 ha입니다.",
+                "status": "",
+                "judgment": S1_NOW,
                 "proposals": [
                     {
                         "topic": "현재 기준 단계",
@@ -296,30 +309,32 @@ class _LLM:
                         "evidence": ["SM-p091-s01"],
                         "quote": "확산대응 단계 발령은 산림청장과 협의",
                     }
-                ]
+                ],
             },
             ensure_ascii=False,
         )
 
 
-def test_agent_assembles_situation_plus_action():
+def test_agent_gives_value_sentences_and_writes_four_steps():
+    """11/17: 판정 값 문장(코드)은 문단 앞에 붙이지 않고 프롬프트 재료로 준다. LLM이 상황 · 상태 · 판단을 쓰고,
+    제안에서 사실부를 되풀이한 문장은 지운다."""
     llm = _LLM("피해면적 48.5 ha로 1단계입니다. 확산대응 1단계 발령을 산림청장과 협의하십시오.")
     items, logs = Agent(llm, _Ev(), set(), workers=1).run({"reader": "의성군수"}, [ITEM])
     user = llm.seen[0][1]["content"]
+    assert "[판정 값 문장" in user and "세 기준 모두 판정 기준상 확산대응 1단계" in user
+    blocks = items[0]["sections"][0]["blocks"]
+    assert [(b["type"], b.get("step")) for b in blocks] == [
+        ("fact", "situation"),
+        ("fact", "judgment"),
+        ("paragraph", None),
+    ]
+    assert blocks[1]["text"] == S1_NOW
+    para = blocks[2]
     assert (
-        "상황 문장(제안 앞에 그대로 붙음" in user
-        and "세 기준 모두 판정 기준상 확산대응 1단계" in user
-    )
-    para = items[0]["sections"][0]["blocks"][0]
-    assert para["body"] == (
-        "피해면적 48.5 ha, 평균풍속 3.4 m/s, 시설피해 우려 최소 1동으로 세 기준 모두 판정 기준상 확산대응 1단계에 해당합니다. "
-        "확산대응 1단계 발령을 산림청장과 협의하십시오."
-    )  # LLM이 되풀이한 상황 문장은 지우고 코드 문장을 앞에
-    assert para["text"].endswith("협의하십시오 [p.91].") and para["source"] == "rule+llm"
-    assert (
-        para["action_text"] == "확산대응 1단계 발령을 산림청장과 협의하십시오."
-        and items[0]["state"] == "ok"
-    )
+        para["body"] == "확산대응 1단계 발령을 산림청장과 협의하십시오."
+    )  # 되풀이한 사실 문장은 지움
+    assert para["text"].endswith("협의하십시오 [p.91].") and para["source"] == "llm"
+    assert items[0]["state"] == "ok"
     assert logs[0]["situations"]["현재 기준 단계"].startswith("피해면적 48.5 ha")
 
 
@@ -400,13 +415,17 @@ def test_adnominal_negation_is_allowed():
     assert any("부정" in e for e in check.check_one("E2", p, {"X"}, allowed, "", set(), "의성군수"))
 
 
-def test_soft_error_keeps_proposal():
+def test_values_inside_action_sentence_are_kept():
+    """11/17: 상황 문장을 문단 앞에 붙이지 않으므로, 할 일 문장 안의 판정 값(대상 · 기한)은 그대로 둔다
+    (예전 「상황 값 되풀이」 SOFT 검사는 판정 값 문장을 붙이는 주제에만 있었다)."""
     text = (
         "피해면적 48.5 ha, 평균풍속 3.4 m/s 기준으로 확산대응 1단계 발령을 산림청장과 협의하십시오."
     )
     items, logs = Agent(_LLM(text), _Ev(), set(), workers=1).run({"reader": "의성군수"}, [ITEM])
-    assert items[0]["state"] == "ok" and logs[0]["dropped"] == []  # 되풀이만 남으면 빼지 않는다
-    assert len(logs[0]["attempts"]) == 3  # 다시 쓰게는 한다
+    assert items[0]["state"] == "ok" and logs[0]["dropped"] == []
+    assert len(logs[0]["attempts"]) == 1
+    para = next(b for b in items[0]["sections"][0]["blocks"] if b["type"] == "paragraph")
+    assert para["body"] == text
 
 
 def test_tidy_turns_declarative_action_into_imperative():

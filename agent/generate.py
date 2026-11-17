@@ -4,9 +4,13 @@
     agent = Agent(LLM(url), Evidence(url), known_names)
     items, logs = agent.run(common, rule_items, prev)
 
+- 11/17 네 단계: LLM이 한 항목을 상황(situation) → 상태(status) → 판단(judgment) → 제안(proposals)으로 쓴다.
+  판단에 필요한 계산은 calc.py가, S1 ~ S3 판정 값 문장은 situate.py가 미리 만들어 프롬프트에 넣는다.
+  상황 · 상태 · 판단은 문장마다 값을 검사해 틀린 문장만 빼고(check.check_facts), 제안은 예전처럼 검사한다.
 - 규칙 엔진 항목(rule_items)에서 판정과 다룰 주제만 쓴다(judgment.py). 문장 · 주제별 근거 쪽은 없다.
 - 무엇을 제안할지는 LLM이 근거 발췌에서 고른다. 제안마다 주제 · 근거 청크 ID · 근거 문장(quote)이 있고, 표기는 cite.py가 붙인다.
-- 화면 배치는 시나리오 v3처럼 규칙 엔진 섹션 순서: 소제목 → 그 주제의 제안 문단 → 그 섹션의 목록 · 표 · ※.
+- 화면 배치(11/17): 첫 섹션 = 상황 · 상태 · 판단 문단(fact 블록) → 제안 문단(paragraph 블록, 주제 순서),
+  그 아래 규칙 엔진 섹션의 목록 · 표 · ※(판정 자료)를 소제목과 함께 둔다.
 - 기록(logs)에 항목마다 질의 · 근거 · 보낸 메시지 전문 · 받은 답 원문 · 검사 결과가 남는다(디버깅용).
 - 입력(판정 · 상황)이 직전 회차와 같은 항목은 직전 제안을 다시 쓴다(11/7).
 """
@@ -16,14 +20,15 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent import check, cite, guides, judgment, prompt, retrieve, situate, situation
+from agent import calc, check, cite, guides, judgment, prompt, retrieve, situate, situation
 from agent.clients import LLM, Evidence
+from agent.prompt import FACT_STEPS
 
 FAILED_TEXT = (
     "검사를 통과한 제안이 없어 이 항목의 제안은 표시하지 않았습니다(이벤트 로그: 근거 부족)."
 )
 ATTEMPTS = 3  # 처음 + 다시 쓰기 2회
-OTHER = "그 밖의 제안"
+FACT_KEY = -2  # 검사 결과에서 상황 · 상태 · 판단 문제의 자리(-1 = 빠진 주제)
 
 
 def input_key(judg: dict[str, Any], common: dict[str, Any], guide: str = "") -> str:
@@ -47,25 +52,34 @@ def with_citation(text: str, chunks: list[dict[str, Any]], see: str | None = Non
 def _para(
     p: dict[str, Any], by_id: dict[str, dict[str, Any]], tp: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    """제안 하나 → paragraph 블록. 여러 블록이 이어져 네 번째 문단(제안)이 된다."""
     chunks = [by_id[e] for e in p["evidence"] if e in by_id]
     see = (tp or {}).get("see")
-    sit = p.get("situation") or ""  # 코드가 판정으로 쓴 상황 문장(situate.py) + LLM 할 일 문장
-    full = f"{sit} {p['text']}".strip() if sit else p["text"]
     return {
         "type": "paragraph",
         "category": p["category"],
-        "text": with_citation(full, chunks, see),
-        "body": with_citation(full, [], see),  # 화면 본문(근거 표기 없음) — 근거는 마우스를 올리면
+        "text": with_citation(p["text"], chunks, see),
+        "body": with_citation(
+            p["text"], [], see
+        ),  # 화면 본문(근거 표기 없음) — 근거는 마우스를 올리면
         "cite": cite.render(chunks),
-        "situation": sit,
         "action_text": p["text"],
         "evidence": p["evidence"],
         "quote": p.get("quote", ""),
         "quote_ok": p.get("quote_ok"),
         "topic": p.get("topic"),
         "action": (tp or {}).get("action"),
-        "source": "rule+llm" if sit else "llm",
+        "source": "llm",
     }
+
+
+def fact_blocks(facts: dict[str, str] | None) -> list[dict[str, Any]]:
+    """상황 · 상태 · 판단 → fact 블록(빈 단계는 뺀다). step = situation · status · judgment."""
+    return [
+        {"type": "fact", "step": step, "text": facts[step], "source": "llm"}
+        for step in FACT_STEPS
+        if facts and (facts.get(step) or "").strip()
+    ]
 
 
 def assemble(
@@ -73,40 +87,30 @@ def assemble(
     proposals: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
     state: str,
+    facts: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """제안 + 판정 자료 → 화면용 항목(시나리오 v3 배치: 섹션마다 소제목 → 제안 문단 → 목록 · 표 · ※)."""
+    """네 단계 + 판정 자료 → 화면용 항목(11/17).
+
+    첫 섹션(제목 없음) = 상황 · 상태 · 판단 fact 블록 → 제안 paragraph 블록(다룰 주제 순서, 덧붙인 주제는 뒤).
+    그 아래 = 규칙 엔진 섹션마다 목록 · 표 · ※(판정 자료)를 그 소제목으로. 소제목이 없으면 「판정 자료」."""
     topics = judgment.topics_of(item)
-    by_topic: dict[str, list[dict[str, Any]]] = {}
-    for p in proposals:
-        by_topic.setdefault(p.get("topic") or OTHER, []).append(p)
-    used: set[int] = set()
-    sections = []
-    if not topics and proposals:  # 다룰 주제가 없는 항목(E6): 제안을 먼저
-        sections.append({"title": "대응 제안", "blocks": [_para(p, by_id) for p in proposals]})
-        used = {id(p) for p in proposals}
-    for s in item.get("sections", []):
-        blocks = []
-        for b in s.get("blocks", []):
-            if b.get("type") == "action":
-                tp = next(t for t in topics if t["action"] == b["id"])
-                for p in by_topic.get(tp["topic"], []):
-                    if id(p) not in used:
-                        blocks.append(_para(p, by_id, tp))
-                        used.add(id(p))
-            elif b.get("type") in judgment.DATA_BLOCKS:
-                blocks.append({k: v for k, v in b.items() if k != "writer"})
-        if blocks:
-            sections.append({"title": s.get("title", ""), "blocks": blocks})
-    rest = [p for p in proposals if id(p) not in used]
-    by_rest: dict[str, list[dict[str, Any]]] = {}
-    for p in rest:  # 작성 지침의 덧붙일 주제(「통합지휘본부 운영」)는 그 이름을 소제목으로
-        by_rest.setdefault(p.get("topic") or OTHER, []).append(p)
-    for title, ps in by_rest.items():
-        sections.append({"title": title, "blocks": [_para(p, by_id) for p in ps]})
+    order = {t["topic"]: i for i, t in enumerate(topics)}
+    tp_of = {t["topic"]: t for t in topics}
+    ordered = sorted(
+        enumerate(proposals), key=lambda ip: (order.get(ip[1].get("topic"), len(order)), ip[0])
+    )
+    blocks = fact_blocks(facts) + [_para(p, by_id, tp_of.get(p.get("topic"))) for _, p in ordered]
     if not proposals:
-        sections.insert(
-            0, {"title": "대응 제안", "blocks": [{"type": "failed", "text": FAILED_TEXT}]}
-        )
+        blocks.append({"type": "failed", "text": FAILED_TEXT})
+    sections = [{"title": "", "blocks": blocks}]
+    for s in item.get("sections", []):
+        data = [
+            {k: v for k, v in b.items() if k != "writer"}
+            for b in s.get("blocks", [])
+            if b.get("type") in judgment.DATA_BLOCKS
+        ]
+        if data:
+            sections.append({"title": s.get("title") or "판정 자료", "blocks": data})
     cited = dict.fromkeys(e for p in proposals for e in p["evidence"])
     return {
         "id": item["id"],
@@ -163,11 +167,14 @@ class Agent:
             schema=prompt.schema(ids, topics, extras),
             thinking=self.thinking,
             temperature=0.2 if attempt == 1 else 0.5,  # 다시 쓸 때 같은 답이 나오지 않게
-            max_tokens=4096 if self.thinking else 3000,
+            # 11/17 네 단계: 상황 · 상태 · 판단 문단이 더해져 답이 길다(E4 · E6은 3,000토큰을 넘을 수 있음)
+            max_tokens=6144 if self.thinking else 4096,
             tag=tag,
         )
 
-    def _one(self, common: dict, item: dict, prev: dict | None) -> tuple[dict, dict]:
+    def _one(
+        self, common: dict, item: dict, prev: dict | None, calc_lines: list[str] | None = None
+    ) -> tuple[dict, dict]:
         judg = judgment.judgment_of(item)
         topics = [t["topic"] for t in judg["topics"] if t["topic"]]
         flags = common.get(
@@ -177,13 +184,15 @@ class Agent:
         extras = guides.extra_topics(item["id"], flags) if flags else None
         gqs = guides.queries(item["id"], flags) if flags else []
         sit_line = situation.summary(flags) if flags else ""
-        key = input_key(judg, common, guide)
+        calc_lines = list(calc_lines or [])
+        key = input_key(judg, common, guide + "\n" + "\n".join(calc_lines))
         log: dict[str, Any] = {
             "id": item["id"],
             "input_key": key,
             "attempts": [],
             "guide": guide,
             "extras": extras,
+            "calc": calc_lines,
         }
         if (
             prev
@@ -208,20 +217,30 @@ class Agent:
             "retrieval": rlog,
             "evidence": [(c["chunk_id"], c["label"], c["origin"]) for c in chunks],
         }
-        allowed = check.allowed_from(common, judg, *[c["text"] for c in chunks])
-        judged_text = judgment.text_of(judg, common)
-        texts = {c["chunk_id"]: c["text"] for c in chunks} | {"_data": " / ".join(judg["data"])}
-        sits = situate.sentences(
-            item, topics
-        )  # 판정 값 상황 문장(코드) — 그 주제는 LLM이 할 일 문장만
-        action_only = {tp["action"] for tp in judgment.topics_of(item) if tp["topic"] in sits}
+        reader = common.get("reader", "")
+        # 지금 면적과 기준 시각(「14:50 무렵 48.5 ha」 같은 짝 오류를 잡는 데 쓴다)
+        base_at = str((common.get("proposal") or {}).get("base_at") or "")[-5:]
+        now = (base_at, (flags or {}).get("now_ha")) if base_at and flags else None
+        # 판정 값 문장(S1 ~ S3, 코드) — 11/17부터는 문단 앞에 붙이지 않고 상황 · 상태 · 판단을 쓸 재료로 준다
+        sits = situate.sentences(item, topics)
         log["situations"] = sits
+        allowed = check.allowed_from(
+            common,
+            judg,
+            "\n".join(calc_lines),
+            "\n".join(sits.values()),
+            prompt.scope_text(item["id"]),
+            guide,
+            *[c["text"] for c in chunks],
+        )
+        judged_text = judgment.text_of(judg, common)
+        # 11/17: quote는 근거 원문과만 대조한다(판정 자료와 대조하면 매뉴얼에 없는 인용문이 통과했다)
+        texts = {c["chunk_id"]: c["text"] for c in chunks}
         msgs = prompt.messages(
-            common, judg, chunks, self.known_names, guide, sit_line, sits, action_only
+            common, judg, chunks, self.known_names, guide, sit_line, list(sits.values()), calc_lines
         )
         log["messages"] = msgs
-        best: list[dict[str, Any]] = []
-        dropped: list[dict[str, Any]] = []
+        best: dict[str, Any] | None = None
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 raw = self._call(msgs, ids, topics, attempt, f"{item['id']}#{attempt}", extras)
@@ -231,19 +250,21 @@ class Agent:
                 )
                 continue
             try:
-                props = check.parse(raw)
+                out = check.parse_out(raw)
             except Exception as e:
                 log["attempts"].append(
                     {"raw": raw[-3000:], "errors": {"-": [f"출력 형식 오류: {e}"]}}
                 )
                 continue
+            props = out["proposals"]
+            facts, fact_errs, removed = check.check_facts(
+                item["id"], out, allowed, judged_text, self.known_names, now, judg["withheld"]
+            )
+            facts_text = " ".join(facts.values())
             for p in props:
-                p["text"] = check.strip_subject(
-                    check.tidy(p.get("text") or ""), common.get("reader", "")
-                )
-                if (sit := sits.get(p.get("topic") or "")) is not None:
-                    p["text"] = check.drop_restated(p["text"], sit)
-                    p["situation"] = sit
+                p["text"] = check.strip_subject(check.tidy(p.get("text") or ""), reader)
+                # 제안에 상황 · 상태 · 판단을 되풀이한 문장(할 일이 없고 사실부와 겹침)은 지운다
+                p["text"] = check.drop_restated(p["text"], facts_text)
                 p["category"] = check.fix_category(p["text"], p.get("category"))
                 p["evidence"] = list(
                     dict.fromkeys(e for e in p.get("evidence") or [] if e in by_id)
@@ -252,8 +273,12 @@ class Agent:
                 if fixed:
                     log.setdefault("evidence_fixed", []).append(fixed)
                 p["quote_ok"] = check.quote_ok(
-                    p.get("quote", ""), [texts.get(e, "") for e in p["evidence"]] + [texts["_data"]]
+                    p.get("quote", ""), [texts.get(e, "") for e in p["evidence"]]
                 )
+            # 앞 제안과 거의 같은 문장은 뒤 제안에서 지운다(모두 겹치면 검사에서 다시 쓰게)
+            repeated_out, repeated = check.drop_repeated(props)
+            if repeated_out:
+                log.setdefault("repeated_removed", []).append(repeated_out)
             bad = check.check(
                 item["id"],
                 props,
@@ -261,23 +286,42 @@ class Agent:
                 allowed,
                 judged_text,
                 self.known_names,
-                common.get("reader", ""),
+                reader,
                 texts,
                 topics,
-                situations=sits,
+                repeated=repeated,
             )
-            # 문체 문제(check.SOFT, 상황 값 되풀이)는 다시 쓰게만 하고 제안을 빼지 않는다
-            good = [p for i, p in enumerate(props) if not check.hard(bad.get(i, []))]
+            # 사실부 문제는 문장을 뺀 것(hard)이 있을 때만 다시 쓰게 한다. 「등」 · 길이 같은 문체(SOFT)만 있으면
+            # 기록만 한다(회차 1 2차: SOFT만으로 시도 3번을 다 써서 오히려 새 오류가 생김)
+            if check.hard(fact_errs):
+                bad[FACT_KEY] = fact_errs
+            elif fact_errs:
+                log.setdefault("facts_soft", []).append(fact_errs)
+            # 문체 문제(check.SOFT)는 다시 쓰게만 하고 제안 · 문장을 빼지 않는다
+            good = [p for i, p in enumerate(props) if i >= 0 and not check.hard(bad.get(i, []))]
             log["attempts"].append(
-                {"raw": raw[-5000:], "errors": {str(i): e for i, e in bad.items()}}
+                {
+                    "raw": raw[-6000:],
+                    "errors": {str(i): e for i, e in bad.items()},
+                    "facts": facts,
+                    "facts_removed": removed,
+                }
             )
-            if len(good) >= len(best):
-                best = good
-                dropped = [
-                    {"text": props[i].get("text"), "errors": e}
-                    for i, e in bad.items()
-                    if i >= 0 and check.hard(e)
-                ]
+            # 고르는 순서: 상황이 있는가 → 통과한 제안 수 → 상황 · 상태 · 판단에서 뺀 문장이 적은가
+            real = [r for r in removed if not r.get("filler")]  # 군말을 뺀 것은 문제로 치지 않는다
+            score = (bool(facts["situation"]), len(good), -len(real))
+            if best is None or score >= best["score"]:
+                best = {
+                    "score": score,
+                    "good": good,
+                    "facts": facts,
+                    "removed": removed,
+                    "dropped": [
+                        {"text": props[i].get("text"), "errors": e}
+                        for i, e in bad.items()
+                        if i >= 0 and check.hard(e)
+                    ],
+                }
             if not bad:
                 break
             if attempt < ATTEMPTS:
@@ -290,24 +334,41 @@ class Agent:
                     {"role": "assistant", "content": raw.split("</think>")[-1].strip()},
                     prompt.retry_message(flat, props),
                 ]
-        log["dropped"] = dropped  # 끝까지 검사에 걸려 뺀 제안(이벤트 로그 구분: 근거 부족)
+        good = best["good"] if best else []
+        facts = dict(best["facts"]) if best else {}
+        if best and not facts.get("situation") and item.get("finding"):
+            facts["situation"] = check.tidy_fact(item["finding"])  # 상황을 못 쓰면 판정 한 줄로
+            log["facts_fallback"] = "finding"
+        log["dropped"] = best["dropped"] if best else []  # 끝까지 검사에 걸려 뺀 제안(근거 부족)
+        log["facts"] = facts
+        log["facts_removed"] = best["removed"] if best else []  # 끝까지 값이 틀려 뺀 사실부 문장
         state = (
             "failed"
-            if not best
+            if not good
             else (
                 "partial"
-                if dropped or any(t not in {p.get("topic") for p in best} for t in topics)
+                if log["dropped"]
+                or any(not r.get("filler") for r in log["facts_removed"])
+                or any(t not in {p.get("topic") for p in good} for t in topics)
                 else "ok"
             )
         )
-        out = assemble(item, best, by_id, state)
-        return out | {"input_key": key, "proposals": best}, log
+        out = assemble(item, good, by_id, state, facts)
+        return out | {"input_key": key, "proposals": good}, log
 
     def run(
         self, common: dict, items: list[dict], prev: dict[str, dict] | None = None
     ) -> tuple[list, list]:
-        """항목 순서대로 결과와 기록. prev = 직전 회차의 {항목 id: {input_key, proposals, state, item, version}}."""
+        """항목 순서대로 결과와 기록. prev = 직전 회차의 {항목 id: {input_key, proposals, state, item, version}}.
+        판단 계산 값(calc.py)은 항목끼리 걸치므로(E5가 E4 대피소를 씀) 여기서 미리 만든다."""
         prev = prev or {}
+        by_id = {it["id"]: it for it in items}
+        calcs = {iid: calc.for_item(iid, by_id) for iid in by_id}
         with ThreadPoolExecutor(self.workers) as ex:
-            res = list(ex.map(lambda it: self._one(common, it, prev.get(it["id"])), items))
+            res = list(
+                ex.map(
+                    lambda it: self._one(common, it, prev.get(it["id"]), calcs.get(it["id"])),
+                    items,
+                )
+            )
         return [r[0] for r in res], [r[1] for r in res]

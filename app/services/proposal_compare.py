@@ -4,9 +4,11 @@
 같은 항목 코드끼리(값은 영문 코드 — 명세 3.2, 11/10):
   CHANGED 변경 : 판정 한 줄 · 구분 · 다룬 주제 · 목록/표/※ 줄 · 문단 상황 문장 중 하나라도 다름
   NEW · REMOVED 신규 · 빠짐 : 앞 버전에 없음 / 이번에 없음(해당 없음)
-  WORDING_ONLY 표현만 : 위가 모두 같고 LLM 할 일 문장만 다름 → 「변경」 아님
+  WORDING_ONLY 표현만 : 위가 모두 같고 LLM 할 일 문장 · 상황 · 상태 · 판단(fact 블록)만 다름
+                      → 「변경」 아님
   SAME 같음 : 다 같음
 DB 없이 proposal_items 행(또는 같은 칸을 가진 객체)만 받는다.
+11/17 네 단계: 상황 · 상태 · 판단은 LLM이 쓰는 fact 블록이 되어 문단 상황 문장(코드)은 비어 있다.
 """
 
 import re
@@ -44,6 +46,11 @@ def norm(text: str | None) -> str:
 
 def paragraphs(sections: Sections) -> list[dict[str, Any]]:
     return [b for s in sections for b in s.get("blocks", []) if b.get("type") == "paragraph"]
+
+
+def facts(sections: Sections) -> list[dict[str, Any]]:
+    """상황 · 상태 · 판단 블록(11/17 네 단계 — LLM이 쓴 글이라 표현만 바뀐 것으로 본다)."""
+    return [b for s in sections for b in s.get("blocks", []) if b.get("type") == "fact"]
 
 
 def table_row(row: dict[str, Any]) -> list[Any]:
@@ -97,7 +104,10 @@ def change_of(before: Item | None, after: Item | None) -> str | None:
         return "REMOVED"
     if _engine_side(before) != _engine_side(after):
         return "CHANGED"
-    bodies = [[p.get("body") for p in paragraphs(i.sections)] for i in (before, after)]
+    bodies = [
+        [p.get("body") for p in paragraphs(i.sections)] + [f.get("text") for f in facts(i.sections)]
+        for i in (before, after)
+    ]
     return "WORDING_ONLY" if bodies[0] != bodies[1] else "SAME"
 
 

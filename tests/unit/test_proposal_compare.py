@@ -60,6 +60,20 @@ def test_only_llm_wording_is_not_a_change():
     assert changed_count([a], [b]) == 0
 
 
+def test_fact_blocks_count_as_wording():
+    """11/17 네 단계: 상황 · 상태 · 판단(fact 블록)은 LLM이 쓴 글이라 바뀌어도 「표현만」이다."""
+
+    def with_fact(text: str) -> Item:
+        a = item()
+        fact = {"type": "fact", "step": "situation", "text": text}
+        sec = a.sections[0] | {"blocks": [fact, *a.sections[0]["blocks"]]}
+        return replace(a, sections=[sec])
+
+    a, b = with_fact("헬기 23대가 투입되어 있습니다."), with_fact("지금 헬기 23대가 떠 있습니다.")
+    assert change_of(a, b) == "WORDING_ONLY"
+    assert change_of(a, with_fact("헬기 23대가 투입되어 있습니다.")) == "SAME"
+
+
 def test_engine_side_changes():
     a = item()
     assert change_of(a, item(finding="투입: 헬기 29")) == "CHANGED"

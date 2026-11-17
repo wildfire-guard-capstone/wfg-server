@@ -85,14 +85,16 @@ def test_flags_size_and_escalation():
         and LARGE_UPPER["reader_upper"]
         and not LARGE_UPPER["commander_change"]
     )
-    assert "14:50 무렵 대형산불 기준 100 ha" in situation.summary(GROWING)
+    assert "대형산불 기준 100 ha를 넘을 수 있는 시각 14:50" in situation.summary(GROWING)
 
 
 @pytest.mark.parametrize("flags", [SMALL, GROWING, LARGE_UPPER])
 def test_every_guide_condition_uses_known_flags(flags):
     for iid in guides.GUIDES:  # 모르는 깃발이면 KeyError
         guides.active(iid, flags)
-        assert all(ln.kind in ("do", "extra", "avoid") for ln in guides.GUIDES[iid])
+        assert all(ln.kind in ("do", "extra", "avoid", "judge") for ln in guides.GUIDES[iid])
+        # 11/17 네 단계: 항목마다 판단에서 볼 것이 있다
+        assert any(ln.kind == "judge" for ln in guides.GUIDES[iid])
         assert all(ln.topic for ln in guides.GUIDES[iid] if ln.kind == "extra")
 
 
@@ -169,23 +171,33 @@ CHUNK = {
 }
 
 
-def test_assemble_extra_topic_gets_own_section():
+def test_assemble_extra_topic_follows_topic_proposals():
+    """11/17 배치: 덧붙인 주제도 같은 제안 문단(첫 섹션)에, 다룰 주제 제안 뒤에 온다."""
     props = [
-        {
-            "topic": "대책회의 · 기관별 임무",
-            "category": "즉시",
-            "text": "산불현장 대책회의를 열어 아래 기관별로 임무를 부여하십시오.",
-            "evidence": ["SM-p073-s01"],
-        },
         {
             "topic": "통합지휘본부 운영",
             "category": "대기",
             "text": "100 ha를 넘으면 산불현장 통합지휘본부를 구성하십시오.",
             "evidence": ["SM-p073-s01"],
         },
+        {
+            "topic": "대책회의 · 기관별 임무",
+            "category": "즉시",
+            "text": "산불현장 대책회의를 열어 아래 기관별로 임무를 부여하십시오.",
+            "evidence": ["SM-p073-s01"],
+        },
     ]
     out = assemble(ITEM, props, {"SM-p073-s01": CHUNK}, "ok")
-    assert [s["title"] for s in out["sections"]] == ["", "통합지휘본부 운영"]
+    assert [s["title"] for s in out["sections"]] == [""]
+    topics = [b["topic"] for b in out["sections"][0]["blocks"]]
+    assert topics == ["대책회의 · 기관별 임무", "통합지휘본부 운영"]
+
+
+def test_render_puts_judgment_lines_first():
+    text = guides.render("E4", GROWING)
+    assert text.startswith("판단에서 볼 것:") and "판단 계산 값" in text
+    assert "쓸 것(제안):" in text and "두 번째 후보" in text  # 대피소가 모자라면 다음 안
+    assert "마을과 대피 장소를 짝지어" in guides.render("E5", GROWING)
 
 
 class _Ev:
@@ -230,7 +242,10 @@ def test_agent_puts_guide_in_prompt_and_queries():
     items, logs = Agent(llm, ev, set(), workers=1).run(common, [ITEM])
     user = llm.seen[0][0][1]["content"]
     assert (
-        "[이 항목 작성 지침" in user and "통합지휘본부 운영" in user and "이번 상황: 규모" in user
+        "[이 항목 작성 지침" in user
+        and "통합지휘본부 운영" in user
+        and "이번 상황(산불 전체" in user
+        and "): 규모:" in user
     )
     assert llm.seen[0][1]["properties"]["proposals"]["items"]["properties"]["topic"]["enum"] == [
         "대책회의 · 기관별 임무",

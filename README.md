@@ -48,7 +48,8 @@ uv run alembic upgrade head
   → 3 LLM 대응 생성 demo/uiseong/step3_agent.py → agent/                  항목마다 아래 순서
        situation.py · guides.py  상황 깃발(불이 큼 · 작음 · 단계 오름 · 밤 · 도지사 …) → 항목별 작성 지침(쓸 것 · 덧붙일 제안 · 쓰지 않을 것)
        judgment.py  판정만 고름(문단 자리 · 고정 문장 없음)
-       situate.py   판정 값 상황 문장(S1 · S2 · S3)은 코드가 facts로 조립 — LLM은 그 뒤의 할 일 문장만
+       situate.py   판정 값 문장(S1 · S2 · S3)을 코드가 facts로 조립 — 11/17부터 프롬프트 재료
+       calc.py      판단 계산 값(E4 대피소 수용 비교 · E5 마을–대피 장소 짝 · E3 이송 기관)
        retrieve.py  질의 3개로 근거 검색 + 규칙 엔진이 판정에 쓴 근거
        prompt.py    지시문 · 항목 범위 · 읽는 사람의 권한 · 판정 · 근거 발췌 → json_schema(evidence는 준 청크 ID만, quote = 근거 문장)
        check.py     quote가 단 근거에서 왔는지 · 판정 값 · 권한 · 형식 검사 → 1회 다시 → 걸린 제안만 뺌
@@ -78,6 +79,11 @@ uv run pytest -q tests/unit/test_agent_check.py tests/unit/test_agent_generate.p
 판정으로 조립하고 LLM은 할 일 문장만 쓰게 했다(`agent/situate.py`). 최종 `runs/tune15`: 근거 뒷받침 0.95 · 0.90 · 0.90 · 0.90, 목표 대비 0.815,
 백서 실제 기록 0.625, 실패 항목 0, S1~S3 판정 값 오류 0(tune11은 6건).
 화면(뷰어)은 제안 문장만 보이고 근거는 마우스를 올리면 보인다.
+
+2026-11-17 네 단계 개편: 한 항목을 상황 → 상태 → 판단 → 제안 네 문단으로 쓴다(네 문단 모두 LLM, 판단의 계산은 `agent/calc.py`,
+상황 · 상태 · 판단은 문장마다 값 검사). 화면은 fact 블록(상황 · 상태 · 판단) 다음에 제안 문단, 그 아래 목록 · 표.
+회차 1(12:50) 시험 4번 끝에 12항목 중 생성 11 · 일부 1, 229초. json_schema 첫 칸을 고정값(`order`)으로 두어야 상황 첫 글자에
+「고」가 붙어 이름을 지어내는 일이 없어졌다(6번 중 6번 → 0번). 시각 순서 · 지휘권 시점 같은 추론 오류는 값 검사로 못 잡아 남는다.
 
 자세한 구조 · 데이터 형식 · 디버깅은 [`docs/의성-데모-구조서.md`](docs/의성-데모-구조서.md), 회차 · 보정 · 조정 기록은
 [`demo/uiseong/README.md`](demo/uiseong/README.md).

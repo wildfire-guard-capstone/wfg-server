@@ -5,6 +5,7 @@ import json
 
 from agent import check, prompt, situate
 from agent.generate import Agent
+from rules.core.stage import LABEL, Stage
 
 AREA_R1 = {
     "now_ha": 48.5,
@@ -418,3 +419,25 @@ def test_tidy_turns_declarative_action_into_imperative():
     assert (
         check.tidy("확산대응 1단계에 해당합니다.") == "확산대응 1단계에 해당합니다."
     )  # 할 일 동사가 아님
+
+
+def test_initial_stage_label_from_engine():
+    # 규칙 엔진은 「초기 대응」(띄어 씀)으로 낸다. 「확산대응 초기 대응」이 되면 안 된다
+    initial = LABEL[Stage.INITIAL]
+    now = {
+        "stage": initial,
+        "area_ha": 2.1,
+        "wind_ms": 1.8,
+        "facility": 0,
+        "by_area": initial,
+        "by_wind": initial,
+        "by_facility": initial,
+    }
+    s1 = {"id": "S1", "facts": {"now": now}}
+    assert situate.sentences(s1)["현재 기준 단계"] == (
+        "피해면적 2.1 ha, 평균풍속 1.8 m/s, 시설피해 우려 없음으로 세 기준 모두 판정 기준상 초기대응에 해당합니다."
+    )
+    now |= {"stage": "1단계", "wind_ms": 3.4, "by_wind": "1단계"}  # 바람만 1단계
+    assert situate.sentences(s1)["현재 기준 단계"] == (
+        "평균풍속 3.4 m/s는 확산대응 1단계, 피해면적 2.1 ha와 시설피해 우려 없음은 초기대응 기준으로, 판정 기준상 확산대응 1단계에 해당합니다."
+    )

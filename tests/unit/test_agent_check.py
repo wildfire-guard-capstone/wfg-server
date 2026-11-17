@@ -1,6 +1,7 @@
 """제안 검사(11/8 재설계): 근거 · 판정 값 · 권한 · 형식."""
 
 from agent import check
+from rules.core.stage import LABEL, Stage
 
 JUDGED = "의성군수 확산대응 1단계 피해면적 48.5 ha 신월리 주택 최소 2동 14:50 경상북도지사"
 EV = {"SM-p079-s02", "SM-p091-s01"}
@@ -151,3 +152,16 @@ def test_time_suffix_and_unknown_village():
         "마을 이름" in e
         for e in _c("신월리 주택 최소 2동 주변에 소방차를 배치하고 일자리 는 그대로 두십시오.")
     )
+
+
+def test_initial_stage_with_engine_spacing():
+    # 판정(규칙 엔진)은 「초기 대응」, 제안은 「초기대응」이어도 같은 단계
+    judged = f"의성군수 {LABEL[Stage.INITIAL]} 피해면적 2.1 ha"
+    allowed = check.allowed_from(judged, EV_TEXT)
+    p = {
+        "category": "즉시",
+        "text": "초기대응 단계에 맞춰 진화대를 투입하십시오.",
+        "evidence": ["SM-p079-s02"],
+    }
+    errs = check.check_one("S3", p, EV, allowed, judged, NAMES, "의성군수")
+    assert not any("단계" in e for e in errs)

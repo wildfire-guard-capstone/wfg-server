@@ -18,10 +18,15 @@ from typing import Any
 STAGE_ORDER = {"초기대응": 0, "1단계": 1, "2단계": 2, "3단계": 3}
 
 
+def stage_key(s: str | None) -> str:
+    """규칙 엔진은 「초기 대응」(띄어 씀), DB · 어시스턴트는 「초기대응」으로 쓴다. 띄어쓰기를 빼고 비교한다."""
+    return (s or "").replace(" ", "")
+
+
 def stage_label(s: str | None) -> str:
     if not s:
         return ""
-    return s if s == "초기대응" else f"확산대응 {s}"
+    return "초기대응" if stage_key(s) == "초기대응" else f"확산대응 {s}"
 
 
 def _num(x: Any) -> str:
@@ -101,7 +106,7 @@ def s1_now(f: dict[str, Any]) -> str | None:
         for t, s in crit:
             groups.setdefault(s or "", []).append(t)
         parts = []
-        for s, ts in sorted(groups.items(), key=lambda kv: -STAGE_ORDER.get(kv[0], -1)):
+        for s, ts in sorted(groups.items(), key=lambda kv: -STAGE_ORDER.get(stage_key(kv[0]), -1)):
             if not s:
                 continue
             joined = (

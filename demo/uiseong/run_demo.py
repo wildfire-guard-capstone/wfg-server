@@ -4,7 +4,10 @@
     python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
         [--calibration fixed|blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
-        [--risk-mode mean_0_5|at_p5] [--no-risk]
+        [--risk-mode mean_0_5|at_p5] [--no-risk] [--condition C1|C2|C3] [--k-naive 5]
+
+--condition: 성능 평가 비교 조건(11/18). C3 = 우리 방식(기본), C1 = 근거 없이 LLM만, C2 = 단순 RAG(상위 --k-naive개).
+같은 규칙 판정을 쓰려면 --reuse-spread로 같은 확산 결과를 다시 쓴다.
 
 입력 폴더(input/): scenario.json(사고 · 회차 · 현장 보고) · perimeters.json(상황도 화선) · regions.json ·
 map/(지도 레이어) · elmfire_deck/(ELMFIRE 입력). 자세한 것은 input/README.md.
@@ -64,6 +67,13 @@ def main() -> None:
         "--risk-mode", default="mean_0_5", choices=["mean_0_5", "at_p5"], help="위험도 기상 시각"
     )
     ap.add_argument("--no-risk", action="store_true", help="1b 위험도를 건너뜀")
+    ap.add_argument(
+        "--condition",
+        default="C3",
+        choices=["C1", "C2", "C3"],
+        help="성능 평가 비교 조건: C1 근거 없음 · C2 단순 RAG(상위 --k-naive개) · C3 우리 방식(기본)",
+    )
+    ap.add_argument("--k-naive", type=int, default=5, help="C2(단순 RAG)에서 붙일 청크 수")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     deck_dir = a.deck or a.input / "elmfire_deck"
@@ -81,9 +91,16 @@ def main() -> None:
             workers=a.workers,
             k=a.k,
             thinking=a.thinking,
+            condition=a.condition,
+            k_naive=a.k_naive,
         )
     t_all = time.time()
     print(f"시나리오: {sc.title} · 회차 {[r.at for r in sc.rounds]}", flush=True)
+    if agent is not None:
+        print(
+            f"비교 조건: {a.condition}" + (f" (상위 {a.k_naive}개)" if a.condition == "C2" else ""),
+            flush=True,
+        )
     print(
         f"지도 자료: 마을 {len(md.villages)} · 주택 {len(md.houses[0])} · 대피소 {len(md.shelters)} · "
         f"취약시설 {len(md.vulnerable)} · 인접 시군 {md.neighbors['의성군']}",
@@ -213,6 +230,7 @@ def main() -> None:
             "risk": rk,
             "llm_input": llm_in,
             "llm_model": agent.llm.model if agent is not None else None,
+            "condition": a.condition,
             "proposal": items,
             "agent_log": logs,
             "llm_calls": calls,
@@ -235,6 +253,7 @@ def main() -> None:
                 "stage_now": ru["stage_now"],
                 "stage_p5": ru["stage_p5"],
                 "risk": risk_score,
+                "condition": a.condition,
                 "states": {i["id"]: i["state"] for i in items},
                 "n_proposals": {i["id"]: len(i.get("proposals", [])) for i in items},
                 "timing": out["timing"],

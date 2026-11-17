@@ -104,6 +104,27 @@ def retrieve(
     return out, log
 
 
+def naive(
+    evidence: Evidence, judgment: dict[str, Any], topics: list[str], k: int = 5
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """C2(단순 RAG, 성능 평가 기준선): 질의 하나 = 「항목 이름 + 다룰 주제」로 상위 k개만 찾는다.
+    규칙 엔진의 판정 근거(rule_basis · 요청 표 근거 쪽)를 붙이지 않고, 주제별 · 작성 지침 질의도 쓰지 않는다."""
+    q = " ".join([judgment.get("name", ""), *[t for t in topics if t]]).strip()
+    hits = evidence.search(q, k=k) if q else []
+    out = [h | {"origin": "검색", "query": q} for h in hits[:k]]
+    for c in out:
+        c["label"] = cite.label(c)
+    log = {
+        "condition": "C2",
+        "queries": [q] if q else [],
+        "guide_queries": [],
+        "basis": [],
+        "missing": [],
+        "found": [(h["chunk_id"], round(h.get("score") or 0.0, 4), q) for h in out],
+    }
+    return out, log
+
+
 PAGE_ID = re.compile(r"^SM-p\d{3}$")
 LABEL_IDS = {"고시 별표": ["NOTI-MOBL-t0-p1", "NOTI-MOBL-t0-p2"]}
 

@@ -65,6 +65,59 @@ SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대�
 
 [출력] JSON 하나만: {"order": "상황 → 상태 → 판단 → 제안", "situation": "<상황 문단>", "status": "<상태 문단>", "judgment": "<판단 문단 또는 빈 글>", "proposals": [{"topic": "<다룰 주제>", "category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문>"}]}"""
 
+# 11/18 성능 평가 비교 조건(기준선): C1 = 근거 없이 LLM만, C2 = 단순 RAG(상위 K 청크), C3 = 우리 방식(앵커 검색 + 검사 · 다시 쓰기).
+# 세 조건 모두 같은 규칙 엔진 값 · 판단 계산 값 · 작성 지침을 받는다. 다른 것은 근거를 쓰는 방식뿐이다.
+CONDITIONS = ("C1", "C2", "C3")
+
+# C1(근거 없음)용 지시문: 근거 발췌 · evidence · quote를 말하는 줄만 바꾼다(나머지 규칙은 C2 · C3와 같다)
+_C1_EDITS = (
+    ("입력은 두 가지입니다.", "입력은 아래와 같습니다."),
+    (
+        "- [근거 발췌]: 표준매뉴얼 · 법령 · 규정에서 찾은 원문입니다. 무엇을 해야 하는지는 여기서 찾습니다.",
+        "무엇을 해야 하는지는 산불 대응에 관한 지식으로 정합니다(근거 문서는 주지 않습니다).",
+    ),
+    ("그 주제에 맞는 조치를 근거 발췌에서 찾습니다.", "그 주제에 맞는 조치를 정합니다."),
+    (
+        "7. 조치는 근거 발췌에 적힌 것만 제안합니다. 제안마다 그 조치가 적힌 발췌 ID를 evidence에 넣고, 그 발췌에서 조치를 적은 문장을 옮긴 부분(20~80자)을 quote에 넣습니다. 발췌에 없는 조치 · 기관 · 수치는 쓰지 않습니다. 발췌의 제목 · 일반 문구를 그대로 옮기지 말고 이번 상황의 대상 · 시각에 맞게 씁니다.",
+        "7. 판정에 없는 기관 · 수치는 쓰지 않습니다. 일반 문구를 그대로 쓰지 말고 이번 상황의 대상 · 시각에 맞게 씁니다.",
+    ),
+    (
+        "근거 표기([p.79] 같은 괄호)는 쓰지 않습니다(evidence로 붙습니다).",
+        "근거 표기([p.79] 같은 괄호)는 쓰지 않습니다.",
+    ),
+    (
+        "「덧붙일 제안」은 근거 발췌에 그 조치가 있을 때만 그 주제로 하나 씁니다.",
+        "「덧붙일 제안」은 그 주제로 하나 씁니다.",
+    ),
+    (" 지침의 조치도 근거 발췌에 적힌 것만 씁니다.", ""),
+    (', "evidence": ["<발췌 ID>", ...], "quote": "<발췌 원문>"}', "}"),
+)
+# 작성 지침(guides.render)에서 근거 발췌를 말하는 구절(C1에서만 지운다)
+_C1_GUIDE_EDITS = (
+    ("(근거 발췌에 그 조치가 있을 때만, 주제마다 하나)", "(주제마다 하나)"),
+    ("근거 발췌의 안전 교육 규정", "안전 교육 규정"),
+)
+
+
+def system(condition: str = "C3") -> str:
+    """조건별 지시문. C2 · C3는 같고, C1은 근거 발췌 · evidence · quote를 말하는 줄만 바꾼다."""
+    if condition != "C1":
+        return SYSTEM
+    text = SYSTEM
+    for old, new in _C1_EDITS:
+        if old not in text:  # SYSTEM을 고치면 이 표도 같이 고쳐야 한다(시험이 잡음)
+            raise ValueError(f"C1 지시문 바꿀 곳을 찾지 못함: {old[:40]}")
+        text = text.replace(old, new)
+    return text
+
+
+def no_evidence(text: str) -> str:
+    """C1용: 작성 지침 글에서 근거 발췌를 말하는 구절을 지운다."""
+    for old, new in _C1_GUIDE_EDITS:
+        text = text.replace(old, new)
+    return text
+
+
 FACT_STEPS = ("situation", "status", "judgment")
 ORDER = "상황 → 상태 → 판단 → 제안"  # json_schema 첫 칸(고정값)
 STEP_NAMES = {"situation": "상황", "status": "상태", "judgment": "판단", "proposals": "제안"}
@@ -205,9 +258,14 @@ def messages(
     situation_line: str = "",
     value_sentences: list[str] | None = None,
     calc: list[str] | None = None,
+    condition: str = "C3",
 ) -> list[dict[str, str]]:
     """value_sentences = 판정 값 문장(situate.py, 코드가 판정으로 씀 — 상황 · 상태 · 판단에 옮겨 쓸 수 있음).
-    calc = 판단 계산 값(calc.py, 코드가 판정 값으로 계산 — 판단 · 제안에 쓸 수 있는 새 숫자)."""
+    calc = 판단 계산 값(calc.py, 코드가 판정 값으로 계산 — 판단 · 제안에 쓸 수 있는 새 숫자).
+    condition = 비교 조건. C1은 [근거 발췌]를 넣지 않고 지시문 · 지침에서 근거를 말하는 구절을 뺀다."""
+    with_evidence = condition != "C1"
+    if not with_evidence:
+        guide = no_evidence(guide)
     scope, rule = ITEM_SCOPE.get(judgment["id"], ("", ""))
     head = f"이번 항목: {judgment['id']} {judgment.get('name', '')}"
     if scope:
@@ -259,29 +317,42 @@ def messages(
         parts.append("[이 항목 작성 지침 — 이번 상황에 맞춘 것]\n" + guide)
     ex = examples_of(judgment["id"], names)
     if ex:
+        source = (
+            "이번 판정 · 판단 계산 값 · 근거 발췌" if with_evidence else "이번 판정 · 판단 계산 값"
+        )
         parts.append(
             "[문단 꼴 예시] 같은 항목을 네 단계로 쓴 예입니다(값은 N · HH:MM · ○○로 가림). 문단 나눔 · 문장 구조 · 구체성만 따르고, "
-            "값 · 이름 · 판단 · 조치는 반드시 이번 판정 · 판단 계산 값 · 근거 발췌에서 가져오십시오. 예시에만 있는 대상 · 판단은 쓰지 않습니다.\n"
+            f"값 · 이름 · 판단 · 조치는 반드시 {source}에서 가져오십시오. 예시에만 있는 대상 · 판단은 쓰지 않습니다.\n"
             + "\n\n".join(render_example(e) for e in ex)
         )
     if judgment.get("data"):
         parts.append(
             "[판정 자료 — 네 문단 아래에 목록 · 표로 함께 보입니다]\n" + "\n".join(judgment["data"])
         )
-    parts.append("[근거 발췌]\n" + evidence_text(chunks))
-    parts.append(
-        "위 판정으로 상황 · 상태 · 판단을 쓰고, 판단에서 드러난 문제를 메우는 대응 제안을 근거 발췌에서 골라 JSON으로 쓰십시오."
-    )
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
+    if with_evidence:
+        parts.append("[근거 발췌]\n" + evidence_text(chunks))
+        parts.append(
+            "위 판정으로 상황 · 상태 · 판단을 쓰고, 판단에서 드러난 문제를 메우는 대응 제안을 근거 발췌에서 골라 JSON으로 쓰십시오."
+        )
+    else:
+        parts.append(
+            "위 판정으로 상황 · 상태 · 판단을 쓰고, 판단에서 드러난 문제를 메우는 대응 제안을 JSON으로 쓰십시오."
+        )
+    return [
+        {"role": "system", "content": system(condition)},
+        {"role": "user", "content": "\n\n".join(parts)},
+    ]
 
 
 def schema(
     evidence_ids: list[str],
     topics: list[str] | None = None,
     extras: list[str] | None = None,
+    with_evidence: bool = True,
 ) -> dict[str, Any]:
     """제안 목록 json_schema. extras = None이면 예전처럼 「그 밖의 제안」 한 칸을 더 열고,
-    리스트면(작성 지침 사용) 이번 상황에 켜진 덧붙일 주제만 연다(빈 리스트 = 다룰 주제만)."""
+    리스트면(작성 지침 사용) 이번 상황에 켜진 덧붙일 주제만 연다(빈 리스트 = 다룰 주제만).
+    with_evidence = False(C1 · 근거 없음)면 제안에 evidence · quote 칸을 두지 않는다."""
     topics = list(dict.fromkeys(t for t in (topics or []) if t))
     opt = (
         ["그 밖의 제안"]
@@ -292,6 +363,22 @@ def schema(
     item_props: dict[str, Any] = {}
     if topics:
         item_props["topic"] = {"type": "string", "enum": topics + opt}
+    item_props |= {
+        "category": {"type": "string", "enum": CATEGORIES},
+        "text": {"type": "string"},
+    }
+    required = (["topic"] if topics else []) + ["category", "text"]
+    if with_evidence:
+        item_props |= {
+            "quote": {"type": "string"},
+            "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_EVIDENCE,
+                "items": {"type": "string", "enum": evidence_ids},
+            },
+        }
+        required += ["evidence", "quote"]
     return {
         "type": "object",
         "properties": {
@@ -308,20 +395,8 @@ def schema(
                 "maxItems": n_max,
                 "items": {
                     "type": "object",
-                    "properties": {
-                        **item_props,
-                        "category": {"type": "string", "enum": CATEGORIES},
-                        "text": {"type": "string"},
-                        "quote": {"type": "string"},
-                        "evidence": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": MAX_EVIDENCE,
-                            "items": {"type": "string", "enum": evidence_ids},
-                        },
-                    },
-                    "required": (["topic"] if topics else [])
-                    + ["category", "text", "evidence", "quote"],
+                    "properties": item_props,
+                    "required": required,
                 },
             },
         },

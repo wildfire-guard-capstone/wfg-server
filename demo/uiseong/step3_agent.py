@@ -70,6 +70,7 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
         iid = lg["id"]
         rag_doc = {
             "id": iid,
+            "condition": lg.get("condition"),
             "retrieval": lg.get("retrieval"),
             "evidence": lg.get("evidence"),
             "reused_from": lg.get("reused_from"),
@@ -81,6 +82,7 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
             k: lg.get(k)
             for k in (
                 "id",
+                "condition",
                 "input_key",
                 "guide",
                 "situations",

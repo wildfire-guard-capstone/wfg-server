@@ -13,6 +13,10 @@
   그 아래 규칙 엔진 섹션의 목록 · 표 · ※(판정 자료)를 소제목과 함께 둔다.
 - 기록(logs)에 항목마다 질의 · 근거 · 보낸 메시지 전문 · 받은 답 원문 · 검사 결과가 남는다(디버깅용).
 - 입력(판정 · 상황)이 직전 회차와 같은 항목은 직전 제안을 다시 쓴다(11/7).
+- 11/18 성능 평가 비교 조건(condition): C3 = 위 흐름 그대로(우리 방식). 기준선 C1 · C2는 같은 판정 · 판단 계산 값 ·
+  작성 지침을 받되 근거를 쓰는 방식만 다르다. C1 = 근거 없음(evidence · quote 칸도 없음), C2 = 단순 RAG
+  (retrieve.naive: 「항목 이름 + 주제」 질의 하나로 상위 k개). 둘 다 한 번 생성하고 검사 · 다시 쓰기 · 근거 바로잡기를
+  하지 않는다(호출 실패 · JSON 형식 오류만 다시 부름). 표기 정리(tidy)는 세 조건 모두 같다.
 """
 
 import hashlib
@@ -173,15 +177,20 @@ class Agent:
         workers: int = 4,
         k: int = 10,
         thinking: bool = False,
+        condition: str = "C3",
+        k_naive: int = 5,
     ):
+        if condition not in prompt.CONDITIONS:
+            raise ValueError(f"condition은 {prompt.CONDITIONS} 가운데 하나: {condition}")
         self.llm, self.evidence, self.workers, self.k = llm, evidence, workers, k
         self.known_names = set(known_names)
         self.thinking = thinking
+        self.condition, self.k_naive = condition, k_naive
 
-    def _call(self, msgs, ids, topics, attempt, tag, extras=None):
+    def _call(self, msgs, ids, topics, attempt, tag, extras=None, with_evidence=True):
         return self.llm.chat(
             msgs,
-            schema=prompt.schema(ids, topics, extras),
+            schema=prompt.schema(ids, topics, extras, with_evidence),
             thinking=self.thinking,
             temperature=0.2 if attempt == 1 else 0.5,  # 다시 쓸 때 같은 답이 나오지 않게
             # 11/17 네 단계: 상황 · 상태 · 판단 문단이 더해져 답이 길다(E4 · E6은 3,000토큰을 넘을 수 있음)
@@ -202,9 +211,12 @@ class Agent:
         gqs = guides.queries(item["id"], flags) if flags else []
         sit_line = situation.summary(flags) if flags else ""
         calc_lines = list(calc_lines or [])
-        key = input_key(judg, common, guide + "\n" + "\n".join(calc_lines))
+        # 기준선은 키에 조건을 넣는다(C3 키는 예전과 같게 — 웹 서비스의 직전 회차 재사용이 그대로 돈다)
+        cond_tag = "" if self.condition == "C3" else f"\n#condition={self.condition}"
+        key = input_key(judg, common, guide + "\n" + "\n".join(calc_lines) + cond_tag)
         log: dict[str, Any] = {
             "id": item["id"],
+            "condition": self.condition,
             "input_key": key,
             "attempts": [],
             "guide": guide,
@@ -219,15 +231,20 @@ class Agent:
             log["reused_from"] = prev.get("version")
             out = dict(prev["item"]) | {"state": "reused"}
             return out | {"input_key": key, "proposals": prev["proposals"]}, log
-        chunks, rlog = retrieve.retrieve(
-            self.evidence,
-            item,
-            judg,
-            common,
-            prompt.scope_of(item["id"]),
-            k=self.k,
-            guide_queries=gqs,
-        )
+        if self.condition == "C3":
+            chunks, rlog = retrieve.retrieve(
+                self.evidence,
+                item,
+                judg,
+                common,
+                prompt.scope_of(item["id"]),
+                k=self.k,
+                guide_queries=gqs,
+            )
+        elif self.condition == "C2":
+            chunks, rlog = retrieve.naive(self.evidence, judg, topics, k=self.k_naive)
+        else:  # C1: 근거 없음
+            chunks, rlog = [], {"condition": "C1", "queries": []}
         by_id = {c["chunk_id"]: c for c in chunks}
         ids = list(by_id)
         log |= {
@@ -241,6 +258,20 @@ class Agent:
         # 판정 값 문장(S1 ~ S3, 코드) — 11/17부터는 문단 앞에 붙이지 않고 상황 · 상태 · 판단을 쓸 재료로 준다
         sits = situate.sentences(item, topics)
         log["situations"] = sits
+        if self.condition != "C3":
+            msgs = prompt.messages(
+                common,
+                judg,
+                chunks,
+                self.known_names,
+                guide,
+                sit_line,
+                list(sits.values()),
+                calc_lines,
+                condition=self.condition,
+            )
+            log["messages"] = msgs
+            return self._baseline(item, topics, extras, msgs, by_id, reader, key, log)
         allowed = check.allowed_from(
             common,
             judg,
@@ -372,6 +403,74 @@ class Agent:
         )
         out = assemble(item, good, by_id, state, facts)
         return out | {"input_key": key, "proposals": good}, log
+
+    def _baseline(
+        self,
+        item: dict,
+        topics: list[str],
+        extras: list[str] | None,
+        msgs: list[dict],
+        by_id: dict[str, dict[str, Any]],
+        reader: str,
+        key: str,
+        log: dict[str, Any],
+    ) -> tuple[dict, dict]:
+        """기준선 C1 · C2: 한 번 생성한다. 검사 · 다시 쓰기 · 근거 바로잡기(fix_evidence) · 되풀이 지우기를 하지 않는다.
+        호출 실패 · JSON 형식 오류만 다시 부르고(방법이 아니라 연결 · 형식 문제), 표기 정리(tidy)는 C3와 같게 한다."""
+        ids = list(by_id)
+        with_evidence = bool(ids)  # C1(근거 없음)은 evidence · quote 칸을 두지 않는다
+        out: dict[str, Any] | None = None
+        for attempt in range(1, ATTEMPTS + 1):
+            try:  # 온도는 매번 첫 시도와 같게(다시 쓰기가 아니므로)
+                raw = self._call(
+                    msgs, ids, topics, 1, f"{item['id']}#{attempt}", extras, with_evidence
+                )
+            except Exception as e:  # 시간 초과 · 연결 끊김
+                log["attempts"].append(
+                    {"raw": "", "errors": {"-": [f"LLM 호출 실패: {type(e).__name__}: {e}"]}}
+                )
+                continue
+            try:
+                out = check.parse_out(raw)
+            except Exception as e:
+                log["attempts"].append(
+                    {"raw": raw[-3000:], "errors": {"-": [f"출력 형식 오류: {e}"]}}
+                )
+                continue
+            log["attempts"].append({"raw": raw[-6000:], "errors": {}})
+            break
+        texts = {cid: c["text"] for cid, c in by_id.items()}
+        props: list[dict[str, Any]] = []
+        for p in (out or {}).get("proposals", []):
+            text = check.strip_subject(check.tidy(p.get("text") or ""), reader)
+            if not text.strip(" ."):
+                continue
+            ev = list(dict.fromkeys(e for e in p.get("evidence") or [] if e in by_id))
+            quote = p.get("quote", "") if with_evidence else ""
+            props.append(
+                {
+                    "topic": p.get("topic"),
+                    "category": check.fix_category(text, p.get("category")),
+                    "text": text,
+                    "evidence": ev,
+                    "quote": quote,
+                    # 참고 값(점수 · 선택에 쓰지 않음): 인용문이 단 근거 원문에 있는가
+                    "quote_ok": check.quote_ok(quote, [texts.get(e, "") for e in ev])
+                    if with_evidence
+                    else None,
+                }
+            )
+        facts = {
+            step: check.tidy_fact(out.get(step) or "")
+            if out and (out.get(step) or "").strip()
+            else ""
+            for step in FACT_STEPS
+        }
+        missing = [t for t in topics if t not in {p.get("topic") for p in props}]
+        state = "failed" if not props else ("partial" if missing else "ok")
+        log |= {"dropped": [], "facts": facts, "facts_removed": []}
+        out_item = assemble(item, props, by_id, state, facts)
+        return out_item | {"input_key": key, "proposals": props}, log
 
     def run(
         self, common: dict, items: list[dict], prev: dict[str, dict] | None = None

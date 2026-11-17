@@ -155,8 +155,8 @@ def test_run_retry_then_drop():
     items, logs = agent.run(COMMON, [ITEM])
     it, lg = items[0], logs[0]
     assert len(llm.calls) == 3 and it["state"] == "partial"
-    # 11/17 배치: 첫 섹션 = 상황 · 상태(· 판단) → 제안, 그 아래 규칙 엔진 섹션의 목록
-    sec, data = it["sections"]
+    # 11/17 배치: 첫 섹션 = 상황 · 상태(· 판단) → 제안. 11/18: 주제 자리 뒤의 목록은 그 제안의 details
+    (sec,) = it["sections"]
     assert sec["title"] == "" and [b["type"] for b in sec["blocks"]] == [
         "fact",
         "fact",
@@ -167,7 +167,8 @@ def test_run_retry_then_drop():
     para = sec["blocks"][2]
     assert para["text"] == "신월리 주민 128명을 즉시 대피시키십시오 [p.75]."
     assert para["action"] == "E2-a1" and para["quote_ok"] and "situation" not in para
-    assert data["title"] == "1. 대피" and [b["type"] for b in data["blocks"]] == ["list"]
+    assert [b["type"] for b in para["details"]] == ["list"]  # 주제 자리(E2-a1) 뒤의 목록
+    assert "writer" not in para["details"][0]
     assert lg["dropped"][0]["text"].startswith("석탑리") and lg["messages"][0]["role"] == "system"
     assert "석탑리" in llm.seen[1][0][-1]["content"]  # 다시 쓰기 메시지에 문제가 적힌다
 

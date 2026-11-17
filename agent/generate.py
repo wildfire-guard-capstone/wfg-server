@@ -92,25 +92,42 @@ def assemble(
     """네 단계 + 판정 자료 → 화면용 항목(11/17).
 
     첫 섹션(제목 없음) = 상황 · 상태 · 판단 fact 블록 → 제안 paragraph 블록(다룰 주제 순서, 덧붙인 주제는 뒤).
-    그 아래 = 규칙 엔진 섹션마다 목록 · 표 · ※(판정 자료)를 그 소제목으로. 소제목이 없으면 「판정 자료」."""
+    규칙 엔진 섹션에서 주제 자리(action) 바로 뒤에 오는 목록 · 표는 그 주제의 자세한 자료라서, 그 주제의 첫 제안
+    문단에 `details`로 붙인다(11/18 사용자 요청 — S2 「진화 우선순위」 목록은 「인명 · 송전시설 · 주택 순서로 방어」
+    제안의 자세한 판, 화면에서는 문장 밑 「자세히 보기」). 붙일 제안이 없는 목록 · 표와 ※(note)는
+    그 아래 규칙 엔진 섹션마다 그 소제목으로 남긴다. 소제목이 없으면 「판정 자료」."""
     topics = judgment.topics_of(item)
     order = {t["topic"]: i for i, t in enumerate(topics)}
     tp_of = {t["topic"]: t for t in topics}
     ordered = sorted(
         enumerate(proposals), key=lambda ip: (order.get(ip[1].get("topic"), len(order)), ip[0])
     )
-    blocks = fact_blocks(facts) + [_para(p, by_id, tp_of.get(p.get("topic"))) for _, p in ordered]
+    paras = [_para(p, by_id, tp_of.get(p.get("topic"))) for _, p in ordered]
+    first_para = {}
+    for para in paras:  # 주제 자리마다 첫 제안 문단
+        if para.get("action"):
+            first_para.setdefault(para["action"], para)
+    rest_sections = []
+    for s in item.get("sections", []):
+        data, action = [], None
+        for b in s.get("blocks", []):
+            if b.get("type") == "action":
+                action = b.get("id")
+                continue
+            if b.get("type") not in judgment.DATA_BLOCKS:
+                continue
+            block = {k: v for k, v in b.items() if k != "writer"}
+            owner = first_para.get(action) if b.get("type") in ("list", "table") else None
+            if owner is not None:
+                owner.setdefault("details", []).append(block)
+            else:
+                data.append(block)
+        if data:
+            rest_sections.append({"title": s.get("title") or "판정 자료", "blocks": data})
+    blocks = fact_blocks(facts) + paras
     if not proposals:
         blocks.append({"type": "failed", "text": FAILED_TEXT})
-    sections = [{"title": "", "blocks": blocks}]
-    for s in item.get("sections", []):
-        data = [
-            {k: v for k, v in b.items() if k != "writer"}
-            for b in s.get("blocks", [])
-            if b.get("type") in judgment.DATA_BLOCKS
-        ]
-        if data:
-            sections.append({"title": s.get("title") or "판정 자료", "blocks": data})
+    sections = [{"title": "", "blocks": blocks}, *rest_sections]
     cited = dict.fromkeys(e for p in proposals for e in p["evidence"])
     return {
         "id": item["id"],

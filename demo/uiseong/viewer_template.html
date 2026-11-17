@@ -175,7 +175,10 @@ function sent(b, it) {
 function blocks(list, it) {
   // 11/17 네 단계: fact(상황 · 상태 · 판단)는 문단 하나씩, 이어진 paragraph(제안)는 한 문단으로 묶는다
   let h = "", run = [];
-  const flush = () => { if (run.length) { h += `<p class="para props">${run.map(b => sent(b, it)).join(" ")}</p>`; run = []; } };
+  // 11/18: 제안 문단에 붙은 자세한 자료(details, 목록 · 표)는 제안 문단 아래 「자세히 보기」로
+  const details = (bs) => bs.filter(b => (b.details || []).length).map(b =>
+    `<details class="detail"><summary class="small">자세히 보기 — ${esc(b.topic || "")}</summary>${b.details.map(d => block(d, it)).join("")}</details>`).join("");
+  const flush = () => { if (run.length) { h += `<p class="para props">${run.map(b => sent(b, it)).join(" ")}</p>` + details(run); run = []; } };
   for (const b of list) { if (b.type === "paragraph") { run.push(b); continue; } flush(); h += block(b, it); }
   flush();
   return h;

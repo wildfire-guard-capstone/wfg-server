@@ -136,3 +136,41 @@ def test_table_rows_in_head_order():
         ],
     }
     assert rows_of([{"blocks": [table]}]) == ["군 · 제50사단 · 헬기 · 진화 · p.79"]
+
+
+def test_detail_rows_count_as_engine_side():
+    """11/18: 제안 문단에 붙은 자세한 자료(details)의 목록 줄이 바뀌면 「변경」이다."""
+
+    def with_detail(row: str) -> Item:
+        a = item(rows=())
+        p = a.sections[0]["blocks"][0] | {"details": [{"type": "list", "rows": [{"text": row}]}]}
+        return replace(a, sections=[{"title": "", "blocks": [p]}])
+
+    assert rows_of(with_detail("**괴산리**(147명)").sections) == ["괴산리(147명)"]
+    assert change_of(with_detail("괴산리(147명)"), with_detail("괴산리(150명)")) == "CHANGED"
+
+
+def test_api_view_formats_detail_tables_like_top_level():
+    """11/18: PROP-02 응답에서 details의 표도 열 순서 배열로, 문단 구분은 영문 코드로."""
+    from app.services.proposal_view import sections_out
+
+    para = {
+        "type": "paragraph",
+        "category": "즉시",
+        "body": "회의를 여십시오.",
+        "action": "S6-a1",
+        "quote_ok": True,
+        "details": [
+            {
+                "type": "table",
+                "head": ["관련 기관"],
+                "rows": [{"group": "소방", "agency": "의성소방서"}],
+            },
+            {"type": "list", "style": "bullet", "rows": [{"text": "괴산리", "id": "v1"}]},
+        ],
+    }
+    (sec,) = sections_out([{"title": "", "blocks": [para]}])
+    out = sec["blocks"][0]
+    assert out["category"] == "IMMEDIATE" and "action" not in out and "quote_ok" not in out
+    assert out["details"][0]["rows"] == [["소방", "의성소방서", None, None, None]]
+    assert out["details"][1] == {"type": "list", "style": "bullet", "rows": [{"text": "괴산리"}]}

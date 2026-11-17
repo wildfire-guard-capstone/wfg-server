@@ -58,10 +58,16 @@ def table_row(row: dict[str, Any]) -> list[Any]:
 
 
 def rows_of(sections: Sections) -> list[str]:
-    """목록 · 표 · ※ 줄을 글 한 줄씩(굵게 표기 뺌)."""
+    """목록 · 표 · ※ 줄을 글 한 줄씩(굵게 표기 뺌).
+    제안 문단에 붙은 자세한 자료(details, 11/18)도 센다."""
     out = []
     for s in sections:
-        for b in s.get("blocks", []):
+        blocks = [
+            d
+            for b in s.get("blocks", [])
+            for d in [b, *(b.get("details") or [] if b.get("type") == "paragraph" else [])]
+        ]
+        for b in blocks:
             if b.get("type") == "list":
                 out += [r["text"].replace("**", "") for r in b["rows"]]
             elif b.get("type") == "table":

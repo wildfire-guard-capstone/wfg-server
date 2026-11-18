@@ -13,6 +13,9 @@ from typing import Any
 STAGE_NO = {"초기대응": 0, "1단계": 1, "2단계": 2, "3단계": 3}
 LARGE_HA = 100  # 대형산불 = 피해면적 100 ha 이상(시행령 제21조① · 매뉴얼 p.114)
 UPPER = ("도지사", "특별시장", "광역시장", "특별자치", "산림청장")
+# 송출 지역 변화(rules/bundles/alerts.py `_change`): new · up · same · down. 「same」도 빈 글이 아니라서
+# 예전에는 any(change)가 늘 참이었다(eval1118 회차 2 · 4 E5가 「모두 새로 진입」으로 잘못 씀, 11/18)
+ALERT_CHANGED = ("new", "up", "down")
 
 
 def _any_night(rows: list[dict[str, Any]]) -> bool:
@@ -81,7 +84,9 @@ def flags(
         "shelters_no_options": (sh.get("counts") or {}).get("no_options", 0) > 0,
         "shelters_in_range": (sh.get("counts") or {}).get("in_p8", 0) > 0,
         "other_sigungu": any(v.get("sigungu") and v.get("sigungu") != home for v in all_vil),
-        "alerts_changed": any(a.get("change") for a in (b.get("alerts") or {}).get("areas") or []),
+        "alerts_changed": any(
+            a.get("change") in ALERT_CHANGED for a in (b.get("alerts") or {}).get("areas") or []
+        ),
         "alerts_removed": bool((b.get("alerts") or {}).get("removed")),
         "requests_s6": _requests(items, "S6"),
         "requests_e6": _requests(items, "E6"),

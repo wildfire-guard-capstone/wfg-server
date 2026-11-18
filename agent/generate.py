@@ -33,6 +33,27 @@ FAILED_TEXT = (
 )
 ATTEMPTS = 3  # 처음 + 다시 쓰기 2회
 FACT_KEY = -2  # 검사 결과에서 상황 · 상태 · 판단 문제의 자리(-1 = 빠진 주제)
+# 다시 쓴 제안이 앞 시도의 같은 주제 제안보다 자료 값(이름 · 시각 · 수)을 이만큼 넘게 잃으면 한 번 더 쓰게 한다
+# (11/18 eval1118 회차 4 S3: 응원 기지 8곳 이름을 쓴 제안이 「19:20」 하나로 걸리자 다시 쓴 글이 「응원 기지에 대해」로 바뀜)
+LOST_MIN, LOST_SHARE = 3, 0.5
+
+
+def lost_values(
+    props: list[dict[str, Any]],
+    history: dict[str, set[str]],
+    allowed: tuple[set[str], set[str], str],
+    names: set[str],
+) -> dict[int, list[str]]:
+    """제안 번호 → 앞 시도의 같은 주제 제안에 있던 자료 값 가운데 이번에 사라진 것(많이 잃었을 때만)."""
+    out: dict[int, list[str]] = {}
+    for i, p in enumerate(props):
+        before = history.get(p.get("topic") or "", set())
+        if not before:
+            continue
+        gone = before - check.data_values(p.get("text") or "", allowed, names)
+        if len(gone) >= LOST_MIN and len(gone) > LOST_SHARE * len(before):
+            out[i] = sorted(gone)
+    return out
 
 
 def input_key(judg: dict[str, Any], common: dict[str, Any], guide: str = "") -> str:
@@ -199,8 +220,14 @@ class Agent:
         )
 
     def _one(
-        self, common: dict, item: dict, prev: dict | None, calc_lines: list[str] | None = None
+        self,
+        common: dict,
+        item: dict,
+        prev: dict | None,
+        calc_lines: list[str] | None = None,
+        pairs: dict[str, Any] | None = None,
     ) -> tuple[dict, dict]:
+        """pairs = check.pair_table(모든 항목): 대상 · 시각 짝 검사(C3만)."""
         judg = judgment.judgment_of(item)
         topics = [t["topic"] for t in judg["topics"] if t["topic"]]
         flags = common.get(
@@ -288,6 +315,8 @@ class Agent:
             common, judg, chunks, self.known_names, guide, sit_line, list(sits.values()), calc_lines
         )
         log["messages"] = msgs
+        names = check.data_names(judg.get("facts"))
+        history: dict[str, set[str]] = {}  # 주제 → 앞 시도들에서 그 주제 제안이 쓴 자료 값
         best: dict[str, Any] | None = None
         for attempt in range(1, ATTEMPTS + 1):
             try:
@@ -306,7 +335,14 @@ class Agent:
                 continue
             props = out["proposals"]
             facts, fact_errs, removed = check.check_facts(
-                item["id"], out, allowed, judged_text, self.known_names, now, judg["withheld"]
+                item["id"],
+                out,
+                allowed,
+                judged_text,
+                self.known_names,
+                now,
+                judg["withheld"],
+                pairs,
             )
             facts_text = " ".join(facts.values())
             for p in props:
@@ -338,7 +374,24 @@ class Agent:
                 texts,
                 topics,
                 repeated=repeated,
+                pairs=pairs,
             )
+            # 앞 시도의 같은 주제 제안이 쓴 자료 값을 많이 잃었으면 다시 쓰게만 한다(SOFT — 제안은 빼지 않음)
+            lost = lost_values(props, history, allowed, names)
+            for i, gone in lost.items():
+                bad.setdefault(i, []).append(
+                    check.SOFT
+                    + f"앞서 쓴 이름 · 값({', '.join(gone[:8])})을 지웠습니다. 검사에 걸린 값만 고치고 이 이름 · 값은 다시 쓰십시오"
+                )
+            if lost:
+                log.setdefault("values_lost", []).append(
+                    {"attempt": attempt, "lost": {str(i): g for i, g in lost.items()}}
+                )
+            for p in props:
+                if t := p.get("topic"):
+                    history[t] = history.get(t, set()) | check.data_values(
+                        p.get("text") or "", allowed, names
+                    )
             # 사실부 문제는 문장을 뺀 것(hard)이 있을 때만 다시 쓰게 한다. 「등」 · 길이 같은 문체(SOFT)만 있으면
             # 기록만 한다(회차 1 2차: SOFT만으로 시도 3번을 다 써서 오히려 새 오류가 생김)
             if check.hard(fact_errs):
@@ -347,17 +400,21 @@ class Agent:
                 log.setdefault("facts_soft", []).append(fact_errs)
             # 문체 문제(check.SOFT)는 다시 쓰게만 하고 제안 · 문장을 빼지 않는다
             good = [p for i, p in enumerate(props) if i >= 0 and not check.hard(bad.get(i, []))]
+            # 고르는 순서: 상황이 있는가 → 통과한 제안 수 → 자료 값 언급 수(11/18 — 값을 많이 잃은 시도가
+            # 이기지 않게) → 상황 · 상태 · 판단에서 뺀 문장이 적은가
+            real = [r for r in removed if not r.get("filler")]  # 군말을 뺀 것은 문제로 치지 않는다
+            shown = " ".join([*facts.values(), *(p.get("text") or "" for p in good)])
+            mentions = len(check.data_values(shown, allowed, names))
+            score = (bool(facts["situation"]), len(good), mentions, -len(real))
             log["attempts"].append(
                 {
                     "raw": raw[-6000:],
                     "errors": {str(i): e for i, e in bad.items()},
                     "facts": facts,
                     "facts_removed": removed,
+                    "mentions": mentions,
                 }
             )
-            # 고르는 순서: 상황이 있는가 → 통과한 제안 수 → 상황 · 상태 · 판단에서 뺀 문장이 적은가
-            real = [r for r in removed if not r.get("filler")]  # 군말을 뺀 것은 문제로 치지 않는다
-            score = (bool(facts["situation"]), len(good), -len(real))
             if best is None or score >= best["score"]:
                 best = {
                     "score": score,
@@ -480,10 +537,15 @@ class Agent:
         prev = prev or {}
         by_id = {it["id"]: it for it in items}
         calcs = {iid: calc.for_item(iid, by_id) for iid in by_id}
+        # 대상 · 시각 짝 검사표(C3): 마을 · 시설 · 도로 · 송전선은 여러 항목에 걸쳐 나오므로 모든 항목에서 만든다
+        base_at = str((common.get("proposal") or {}).get("base_at") or "")[-5:]
+        pairs = check.pair_table(items, base_at) if self.condition == "C3" else None
         with ThreadPoolExecutor(self.workers) as ex:
             res = list(
                 ex.map(
-                    lambda it: self._one(common, it, prev.get(it["id"]), calcs.get(it["id"])),
+                    lambda it: self._one(
+                        common, it, prev.get(it["id"]), calcs.get(it["id"]), pairs
+                    ),
                     items,
                 )
             )

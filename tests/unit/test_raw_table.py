@@ -126,3 +126,18 @@ def test_coordinates_are_wgs84_five_decimals_and_prev_round():
 
 def test_deployed_type_matches_rules():
     Deployed(helicopter={"산림청": 5})  # 투입 자원 칸 이름은 규칙 엔진과 같은 라벨을 쓴다
+
+
+def test_near_mode_range_follows_spread_not_ignition():
+    """11-19 대안: 경계 · 큰 도로 구역을 확산 범위 둘레 2 km로(추가 발화 조각이 발화점에서 멀 때)."""
+    far = NS(
+        ranges=[box(IG.x + 20_000, IG.y, IG.x + 20_300, IG.y + 300)] * 9
+    )  # 발화점에서 20 km 떨어진 범위
+    text = raw_table.build(MD(), RD, far, INPUTS, near_mode="range")
+    rows = {ln.split(" | ")[0]: ln for ln in text.splitlines() if " | 의성군 | " in ln}
+    assert rows["먼리"].count(";") >= 4 and rows["가까운리"].count(";") == 0
+    assert "확산 범위 둘레 2 km 안" in text and "가까운로" not in text
+    import pytest
+
+    with pytest.raises(ValueError):
+        raw_table.build(MD(), RD, far, INPUTS, near_mode="x")

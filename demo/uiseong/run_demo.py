@@ -81,6 +81,12 @@ def main() -> None:
         action="store_true",
         help="원자료 표에서 마을 경계를 빼고 중심 좌표만(입력 한도 대안, D5)",
     )
+    ap.add_argument(
+        "--near",
+        default="ignition",
+        choices=["ignition", "range"],
+        help="원자료 표의 마을 경계 · 큰 도로 구역: 발화점 10 km(D6) 또는 확산 범위 둘레 2 km",
+    )
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     deck_dir = a.deck or a.input / "elmfire_deck"
@@ -205,7 +211,7 @@ def main() -> None:
             raw = ""
             if a.condition in ("C1", "C2"):  # 평가 기준선: 원자료 표(11/19 재설계 6장)
                 raw = raw_table.build(
-                    md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only
+                    md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only, a.near
                 )
                 (rdir / "02_rules" / "raw_table.txt").write_text(raw, encoding="utf-8")
                 print(f"  2b 원자료 표: {len(raw):,}자", flush=True)

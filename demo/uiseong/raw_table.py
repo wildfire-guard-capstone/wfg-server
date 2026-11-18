@@ -27,6 +27,7 @@ from rules.core.stage import LABEL
 from rules.core.sun import sun_times
 
 RADIUS_M = 10_000  # D6: 마을 경계 · 큰 도로는 발화점 10 km 안만
+RANGE_BUF_M = 2_000  # 대안(near_mode="range"): 이번 회차 P8 범위 둘레 2 km 안
 TOL_SPREAD = 30  # m, 확산 범위 · 송전선 · 도로 단순화
 TOL_VILLAGE = 50  # m, 마을 경계 단순화
 DIRS = "북 북북동 북동 동북동 동 동남동 남동 남남동 남 남남서 남서 서남서 서 서북서 북서 북북서".split()
@@ -89,11 +90,23 @@ def build(
     prev_stage: int | None = None,
     prev_alerts: tuple = (),
     centers_only: bool = False,
+    near_mode: str = "ignition",
 ) -> str:
-    """회차 하나의 원자료 표 글. inputs = step2_rules.make_inputs의 요약(바람 · 현장 입력 · 투입 자원)."""
+    """회차 하나의 원자료 표 글. inputs = step2_rules.make_inputs의 요약(바람 · 현장 입력 · 투입 자원).
+
+    near_mode = 마을 경계 · 큰 도로를 넣을 구역. "ignition" = 발화점 10 km 안(D6 글 그대로),
+    "range" = 이번 회차 P0 ~ P8 범위 둘레 2 km 안(11-19 밤 대안: 확산 모형의 추가 발화 조각이 발화점에서
+    약 13.6 km라 D6 구역 밖에 불이 닿는 마을 · 도로가 생김 — 아침 확인)."""
     base = rd.base_at
     ig = md.ignition
-    near = ig.buffer(RADIUS_M)
+    if near_mode == "range":
+        near = unary_union(spread.ranges).buffer(RANGE_BUF_M)
+        zone = "이번 회차 확산 범위 둘레 2 km 안"
+    elif near_mode == "ignition":
+        near = ig.buffer(RADIUS_M)
+        zone = "발화점 10 km 안"
+    else:
+        raise ValueError(f"near_mode는 ignition 또는 range: {near_mode}")
     L: list[str] = [
         "[원자료 표 — 이번 회차의 원자료입니다. 규칙으로 미리 계산한 값(면적 · 포함 여부 · 거리 · 도달 시각 · 단계 · 지휘권자)은 없습니다. 필요한 판단은 이 자료로 하십시오]",
         "좌표: WGS84 「경도 위도」, 소수 5자리. 면은 꼭짓점을 「;」로 이어 첫 점으로 닫고, 여러 조각은 「|」로 나눕니다. 선도 꼭짓점을 「;」로 잇습니다.",
@@ -178,7 +191,7 @@ def build(
     vs = [v for v in md.villages if v.id not in md.township_ids]
     L.append(
         f"\n## 마을 {len(vs)}곳(의성군 법정리) — 이름 | 읍면 | 시군 | 인구 | 주택 수 | 중심"
-        + ("" if centers_only else " | 경계(발화점 10 km 안 마을만, 50 m 단순화)")
+        + ("" if centers_only else f" | 경계({zone} 마을만, 50 m 단순화)")
     )
     for v in vs:
         cells = [
@@ -215,9 +228,7 @@ def build(
             groups.setdefault((r.name or "(이름 없음)", r.grade), []).append(
                 r.geom.intersection(near)
             )
-    L.append(
-        f"\n## 큰 도로(발화점 10 km 안 {len(groups)}개 노선 · 등급) — 이름 | 등급 | 선(30 m 단순화)"
-    )
+    L.append(f"\n## 큰 도로({zone} {len(groups)}개 노선 · 등급) — 이름 | 등급 | 선(30 m 단순화)")
     for (name, grade), gs in sorted(groups.items()):
         merged = linemerge(unary_union(gs)) if len(gs) > 1 else gs[0]
         txt = line_text(merged, TOL_SPREAD)

@@ -80,6 +80,7 @@ def main() -> None:
     ap.add_argument("--conditions", default="C1,C2,C3")
     ap.add_argument("--rounds", default="1,2,3,4")
     ap.add_argument("--centers-only", action="store_true")
+    ap.add_argument("--near", default="ignition", choices=["ignition", "range"])
     ap.add_argument("--evidence", default="")
     ap.add_argument("--trial", type=Path)
     a = ap.parse_args()
@@ -99,7 +100,9 @@ def main() -> None:
         if rd.no not in wanted:
             continue
         llm_in = ru["llm_input"]
-        raw = raw_table.build(md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only)
+        raw = raw_table.build(
+            md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only, a.near
+        )
         for c in conds:
             common = step3_agent.with_situation(llm_in)
             if c != "C3":

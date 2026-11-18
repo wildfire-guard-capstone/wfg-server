@@ -99,11 +99,11 @@ KIND_KEYS: dict[str, list[tuple[str, str]]] = {
     "S2": [
         ("life.villages", "마을"),
         ("life.vulnerable", "취약시설"),
-        ("houses", "주택"),
+        ("houses.in_p5", "주택"),
         ("power", "송전선"),
         ("substations", "변전소"),
         ("temple", "사찰"),
-        ("heritage", "국가유산"),
+        ("heritage.items", "국가유산"),
     ],
     "E1": [("zones.burning", "위험구역"), ("zones.p5", "위험구역"), ("zones.p8", "잠재 위험구역")],
     "E2": [("immediate", "위험구역 마을"), ("pre_evac", "잠재 위험구역 마을")],

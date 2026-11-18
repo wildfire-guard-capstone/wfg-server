@@ -4,9 +4,9 @@
     python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
         [--calibration fixed|blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
-        [--risk-mode mean_0_5|at_p5] [--no-risk] [--condition C1|C2|C3] [--k-naive 5]
+        [--risk-mode mean_0_5|at_p5] [--no-risk] [--condition C1|C2|C3] [--k-naive 5] [--centers-only]
 
---condition: 성능 평가 비교 조건(11/18). C3 = 우리 방식(기본), C1 = 근거 없이 LLM만, C2 = 단순 RAG(상위 --k-naive개).
+--condition: 성능 평가 비교 조건(11/19 재설계). C3 = 제품(규칙층 + 검색, 기본), C1 = 원자료 표만, C2 = 원자료 표 + 검색(상위 --k-naive개, C3와 같은 k).
 같은 규칙 판정을 쓰려면 --reuse-spread로 같은 확산 결과를 다시 쓴다.
 
 입력 폴더(input/): scenario.json(사고 · 회차 · 현장 보고) · perimeters.json(상황도 화선) · regions.json ·
@@ -34,8 +34,8 @@ from pathlib import Path
 
 from agent.clients import LLM, Evidence
 from agent.generate import Agent
+from demo.uiseong import raw_table, step1_spread, step1b_risk, step2_rules, step3_agent
 from demo.uiseong import rounds as rounds_mod
-from demo.uiseong import step1_spread, step1b_risk, step2_rules, step3_agent
 from demo.uiseong.data import MapData, to4326
 from spread import perimeter_run as pr
 
@@ -73,7 +73,14 @@ def main() -> None:
         choices=["C1", "C2", "C3"],
         help="성능 평가 비교 조건: C1 근거 없음 · C2 단순 RAG(상위 --k-naive개) · C3 우리 방식(기본)",
     )
-    ap.add_argument("--k-naive", type=int, default=5, help="C2(단순 RAG)에서 붙일 청크 수")
+    ap.add_argument(
+        "--k-naive", type=int, default=5, help="C2 · C3 검색 청크 수(11/19: 두 조건 같음, D1)"
+    )
+    ap.add_argument(
+        "--centers-only",
+        action="store_true",
+        help="원자료 표에서 마을 경계를 빼고 중심 좌표만(입력 한도 대안, D5)",
+    )
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     deck_dir = a.deck or a.input / "elmfire_deck"
@@ -171,6 +178,10 @@ def main() -> None:
             )
             continue
         # 2. 규칙 판정
+        stage_before, alerts_before = (
+            prev_stage,
+            prev_alerts,
+        )  # 원자료 표의 「직전 제안서」(C1 · C2)
         ru = step2_rules.run_rules(md, rd, sc, sp, deck_dir, prev_stage, prev_alerts)
         (rdir / "02_rules").mkdir(parents=True, exist_ok=True)
         for name, obj in (("inputs.json", ru["inputs"]), ("llm_input.json", ru["llm_input"])):
@@ -191,7 +202,14 @@ def main() -> None:
         if agent is not None:
             n0 = len(agent.llm.calls)
             t_llm = time.time()
-            items, logs = step3_agent.run_agent(agent, llm_in, prev, only)
+            raw = ""
+            if a.condition in ("C1", "C2"):  # 평가 기준선: 원자료 표(11/19 재설계 6장)
+                raw = raw_table.build(
+                    md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only
+                )
+                (rdir / "02_rules" / "raw_table.txt").write_text(raw, encoding="utf-8")
+                print(f"  2b 원자료 표: {len(raw):,}자", flush=True)
+            items, logs = step3_agent.run_agent(agent, llm_in, prev, only, raw)
             llm_s = time.time() - t_llm
             calls = agent.llm.calls[n0:]
             step3_agent.save(items, logs, rdir)

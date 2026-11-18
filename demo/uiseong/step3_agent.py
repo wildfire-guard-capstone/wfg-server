@@ -33,10 +33,13 @@ def known_names(md: MapData) -> set[str]:
 
 
 def run_agent(
-    agent: Agent, llm_input: dict, prev: dict, only: set[str] | None = None
+    agent: Agent, llm_input: dict, prev: dict, only: set[str] | None = None, raw_table: str = ""
 ) -> tuple[list, list]:
+    """raw_table = 원자료 표 글(C1 · C2 평가 기준선만, demo/uiseong/raw_table.py)."""
     items = [it for it in llm_input["items"] if not only or it["id"] in only]
     common = with_situation(llm_input)
+    if raw_table:
+        common = common | {"raw_table": raw_table}
     return agent.run(common, items, prev)
 
 
@@ -84,11 +87,12 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
                 "id",
                 "condition",
                 "input_key",
-                "guide",
+                "kinds",
                 "situations",
                 "calc",
-                "extras",
+                "retrieval",
                 "messages",
+                "final_messages",
                 "attempts",
                 "dropped",
                 "facts",

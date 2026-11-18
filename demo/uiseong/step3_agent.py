@@ -95,6 +95,7 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
                 "facts_removed",
                 "facts_fallback",
                 "evidence_fixed",
+                "values_lost",  # 11/18: 다시 쓴 제안이 이름 · 값을 많이 잃어 한 번 더 쓰게 한 기록
                 "reused_from",
             )
         }

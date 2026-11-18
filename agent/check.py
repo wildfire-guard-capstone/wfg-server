@@ -12,6 +12,7 @@
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent.prompt import CATEGORIES, FACT_STEPS, STEP_NAMES
@@ -342,6 +343,272 @@ def value_errors(
     return errs
 
 
+# ── 대상 · 시각 짝(11/18 eval1118 원인 분석) ─────────────────────────────
+# value_errors는 시각이 자료 어딘가에 있는지만 본다. 회차 1 S2 판단 「송전선은 14:50부터 불이 닿을 수 있으므로」와
+# 제안 「… 14:50 전에 한국전력공사에 전류 차단」은 송전선 시간대가 13:50 ~ 14:50인데, 14:50이 다른 마을(도덕리 ·
+# 신안리)의 시작 시각이라 통과했다. 여기서는 구절(쉼표로 나눈 조각)에 대상(마을 · 시설 · 도로 구간 · 송전선)과 시각이
+# 함께 있으면 그 시각이 그 대상의 시간대인지 판정 facts로 본다.
+# - 「A부터 · A 이후 · A 전에 · A 전까지」 = 시작 시각이어야 한다(불이 처음 닿을 수 있는 때. 끝 시각 「전에」는 늦음)
+# - 「A ~ B」 「A부터 B까지」 = 그 대상의 (시작, 끝) 짝. 대상이 여럿인 구절은 모아 쓴 범위(가장 이른 시작 ~ 가장
+#   늦은 끝)도 받는다(「용기리 · 도덕리 · 석탑리 순으로 13:50부터 17:50 사이」). A = B는 받지 않는다
+# - 그 밖(「A까지 · A에 · A 무렵 · (A)」) = 시작이나 끝 가운데 하나
+# - 구절 = 연결 어미 뒤 쉼표(「닿았고,」 「있으며,」)나 시각 앞 쉼표로 나눈 조각(「양곡리, 용기리」 같은 나열은 나누지 않음).
+#   구절에 대상이 여럿이면 그 가운데 하나와 맞으면 통과(오탐을 줄인다). 대상 시각이 아닌 시각(기상 · 기준 시각)과
+#   일몰 · 풍속 · 면적 · 「현재」 · 문자 발송 옆 시각은 보지 않는다. 이미 닿은(「지금」) 대상은 기준 시각을 시작으로 친다.
+_T = re.compile(r"^\d{1,2}:\d{2}$")
+_START_KEYS = ("from",)
+_END_KEYS = ("until", "by", "arrival", "p8_until")
+_OTHER_KEYS = (
+    "alert_sent_at",
+    "alert_at",
+    "at",
+)  # 대피 문자 발송 시각처럼 그 대상에 붙은 다른 시각
+_SEGMENT = re.compile(r"[가-힣]+리(?:\s?~\s?[가-힣]+리)?\s?구간")  # 송전선 · 도로의 구간(마을 아님)
+_RANGE = re.compile(
+    r"(?<!\d)(\d{1,2}:\d{2})\s?(?:~|부터|에서)\s?(\d{1,2}:\d{2})(?!\d)(?:\s?(?:까지|사이))?"
+)
+_START_AFTER = re.compile(r"^\)?\s?(?:부터|이후|전에|전까지|이전|전(?![후가-힣]))")
+_PAIR_SKIP = re.compile(
+    r"일몰|일출|해가|해 질|풍속|풍향|바람|강풍|m/s|\d\s?ha|면적|현재|기준|문자|발송|보고"
+)
+_CLAUSE = re.compile(r"(?<=[고며서데만나])\s*[,，]\s+|[,，;]\s+(?=\d{1,2}:\d{2})")
+
+
+def _min(t: str) -> int:
+    h, m = t.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _hm(t: str) -> str:
+    h, m = t.split(":")
+    return f"{int(h)}:{m}"
+
+
+@dataclass
+class Target:
+    """판정 facts의 대상 하나와 그 시각들(시작 · 끝 · 그 밖)."""
+
+    kind: str  # village · facility · road · power
+    label: str
+    aliases: list[str]
+    section: str = ""  # 도로 구간(「용기리」 「용기리~도덕리」)
+    starts: set[str] = field(default_factory=set)
+    ends: set[str] = field(default_factory=set)
+    others: set[str] = field(default_factory=set)
+
+    def span(self) -> str:
+        s = " · ".join(sorted(self.starts)) or "?"
+        e = " · ".join(sorted(self.ends)) or "?"
+        return f"{s} ~ {e}"
+
+
+def _short_names(name: str) -> list[str]:
+    """시설 이름의 짧은 꼴: 「의료법인성제의료재단 성제요양병원」 → 「성제요양병원」."""
+    out = [name]
+    tail = name.split()[-1]
+    if tail != name and len(tail) >= 3:
+        out.append(tail)
+    bare = re.sub(r"^의료법인\S*?재단\s?", "", name)
+    if bare != name and len(bare) >= 3:
+        out.append(bare)
+    return list(dict.fromkeys(out))
+
+
+def pair_table(items: list[dict[str, Any]], now_at: str = "") -> dict[str, Any]:
+    """모든 항목의 판정 facts에서 대상 → 시각표를 만든다(항목끼리 같은 대상은 합친다).
+    now_at = 기준 시각(HH:MM): 이미 닿은(「지금」) 대상의 시작으로 친다."""
+    by_key: dict[tuple, Target] = {}
+    now = _hm(now_at) if now_at and _T.match(now_at) else ""
+
+    def times(d: dict[str, Any], keys: tuple[str, ...]) -> set[str]:
+        return {_hm(d[k]) for k in keys if isinstance(d.get(k), str) and _T.match(d[k])}
+
+    def walk(x: Any) -> None:
+        if isinstance(x, list):
+            for v in x:
+                walk(v)
+            return
+        if not isinstance(x, dict):
+            return
+        st, en, ot = times(x, _START_KEYS), times(x, _END_KEYS), times(x, _OTHER_KEYS)
+        if now and any(x.get(k) == "지금" for k in _END_KEYS):
+            st.add(now)
+        if st or en or ot:
+            name = x.get("name") if isinstance(x.get("name"), str) else ""
+            sec = ""
+            if isinstance(x.get("road"), str):
+                sec = x.get("section") or ""
+                key = ("road", x["road"], sec)
+                label, aliases = (f"{x['road']} {sec} 구간" if sec else x["road"]), [x["road"]]
+            elif "송전선" in name:
+                key, label, aliases = ("power", name), name, ["송전선"]
+            elif name and (x.get("kind") or not name.endswith("리")):
+                key, label, aliases = ("facility", name), name, _short_names(name)
+            elif name or isinstance(x.get("village"), str):
+                v = name or x["village"]
+                key, label, aliases = ("village", v), v, [v]
+            else:
+                key = None
+            if key:
+                t = by_key.setdefault(key, Target(key[0], label, aliases, sec))
+                t.starts |= st
+                t.ends |= en
+                t.others |= ot
+        for v in x.values():
+            walk(v)
+
+    for it in items:
+        walk(it.get("facts"))
+    targets = list(by_key.values())
+    return {
+        "targets": targets,
+        "times": {t for x in targets for t in x.starts | x.ends},
+    }
+
+
+def _targets_in(clause: str, table: dict[str, Any]) -> list[Target]:
+    found: list[Target] = []
+    roads = [t for t in table["targets"] if t.kind == "road" and t.aliases[0] in clause]
+    for road in {t.aliases[0] for t in roads}:
+        secs = [t for t in roads if t.aliases[0] == road]
+        hit = [t for t in secs if t.section and t.section in clause]
+        found += hit or secs
+    for m in _SEGMENT.finditer(clause):  # 도로 이름 없이 「용기리~도덕리 구간」만 쓴 것
+        place = re.sub(r"\s", "", m.group(0)).removesuffix("구간")
+        found += [
+            t
+            for t in table["targets"]
+            if t.kind == "road" and re.sub(r"\s", "", t.section) == place and t not in found
+        ]
+    if "송전선" in clause:
+        found += [t for t in table["targets"] if t.kind == "power"]
+    rest = _SEGMENT.sub(" ", clause)  # 「괴산리~신안리 구간」은 마을이 아니라 송전선 · 도로의 구간
+    for t in table["targets"]:
+        if t.kind == "facility" and any(a in rest for a in t.aliases):
+            found.append(t)
+    villages = [  # 판정의 마을 이름과만 맞댄다(「용기리는」 「방하리(」 모두)
+        t
+        for t in table["targets"]
+        if t.kind == "village" and re.search(rf"(?<![가-힣]){re.escape(t.label)}", rest)
+    ]
+    found += villages
+    names = {t.label for t in villages}
+    if "도로" in clause:  # 「용기리 · 도덕리 일대의 도로」: 그 마을 구간의 도로도 대상
+        found += [
+            t
+            for t in table["targets"]
+            if t.kind == "road" and set(t.section.split("~")) & names and t not in found
+        ]
+    return found
+
+
+def _time_ok(t: str, start: bool, ts: list[Target]) -> bool:
+    for x in ts:
+        if t in x.others:
+            return True
+        if start and (t in x.starts or (not x.starts and t in x.ends)):
+            return True
+        if not start and (t in x.starts or t in x.ends):
+            return True
+    return False
+
+
+def pair_errors(text: str, table: dict[str, Any] | None) -> list[str]:
+    """문장 속 대상과 시각의 짝이 판정 facts와 맞는지(맞지 않으면 문제 목록)."""
+    if not table or not table.get("targets"):
+        return []
+    errs: list[str] = []
+    for sent in split_sentences(text):
+        for clause in _CLAUSE.split(sent):
+            if not TIME.search(clause):
+                continue
+            ts = _targets_in(clause, table)
+            if not ts:
+                continue
+            labels = " · ".join(dict.fromkeys(x.label for x in ts))
+            spans = " / ".join(f"{x.label} {x.span()}" for x in ts[:3])
+            used: list[tuple[int, int]] = []
+            all_starts = {t for x in ts for t in x.starts}
+            all_ends = {t for x in ts for t in x.ends}
+            for m in _RANGE.finditer(clause):
+                used.append(m.span())
+                a, b = _hm(m.group(1)), _hm(m.group(2))
+                near = clause[max(0, m.start() - 8) : m.end() + 16]
+                if _PAIR_SKIP.search(near) or not ({a, b} & table["times"]):
+                    continue
+                one = any(a in x.starts and b in x.ends for x in ts)
+                spread = (
+                    len(ts) > 1 and a in all_starts and b in all_ends and _min(a) < _min(b)
+                )  # 여러 대상을 모아 쓴 범위
+                if not (one or spread):
+                    errs.append(
+                        f"「{labels}」의 시간대가 아닙니다({m.group(1)}~{m.group(2)}) — 판정: {spans}. 시각은 판정에서 그 대상과 함께 적힌 짝대로 쓰십시오"
+                    )
+            for m in TIME.finditer(clause):
+                if any(s <= m.start() < e for s, e in used):
+                    continue
+                t = _hm(m.group(0))
+                near = clause[max(0, m.start() - 8) : m.end() + 16]
+                if _PAIR_SKIP.search(near) or t not in table["times"]:
+                    continue
+                start = bool(_START_AFTER.match(clause[m.end() :]))
+                if not _time_ok(t, start, ts):
+                    how = (
+                        "시작 시각이 아닙니다(「부터 · 전에」에는 불이 처음 닿을 수 있는 시각)"
+                        if start
+                        else "시각이 아닙니다"
+                    )
+                    errs.append(
+                        f"{m.group(0)}은 「{labels}」의 {how} — 판정: {spans}. 시각은 판정에서 그 대상과 함께 적힌 짝대로 쓰십시오"
+                    )
+    return list(dict.fromkeys(errs))
+
+
+# ── 자료 값 언급(11/18: 다시 쓰기가 이름 · 값을 지운 시도를 고르지 않게) ──────────
+_NAME_KEYS = {
+    "name",
+    "names",
+    "orgs",
+    "leaders",
+    "villages",
+    "village",
+    "road",
+    "section",
+    "emd",
+    "sigungu",
+    "title",
+    "agency",
+}
+
+
+def data_names(facts: Any) -> set[str]:
+    """판정 facts의 이름 값(마을 · 시설 · 기관 · 기지 · 도로 …)과 시설 이름의 짧은 꼴."""
+    out: set[str] = set()
+
+    def walk(x: Any, key: str = "") -> None:
+        if isinstance(x, dict):
+            for k, v in x.items():
+                walk(v, k)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v, key)
+        elif isinstance(x, str) and key in _NAME_KEYS and re.search(r"[가-힣]", x) and len(x) >= 2:
+            out.update(_short_names(x))
+
+    walk(facts)
+    return out
+
+
+def data_values(text: str, allowed: tuple[set[str], set[str], str], names: set[str]) -> set[str]:
+    """글에 쓴 자료 값: 판정 · 계산 값 · 근거에 있는 시각 · 숫자와 판정 facts의 이름(겹치는 이름은 긴 것만)."""
+    times_ok, nums_ok, _ = allowed
+    t, n = _nums(text)
+    out = {f"시각 {x}" for x in t & times_ok} | {f"수 {x}" for x in n & nums_ok}
+    hit = [w for w in names if w in text]
+    out |= {w for w in hit if not any(w != o and w in o for o in hit)}
+    return out
+
+
 def check_one(
     item_id: str,
     p: dict[str, Any],
@@ -352,6 +619,7 @@ def check_one(
     reader: str,
     texts: dict[str, str] | None = None,
     strict_quote: bool = False,
+    pairs: dict[str, Any] | None = None,
 ) -> list[str]:
     """제안 하나의 문제 목록(빈 목록 = 통과). judged_text = 판정 · 상황 글(이름 · 단계 출처),
     texts = 근거 청크 ID → 원문(있으면 quote가 단 근거에서 왔는지 본다). 11/17: quote는 근거 원문과만 대조한다
@@ -381,6 +649,7 @@ def check_one(
     if len(text) > max_len:
         errs.append(f"너무 깁니다({len(text)}자, {max_len}자 이하)")
     errs += value_errors(text, allowed, judged_text, known_names)
+    errs += pair_errors(text, pairs)
     if neg := NEG.search(text):
         errs.append(f"「{neg.group(0)}」처럼 할 일을 부정하지 말고 할 일을 쓰십시오")
     if reader and re.search(rf"{re.escape(reader)}(?:에게|께)", text):
@@ -525,10 +794,12 @@ def fact_sentence_errors(
     judged_text: str,
     known_names: set[str],
     now: tuple[str, Any] | None = None,
+    pairs: dict[str, Any] | None = None,
 ) -> list[str]:
     """상황 · 상태 · 판단의 문장 하나: 값 오류 · 할 일(「~하십시오」) · 영어 · 내부 코드 · 지어낸 산불 이름 ·
-    지금 면적과 다른 시각의 짝이 있으면 그 문장을 뺀다. now = (기준 시각 HH:MM, 지금 면적 ha)."""
+    지금 면적과 다른 시각의 짝 · 대상과 다른 시각의 짝(pairs)이 있으면 그 문장을 뺀다. now = (기준 시각 HH:MM, 지금 면적 ha)."""
     errs = value_errors(s, allowed, judged_text, known_names)
+    errs += pair_errors(s, pairs)
     # 산불 이름은 사실부에만: 제안에는 「중앙산불방지대책본부」 같은 기관 이름이 섞인다
     errs += fire_name_errors(s, allowed[2])
     errs += language_errors(s)
@@ -549,6 +820,7 @@ def check_facts(
     known_names: set[str],
     now: tuple[str, Any] | None = None,
     withheld: list[str] | None = None,
+    pairs: dict[str, Any] | None = None,
 ) -> tuple[dict[str, str], list[str], list[dict[str, Any]]]:
     """상황 · 상태 · 판단 검사 → (고친 글, 문제 목록, 뺀 문장). now = (기준 시각, 지금 면적),
     withheld = 판정의 「판단하지 않은 것」(주면 그와 상관없는 「정보 없음」 군말을 뺀다 — 문제 목록에는 안 넣음).
@@ -574,7 +846,7 @@ def check_facts(
                     }
                 )
                 continue
-            e = fact_sentence_errors(item_id, s, allowed, judged_text, known_names, now)
+            e = fact_sentence_errors(item_id, s, allowed, judged_text, known_names, now, pairs)
             if e:
                 errs.append(f"{name} 문장 「{s[:60]}」: {'; '.join(e)}")
                 removed.append({"step": step, "text": s, "errors": e})
@@ -611,10 +883,12 @@ def check(
     strict_quote: bool = False,
     situations: dict[str, str] | None = None,
     repeated: set[int] | None = None,
+    pairs: dict[str, Any] | None = None,
 ) -> dict[int, list[str]]:
     """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다.
     situations = {주제: 코드가 쓴 상황 문장}: 그 주제의 text(할 일 문장)는 상황 문장에 없는 숫자를 쓸 수 없다.
-    repeated = drop_repeated가 찾은, 모든 문장이 앞 제안과 겹친 제안 번호."""
+    repeated = drop_repeated가 찾은, 모든 문장이 앞 제안과 겹친 제안 번호.
+    pairs = pair_table(항목들): 대상과 시각의 짝 검사(C3)."""
     out: dict[int, list[str]] = {}
     seen: list[str] = []
     shapes: list[str] = []
@@ -622,7 +896,16 @@ def check(
     situations = situations or {}
     for i, p in enumerate(proposals):
         errs = check_one(
-            item_id, p, evidence_ids, allowed, judged_text, known_names, reader, texts, strict_quote
+            item_id,
+            p,
+            evidence_ids,
+            allowed,
+            judged_text,
+            known_names,
+            reader,
+            texts,
+            strict_quote,
+            pairs,
         )
         text = p.get("text") or ""
         if (sit := situations.get(p.get("topic") or "")) is not None:

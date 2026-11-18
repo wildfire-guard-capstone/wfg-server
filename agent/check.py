@@ -229,6 +229,34 @@ def tidy(text: str) -> str:
     return text
 
 
+# 제안 문장에 넣은 근거 설명(11-19 evalv3 파일럿: 제안 55개 중 46개가 「근거는 SM-p092-s01의 "…"입니다」 같은 문장을
+# 넣었다 — 인용 품질을 부풀리고, 인용문이 E5 「문안」 금칙에 걸려 항목이 통째로 실패함). 근거는 evidence · quote 칸이 맡는다.
+CHUNK_ID = re.compile(
+    r"\s*(?<![A-Za-z0-9])(?:SM|LAW|DEC|REG|NOTI|RULE|ACT|ORD|MAN|GUIDE)-[A-Za-z0-9]+(?:-[A-Za-z0-9_]+)*(?:의|에\s?따라|에 따르면|에서|에)?"
+)
+CITE_SENT = re.compile(
+    r"^(?:이\s?|위\s?)?(?:근거|출처)(?:는|로는|:|가|입니다|로)|근거\s?발췌|발췌\s?ID"
+)
+
+
+def drop_cite_sentences(text: str) -> tuple[str, list[str]]:
+    """제안 글에서 근거 설명 문장(할 일 없이 근거만 말하는 것)을 지우고, 할 일 문장 안의 청크 ID는 지운다.
+    → (고친 글, 지운 문장). 할 일 문장이 하나도 남지 않으면 그대로 둔다(검사가 다시 쓰게 함). 세 조건 공통(표기 정리)."""
+    out, removed = [], []
+    for s in split_sentences(text):
+        if "십시오" not in s and (CITE_SENT.search(s) or CHUNK_ID.search(s)):
+            removed.append(s)
+            continue
+        s2 = CHUNK_ID.sub(" ", s)
+        s2 = re.sub(r"\s{2,}", " ", s2).strip()
+        if s2 != s:
+            removed.append(s)
+        out.append(s2)
+    if not any("십시오" in s for s in out):
+        return text, []
+    return " ".join(out), removed
+
+
 ACTION_DECL = re.compile(
     r"((?:대피|배치|요청|지시|투입|설정|지정|발령|통보|보고|확인|안내|전파|협의|인계|점검|준비|실시|이송|통제)\s?)(합니다|시킵니다)([.!]|\s*$)"
 )

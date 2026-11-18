@@ -411,6 +411,29 @@ def test_input_key_differs_by_condition_and_reuse_works():
     assert generate.input_key(msgs) == generate.input_key(list(msgs))
 
 
+def test_cite_sentences_dropped_in_all_conditions():
+    """11-19 evalv3 파일럿: 제안 글에 「근거는 SM-p092-s01의 "…"」를 넣은 것(55개 중 46개)을 세 조건 모두 지운다."""
+    from agent import check
+
+    text = '신월리 주민을 즉시 대피시키십시오. 근거는 SM-p075-s01의 "위험구역 주민은 바로 대피시킨다"입니다.'
+    out, removed = check.drop_cite_sentences(text)
+    assert out == "신월리 주민을 즉시 대피시키십시오." and len(removed) == 1
+    out2, _ = check.drop_cite_sentences("SM-p079-s01에 따라 노약자를 먼저 대피시키십시오.")
+    assert out2 == "노약자를 먼저 대피시키십시오."
+    only, removed3 = check.drop_cite_sentences(
+        "근거는 p.75입니다."
+    )  # 할 일이 없으면 그대로(검사가 다시 쓰게)
+    assert only == "근거는 p.75입니다." and removed3 == []
+    for cond in prompt.CONDITIONS:
+        p = {"category": "즉시", "text": text}
+        if cond != "C1":
+            p |= {"evidence": ["SM-p075-s01"], "quote": "위험구역 주민은 바로 대피"}
+        it, lg, _, _ = run(cond, [[p]], facts=FACTS | {"status": "신월리 주민은 128명입니다."})
+        para = next(b for b in it["sections"][0]["blocks"] if b["type"] == "paragraph")
+        assert "근거는" not in para["body"] and lg["cite_removed"]
+    assert all("text에는 넣지 않습니다" in prompt.system(c) for c in prompt.CONDITIONS)
+
+
 def test_invalid_condition():
     with pytest.raises(ValueError):
         Agent(FakeLLM([]), RecEvidence(), set(), condition="C4")

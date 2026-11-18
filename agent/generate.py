@@ -349,6 +349,10 @@ class Agent:
             for p in props:
                 p.pop("topic", None)
                 p["text"] = check.strip_subject(check.tidy(p.get("text") or ""), reader)
+                # 제안 글에 넣은 근거 설명(「근거는 SM-p092-s01의 …」)은 지운다(표기 정리, 세 조건 공통)
+                p["text"], cites = check.drop_cite_sentences(p["text"])
+                if cites:
+                    log.setdefault("cite_removed", []).append(cites)
                 # 제안에 상황 · 상태 · 판단을 되풀이한 문장(할 일이 없고 사실부와 겹침)은 지운다(세 조건)
                 p["text"] = check.drop_restated(p["text"], facts_text)
                 p["category"] = check.fix_category(p["text"], p.get("category"))

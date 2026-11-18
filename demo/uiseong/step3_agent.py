@@ -99,6 +99,9 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
                 "facts_removed",
                 "facts_fallback",
                 "evidence_fixed",
+                "cite_removed",  # 11/19: 제안 글에서 지운 근거 설명 문장
+                "repeated_removed",  # 앞 제안과 겹쳐 지운 문장
+                "facts_soft",
                 "values_lost",  # 11/18: 다시 쓴 제안이 이름 · 값을 많이 잃어 한 번 더 쓰게 한 기록
                 "reused_from",
             )

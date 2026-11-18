@@ -205,6 +205,9 @@ class Sources:
     results: list[ToolResult]
     facts: list[tuple[str, Fact]]  # (D번호, Fact)
     chunks: list[dict[str, Any]]  # 번호 = 위치 + 1
+    hits: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # 도구 호출별 조각 순위 · 점수(평가용 trace)
 
 
 def gather(box: ToolBox, plan: Plan) -> Sources:
@@ -219,7 +222,21 @@ def gather(box: ToolBox, plan: Plan) -> Sources:
     uniq: dict[str, dict[str, Any]] = {}
     for c in judged + searched:  # 판정 · 인용 근거 먼저, 검색은 뒤에(넘치면 검색부터 잘림)
         uniq.setdefault(c["chunk_id"], c)
-    return Sources(results, facts, list(uniq.values())[:MAX_CHUNKS])
+    # 평가(RAGAS 근거 정밀도@K)용: 조각이 어느 도구 호출의 몇 위에서 왔는지 · 근거 서버 점수(검색만). 자르기 전 전부
+    hits = [
+        {
+            "call": i,
+            "tool": r.name,
+            "arg": plan.calls[i][1],
+            "rank": j,
+            "chunk_id": c["chunk_id"],
+            "origin": c.get("origin"),
+            "score": c.get("score"),
+        }
+        for i, r in enumerate(results)
+        for j, c in enumerate(r.chunks, 1)
+    ]
+    return Sources(results, facts, list(uniq.values())[:MAX_CHUNKS], hits)
 
 
 # ── 답 쓰기 ─────────────────────────────────────────────────────────
@@ -409,7 +426,15 @@ def answer(
             "no_evidence": False,
         }
     src = gather(box, plan)
-    trace["sources"] = {"facts": len(src.facts), "chunks": [c["chunk_id"] for c in src.chunks]}
+    trace["sources"] = {
+        "facts": len(src.facts),
+        "chunks": [c["chunk_id"] for c in src.chunks],
+        # 평가(RAGAS 근거 확보율)용: 답 쓰기에 준 상황 값 전부(D번호 순)와 조각 순위(검색 호출별 rank · score)
+        "fact_list": [
+            {"d": d, "ref": f.ref, "label": f.label, "value": f.value} for d, f in src.facts
+        ],
+        "hits": src.hits,
+    }
     if llm is not None:
         sentences, insufficient = write_llm(llm, ctx, text, item_code, src, trace)
         if not sentences and (src.facts or src.chunks):

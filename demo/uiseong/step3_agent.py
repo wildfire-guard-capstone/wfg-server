@@ -41,7 +41,7 @@ def run_agent(
 
 
 def with_situation(llm_input: dict) -> dict:
-    """common + 상황 깃발(agent/situation.py): 항목별 작성 지침(agent/guides.py)을 고르는 데 쓴다.
+    """common + 상황 깃발(agent/situation.py): C3 규칙층 구획의 「이번 상황」 한 줄에 쓴다.
     깃발은 항목 전체(E2 대피 현황 · S6/E6 요청 건수)로 만든다(--items로 몇 항목만 돌려도 같은 깃발)."""
     f = flags(llm_input["bundles"], llm_input["items"], llm_input["common"])
     return llm_input["common"] | {"situation": f}

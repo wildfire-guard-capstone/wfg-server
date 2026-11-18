@@ -2,7 +2,8 @@
 """상황 판정 → 항목별 작성 지침을 고를 깃발(11/8 저녁 사용자 결정).
 
 규칙 엔진 bundles에서 이번 회차의 상황을 읽어 참 · 거짓 깃발로 만든다. 깃발은 판정이지 제안이 아니다 —
-어떤 지침 줄을 프롬프트에 넣을지(guides.py)만 정하고, 문장 내용과 근거는 LLM이 근거 검색으로 정한다.
+11/19 재설계로 작성 지침(guides.py)은 없앴다. 지금은 C3(제품) 규칙층 구획의 「이번 상황」 한 줄(summary)과
+지금 면적 검사에만 쓴다. 문장 내용과 근거는 LLM이 근거 검색으로 정한다.
 
     f = flags(bundles, items, common)
     f["large_now"], f["escalation"], f["commander_change"], f["night_arrival"], …

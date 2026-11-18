@@ -4,7 +4,8 @@
 검사는 「무엇을 제안할지」를 정하지 않는다. 판정 값 · 근거 · 권한 · 형식만 본다.
 - 근거: evidence가 비었거나 이번에 준 청크가 아니면 실패(근거 없는 제안은 보이지 않는다, 근거 부족 규칙)
 - 판정: 숫자 · 시각 · 한글 수사 · 단계 · 이름이 판정 · 상황 · 근거 발췌에 있는지
-- 권한: 읽는 사람이 시 · 도지사 이상이면 대피명령 · 위험구역 설정을 시장 · 군수에게 지시하는 꼴로
+- (11/19 없앰) 권한 검사: 다시 쓰기 지시로 법 지식(대피명령은 시장 · 군수)을 넣으므로 P1에 따라 뺐다
+- 11/19 조건별(재설계 표 8): 형식 · 말투 · 되풀이 = 세 조건, 근거 ID = C2 · C3, 값 · 짝 대조 = C3만
 - 형식: 「~하십시오」, 할 일 부정 금지, 「등」 금지, 3문장 · 320자 이하, 같은 제안 반복 금지,
   항목별 금칙(11/7: 추가 투입 대수 · 헬기 운항 단정 · 대피소 배정 인원 · 대피 경로 · 문자 문안)
 실패하면 1회 다시 쓰게 하고(generate.py), 그래도 실패한 제안만 뺀다.
@@ -620,10 +621,15 @@ def check_one(
     texts: dict[str, str] | None = None,
     strict_quote: bool = False,
     pairs: dict[str, Any] | None = None,
+    condition: str = "C3",
 ) -> list[str]:
     """제안 하나의 문제 목록(빈 목록 = 통과). judged_text = 판정 · 상황 글(이름 · 단계 출처),
     texts = 근거 청크 ID → 원문(있으면 quote가 단 근거에서 왔는지 본다). 11/17: quote는 근거 원문과만 대조한다
-    (판정 자료와도 대조하면 매뉴얼에 없는 병원 이름 목록이 인용문으로 통과했다 — E6, 회차 1)."""
+    (판정 자료와도 대조하면 매뉴얼에 없는 병원 이름 목록이 인용문으로 통과했다 — E6, 회차 1).
+
+    11/19 재설계 표 8(condition): 말투 검사(「하십시오」 · 「등」 · 부정문 · 길이 · 문장 수 · 방법 빠진 말 ·
+    항목 금칙) = 세 조건 공통, 근거 ID 검사 = C2 · C3(RAG 쪽), 값 대조(value_errors · 짝 · 「최소 N동」) = C3만
+    (규칙층의 일부). 권한 검사(대피명령은 시장 · 군수)는 다시 쓰기 지시로 법 지식을 넣으므로 없앴다(P1)."""
     errs: list[str] = []
     text = p.get("text") or ""
     if p.get("category") not in CATEGORIES:
@@ -631,7 +637,9 @@ def check_one(
     if not text.strip():
         return errs + ["제안이 비었습니다"]
     ev = [e for e in p.get("evidence") or [] if e in evidence_ids]
-    if not ev:
+    if condition == "C1":
+        pass
+    elif not ev:
         errs.append(
             "근거 발췌 ID(evidence)가 없습니다. 근거 발췌에 적힌 조치만 쓰고 그 ID를 다십시오"
         )
@@ -648,8 +656,9 @@ def check_one(
     max_len = MAX_LEN_OF.get(item_id, MAX_LEN)
     if len(text) > max_len:
         errs.append(f"너무 깁니다({len(text)}자, {max_len}자 이하)")
-    errs += value_errors(text, allowed, judged_text, known_names)
-    errs += pair_errors(text, pairs)
+    if condition == "C3":
+        errs += value_errors(text, allowed, judged_text, known_names)
+        errs += pair_errors(text, pairs)
     if neg := NEG.search(text):
         errs.append(f"「{neg.group(0)}」처럼 할 일을 부정하지 말고 할 일을 쓰십시오")
     if reader and re.search(rf"{re.escape(reader)}(?:에게|께)", text):
@@ -662,21 +671,14 @@ def check_one(
     if (n := len(re.findall(r"(?:다|오)\s*\.(?:\s|$)", text))) > most:
         errs.append(f"{most}문장 이하로 쓰십시오({n}문장)")
     if m := VAGUE.search(text):
-        errs.append(
-            f"「{m.group(0)}」처럼 방법이 빠진 말 대신 근거 발췌의 구체적인 방법을 쓰십시오"
-        )
-    if UPPER.search(reader) and re.search(
-        r"대피명령을\s*(?:내리|발령)|위험구역(?:으로|을)\s*설정|대피\s*권고를", text
-    ):
-        if not re.search(r"(?:군수|시장|구청장)에게", text):
-            errs.append(
-                "대피명령 · 대피 권고 · 위험구역 설정은 시장 · 군수 권한입니다. 「○○군수에게 …하도록 지시하십시오」로 쓰십시오"
-            )
-    mins = set(re.findall(r"최소 (\d[\d,]*)동", judged_text))
-    for m in re.finditer(r"(\d[\d,]*)동", text):
-        if m.group(1) in mins and text[max(0, m.start() - 3) : m.start()] != "최소 ":
-            errs.append(f"주택 · 시설 동수는 「최소 {m.group(1)}동」으로 쓰십시오")
-            break
+        how = "구체적인 방법" if condition == "C1" else "근거 발췌의 구체적인 방법"
+        errs.append(f"「{m.group(0)}」처럼 방법이 빠진 말 대신 {how}을 쓰십시오")
+    if condition == "C3":
+        mins = set(re.findall(r"최소 (\d[\d,]*)동", judged_text))
+        for m in re.finditer(r"(\d[\d,]*)동", text):
+            if m.group(1) in mins and text[max(0, m.start() - 3) : m.start()] != "최소 ":
+                errs.append(f"주택 · 시설 동수는 「최소 {m.group(1)}동」으로 쓰십시오")
+                break
     if m := ETC.search(text):
         near = text[max(0, m.start() - 12) : m.end() + 3].strip()
         errs.append(f"「{near}」의 「등」을 지우십시오(대상을 모두 쓰거나 빼십시오)")
@@ -884,11 +886,12 @@ def check(
     situations: dict[str, str] | None = None,
     repeated: set[int] | None = None,
     pairs: dict[str, Any] | None = None,
+    condition: str = "C3",
 ) -> dict[int, list[str]]:
-    """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다.
+    """→ {제안 번호: 문제 목록}(문제 있는 것만). 같은 제안 반복도 잡는다(되풀이 검사 — 세 조건 공통).
     situations = {주제: 코드가 쓴 상황 문장}: 그 주제의 text(할 일 문장)는 상황 문장에 없는 숫자를 쓸 수 없다.
     repeated = drop_repeated가 찾은, 모든 문장이 앞 제안과 겹친 제안 번호.
-    pairs = pair_table(항목들): 대상과 시각의 짝 검사(C3)."""
+    pairs = pair_table(항목들): 대상과 시각의 짝 검사(C3). condition = 비교 조건(check_one 참고)."""
     out: dict[int, list[str]] = {}
     seen: list[str] = []
     shapes: list[str] = []
@@ -906,6 +909,7 @@ def check(
             texts,
             strict_quote,
             pairs,
+            condition,
         )
         text = p.get("text") or ""
         if (sit := situations.get(p.get("topic") or "")) is not None:

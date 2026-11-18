@@ -245,17 +245,9 @@ def test_action_check_and_restated_sentence():
     )  # 할 일이 없으면 그대로(검사가 다시 쓰게)
 
 
-def test_examples_are_four_step_and_masked():
-    """11/17: 문단 꼴 예시 = 문서 9장 회차 1의 네 단계(값 가림). 항목 12개 모두 있다."""
-    assert set(prompt.STYLE) == {f"S{i}" for i in range(1, 7)} | {f"E{i}" for i in range(1, 7)}
-    ex = prompt.examples_of("S1")[0]
-    assert set(ex) == {"situation", "status", "judgment", "proposals"}
-    assert ex["situation"].startswith("HH:MM 현재 피해면적은 N ha입니다.")
-    assert "산림청장과 협의하십시오" in ex["proposals"]
-    assert not any(ch.isdigit() for v in ex.values() for ch in v)  # 숫자는 모두 가림
-    assert "judgment" not in prompt.examples_of("S6")[0]  # 판단할 거리가 없는 예
-    e6 = prompt.examples_of("E6")[0]["proposals"]
-    assert "보건복지부" not in e6 and "이송을 HH:MM 전에 시작하도록 지시하십시오" in e6
+def test_style_examples_removed():
+    """11/19 재설계 D4: 의성 회차 1 문단 꼴 예시를 없앴다(P1 — 매뉴얼 각주 · 조치가 든 모범 답)."""
+    assert not hasattr(prompt, "STYLE") and not hasattr(prompt, "examples_of")
 
 
 ITEM = S1_R1 | {

@@ -4,14 +4,12 @@
 1) 송출 지역 변화 깃발: change 「same」은 바뀐 것이 아니다
 2) 대상 · 시각 짝 검사(C3): 「송전선은 14:50부터」(송전선 13:50 ~ 14:50)를 잡는다
 3) 다시 쓰기가 이름 · 값을 지우지 않게: 지시문 · 값 잃음 SOFT · 고르기 점수
-4) 문단 꼴 예시의 값 자리(일몰(HH:MM) · 나머지 ○○리)
-5) S2 「진화 우선순위에 따라 아래 순서로」
-6) E2 대피 완료 확인 지침 = p.76 (3) 마을순찰대 등 인적 수단
+(4 ~ 6 예시 · 지침 시험은 11/19 재설계로 예시 · 지침을 없애며 뺐다)
 """
 
 import json
 
-from agent import check, guides, judgment, prompt, situation
+from agent import check, situation
 from agent.generate import Agent, lost_values
 
 
@@ -26,25 +24,6 @@ def test_alerts_changed_only_for_new_up_down():
     assert _alert_flags(["same", "new"])["alerts_changed"]  # 회차 3: 의성읍 · 단촌면 새로
     assert _alert_flags(["up"])["alerts_changed"] and _alert_flags(["down"])["alerts_changed"]
     assert not _alert_flags([])["alerts_changed"]
-
-
-def test_e5_guide_when_areas_unchanged():
-    same = guides.render("E5", _alert_flags(["same", "same"]) | {"night_arrival": False})
-    assert "송출 지역이 바뀌었으므로" not in same
-    assert "「새로 들어왔다 · 단계가 바뀌었다」고 쓰지 않습니다" in same
-    new = guides.render("E5", _alert_flags(["new"]) | {"night_arrival": False})
-    assert "송출 지역이 바뀌었으므로" in new and "쓰지 않습니다." in new
-    assert "새로 들어왔다" not in new
-    # 빠진 지역만 있으면(바뀐 것) 「그대로」 줄은 켜지지 않는다
-    gone = guides.render(
-        "E5", _alert_flags(["same"], [{"emd": "옥산면", "prev": "set"}]) | {"night_arrival": False}
-    )
-    assert "새로 들어왔다" not in gone and "해제를 알리라" in gone
-
-
-def test_e5_example_does_not_say_all_new():
-    ex = prompt.examples_of("E5")[0]
-    assert "새로 들어왔습니다" not in ex["status"]
 
 
 # ── 2) 대상 · 시각 짝 ──────────────────────────────────────────────
@@ -305,12 +284,14 @@ def test_rewrite_keeping_names_is_not_retried():
 def test_lost_values_threshold():
     allowed = check.allowed_from(S3)
     names = check.data_names(S3["facts"])
-    hist = {"투입 자원": check.data_values(NAMED, allowed, names)}
-    assert lost_values(
-        [{"topic": "투입 자원", "text": "응원 기지에 요청하십시오."}], hist, allowed, names
-    ) == {0: ["안동시 임차헬기", "예천군 임차헬기", "울진산림항공관리소"]}
+    hist = {
+        "0": check.data_values(NAMED, allowed, names)
+    }  # 11/19: 주제 대신 제안 자리(번호)로 맞댐
+    assert lost_values([{"text": "응원 기지에 요청하십시오."}], hist, allowed, names) == {
+        0: ["안동시 임차헬기", "예천군 임차헬기", "울진산림항공관리소"]
+    }
     two = "울진산림항공관리소 · 안동시 임차헬기에 요청하십시오."  # 하나만 잃음 → 다시 쓰지 않음
-    assert lost_values([{"topic": "투입 자원", "text": two}], hist, allowed, names) == {}
+    assert lost_values([{"text": two}], hist, allowed, names) == {}
 
 
 def test_data_values_counts_names_times_numbers():
@@ -320,64 +301,4 @@ def test_data_values_counts_names_times_numbers():
     assert vals == {"시각 13:50", "수 245", "수 13", "양곡리", "성제요양병원"}
 
 
-# ── 4) 5) 6) 예시 · 지침 ──────────────────────────────────────────
-def test_examples_have_value_slots():
-    s4 = prompt.examples_of("S4")[0]["proposals"]
-    assert "일몰(HH:MM) 전까지는" in s4 and "일몰(HH:MM) 뒤에는" in s4 and "일몰 전까지" not in s4
-    assert "나머지 ○○리 · ○○리 · ○○리 주민의" in prompt.examples_of("E4")[0]["proposals"]
-    assert "넘으면(HH:MM 무렵) 즉시" in prompt.examples_of("S1")[0]["proposals"]
-    assert prompt.STYLE["S4"][0]["raw"]["proposals"].startswith("일몰(18:38) 전까지는")
-
-
-def test_s2_points_to_list_below():
-    flags = _alert_flags([]) | {
-        "power_lines": False,
-        "heritage": False,
-        "large_now": False,
-        "large_soon": False,
-    }
-    text = guides.render("S2", flags)
-    assert "「진화 우선순위에 따라 아래 순서로 방어하고 보호하십시오」로 씁니다" in text
-    assert "범주 이름을 늘어놓지 않습니다" in text
-    assert prompt.examples_of("S2")[0]["proposals"].startswith(
-        "진화 우선순위에 따라 아래 순서로 방어하고 보호하십시오."
-    )
-
-
-def test_e2_unconfirmed_guide_points_to_p76_human_means():
-    flags = _alert_flags([]) | {
-        "evac_unconfirmed": True,
-        "night_arrival": False,
-        "other_sigungu": False,
-    }
-    (line,) = [ln for ln in guides.active("E2", flags) if ln.when == "evac_unconfirmed"]
-    assert "이장 · 마을순찰대 같은 인적 수단" in line.text and "대피가 끝났는지 확인" in line.text
-    assert "근거에서 찾아" not in line.text  # 코퍼스에 없는 문장을 찾으라고 하지 않는다
-    assert line.q.startswith("상황이 긴급한 경우 마을순찰대 등 인적 수단")
-    text = guides.render("E2", flags)
-    assert "근거는 발췌의 「마을순찰대" in text
-    assert "근거는 발췌의" not in prompt.no_evidence(text)  # C1(근거 없음)에서는 근거 구절을 지운다
-    off = guides.render("E2", flags | {"evac_unconfirmed": False})
-    assert "마을순찰대" not in off
-
-
-def test_c1_prompt_has_no_evidence_phrase_for_e2():
-    item = {
-        "id": "E2",
-        "name": "대피",
-        "finding": "",
-        "facts": {},
-        "withheld": [],
-        "do_not_state": [],
-        "sections": [],
-    }
-    flags = _alert_flags([]) | {
-        "evac_unconfirmed": True,
-        "night_arrival": False,
-        "other_sigungu": False,
-    }
-    j = judgment.judgment_of(item)
-    user = prompt.messages(
-        {"reader": "의성군수"}, j, [], guide=guides.render("E2", flags), condition="C1"
-    )[1]["content"]
-    assert "인적 수단" in user and "근거는 발췌의" not in user
+# 4) 5) 6) 문단 꼴 예시 · 작성 지침 시험은 11/19 재설계(P1 · D4)로 예시 · 지침을 없애며 뺐다.

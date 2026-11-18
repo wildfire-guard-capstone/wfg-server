@@ -65,8 +65,13 @@ class FakeEvidence:
     def fetch(self, ids):
         return [CHUNKS[i] for i in ids if i in CHUNKS], [i for i in ids if i not in CHUNKS]
 
+    def __init__(self):
+        self.queries = []
+
     def search(self, query, k=2, exclude=()):
-        return [CHUNKS["SM-p079-s01"] | {"score": 0.7}]
+        # 11/19 재설계: 판정 근거 가져오기(fetch)를 쓰지 않으므로 검색이 두 청크를 순위대로 돌려준다
+        self.queries.append(query)
+        return [CHUNKS["SM-p075-s01"] | {"score": 0.8}, CHUNKS["SM-p079-s01"] | {"score": 0.7}][:k]
 
 
 FACTS = {  # 11/17 네 단계: 상황 · 상태 · 판단(판정 값만)
@@ -111,17 +116,20 @@ def test_judgment_drops_slots_and_fixed_sentence():
     assert [b["type"] for b in judgment.data_blocks(ITEM)] == ["list"]
 
 
-def test_prompt_has_topics_not_slot_evidence():
+def test_prompt_c3_has_rule_layer_not_topics_or_examples():
     j = judgment.judgment_of(ITEM)
     user = prompt.messages(
-        COMMON, j, [CHUNKS["SM-p075-s01"] | {"label": "p.75", "origin": "판정 근거"}]
+        COMMON,
+        j,
+        [CHUNKS["SM-p075-s01"] | {"label": "p.75", "origin": "검색"}],
+        kinds=judgment.kinds(j),
     )[1]["content"]
-    # 다룰 주제는 넘기고(v3 꼴), action ID · 주제별 근거 쪽(anchors)은 넘기지 않는다
-    assert "위험구역 마을 대피" in user and "E2-a1" not in user and "anchors" not in user
-    assert "■ SM-p075-s01" in user and "[문단 꼴 예시]" in user
-    # 네 단계 예시(값 가림): situation · status · judgment · proposals 줄이 보인다
-    assert "situation: " in user and "proposals(제안 text를 이어 붙인 것): " in user
-    full = prompt.schema(["SM-p075-s01"], ["위험구역 마을 대피"])
+    # 11/19 재설계: 다룰 주제 · action ID · 주제별 근거 쪽(anchors) · 문단 꼴 예시는 넘기지 않는다(D2 · D4)
+    assert "E2-a1" not in user and "anchors" not in user and "[다룰 주제" not in user
+    assert "[문단 꼴 예시]" not in user and "[이 항목 작성 지침" not in user
+    assert "[규칙층 판정" in user and "- 지금: 신월리(128명)" in user and "■ SM-p075-s01" in user
+    assert "판정된 대상: 위험구역 마을" in user
+    full = prompt.schema(["SM-p075-s01"])
     assert list(full["properties"]) == ["order", "situation", "status", "judgment", "proposals"]
     assert full["properties"]["order"]["enum"] == [
         prompt.ORDER
@@ -129,8 +137,8 @@ def test_prompt_has_topics_not_slot_evidence():
     assert full["required"] == ["order", "situation", "status", "judgment", "proposals"]
     props = full["properties"]["proposals"]
     assert props["items"]["properties"]["evidence"]["items"]["enum"] == ["SM-p075-s01"]
-    assert props["items"]["properties"]["topic"]["enum"] == ["위험구역 마을 대피", "그 밖의 제안"]
-    assert props["minItems"] == 1 and props["maxItems"] == 2
+    assert "topic" not in props["items"]["properties"]  # 주제로 묶지 않고 제안 1 ~ 5개
+    assert props["minItems"] == 1 and props["maxItems"] == prompt.MAX_PROPOSALS
 
 
 def test_cite_labels():
@@ -155,8 +163,9 @@ def test_run_retry_then_drop():
     items, logs = agent.run(COMMON, [ITEM])
     it, lg = items[0], logs[0]
     assert len(llm.calls) == 3 and it["state"] == "partial"
-    # 11/17 배치: 첫 섹션 = 상황 · 상태(· 판단) → 제안. 11/18: 주제 자리 뒤의 목록은 그 제안의 details
-    (sec,) = it["sections"]
+    # 11/17 배치: 첫 섹션 = 상황 · 상태(· 판단) → 제안. 11/19: 주제가 없어 목록은 그 아래 규칙 엔진 섹션에 남는다
+    sec, data_sec = it["sections"]
+    assert data_sec["title"] == "1. 대피" and [b["type"] for b in data_sec["blocks"]] == ["list"]
     assert sec["title"] == "" and [b["type"] for b in sec["blocks"]] == [
         "fact",
         "fact",
@@ -166,9 +175,8 @@ def test_run_retry_then_drop():
     assert sec["blocks"][0]["text"] == "신월리에는 이미 불이 닿았습니다."
     para = sec["blocks"][2]
     assert para["text"] == "신월리 주민 128명을 즉시 대피시키십시오 [p.75]."
-    assert para["action"] == "E2-a1" and para["quote_ok"] and "situation" not in para
-    assert [b["type"] for b in para["details"]] == ["list"]  # 주제 자리(E2-a1) 뒤의 목록
-    assert "writer" not in para["details"][0]
+    assert para["quote_ok"] and "situation" not in para and "details" not in para
+    assert "writer" not in data_sec["blocks"][0]
     assert lg["dropped"][0]["text"].startswith("석탑리") and lg["messages"][0]["role"] == "system"
     assert "석탑리" in llm.seen[1][0][-1]["content"]  # 다시 쓰기 메시지에 문제가 적힌다
 

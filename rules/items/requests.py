@@ -117,9 +117,7 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
         ask = f"소관 시설 거주자 이송: {ask}" if ask else ""
         if later:
             ask += (". " if ask else "") + f"{_join(r['name'] for r in later)} 이송 준비"
-        health = (
-            f"{b['agencies']['home']}보건소장" if b["agencies"].get("home") else "관할 보건소장"
-        )
+        health = f"{home['health']}장" if home.get("health") else "관할 보건소장"
         rows.append(_row("보건", health, ask, "E3", "p.22·89"))  # p.22 현장응급의료소 · p.89 이송
         medical = b["agencies"]["emergency_medical"]
         if now and medical:  # 2

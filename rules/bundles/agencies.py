@@ -21,7 +21,8 @@ def _station(ctx: Context, places, kind: str, sigungu: str) -> str | None:
 def agencies_bundle(ctx: Context) -> dict[str, Any]:
     """`agencies`: 담당 관서 이름.
 
-    1. P8이 걸친 시군구마다 관할 소방서 · 경찰서(그 시군구 안 서 단위 관서). 없으면 null + 이유
+    1. P8이 걸친 시군구마다 관할 소방서 · 경찰서(그 시군구 안 서 단위 관서). 없으면 null + 이유.
+       보건소는 지도 자료에 없어 시군구 이름으로 쓴다(「의성군」 → 「의성군보건소」)
     2. 관할 시 · 도 = 현재 화선이 가장 많이 걸친 시 · 도
     3. 응급의료기관 = 응급실이 있는 병원 중 산불 시군과 인접 시군에 있는 곳(D 대신 동원 범위가 이미
        쓰는 이웃), 발화지에서 가까운 순. 지정 등급은 자료가 없어 모름
@@ -35,7 +36,7 @@ def agencies_bundle(ctx: Context) -> dict[str, Any]:
         for label, value in (("소방서", fire), ("경찰서", police)):
             if value is None:
                 unknown.append({"field": f"{sg} 관할 {label}", "reason": "자료 없음"})
-        rows.append({"sigungu": sg, "fire": fire, "police": police})
+        rows.append({"sigungu": sg, "fire": fire, "police": police, "health": f"{sg}보건소"})
     home, sido = ctx.span_now.sigungu[0], ctx.span_now.sido[0]
     near = {home, *inp.neighbors.get(home, [])}
     medical = sorted(

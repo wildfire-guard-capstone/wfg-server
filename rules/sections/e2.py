@@ -60,7 +60,10 @@ def e2_sections(e2: dict[str, Any]) -> dict[str, Any]:
     if f["immediate"]:  # 1
         blocks.append(
             _action(
-                1, "위험구역 마을 대피", ["immediate", "immediate_total"], ["p.75", "p.76", "p.79"]
+                1,
+                "위험구역 마을 대피",
+                ["immediate", "immediate_total", "jurisdiction"],
+                ["p.75", "p.76", "p.79"],
             )
         )
         blocks.append(

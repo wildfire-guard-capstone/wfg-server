@@ -15,7 +15,7 @@ OSM = "© OpenStreetMap contributors"
 class Layer:
     id: str
     name: str
-    entity_type: str  # admin_area · village · facility · map_feature
+    entity_type: str  # admin_area · village · admin_village · facility · map_feature
     source: str
     reference_date: str | None = None
     attribution: str | None = None
@@ -41,6 +41,14 @@ LAYERS: dict[str, Layer] = {
             "법정리",
             "village",
             "주소정보누리집 법정리 경계 · 행안부 리별 주민등록 인구",
+        ),
+        Layer(
+            "admin_villages",
+            "행정리 마을 구역",
+            "admin_village",
+            "의성군 이장 정수 조례(행정리) · 회관: 카카오맵 · 구글맵 검색, 행안부, 국토교통부"
+            " GIS건물통합정보 · 구역: 회관에서 시작하는 K-평균(주택)",
+            "2026-11-19",
         ),
         Layer(
             "facilities",
@@ -70,6 +78,11 @@ _COLUMNS = {
         "id, code, admin_area_id, name, population, population_month, pop65_est, pop0_14_est,"
         " houses_est, ST_AsGeoJSON(ST_Transform(label_point, 4326), 6) AS label_point",
     ),
+    "admin_village": (
+        "admin_villages",
+        "id, village_id, name, seq, hall_name, hall_source, houses_est, attrs,"
+        " ST_AsGeoJSON(ST_Transform(hall_point, 4326), 6) AS hall_point",
+    ),
     "facility": (
         "facilities",
         "id, type::text AS type, subtype, name, capacity, capacity_unit, address, phone,"
@@ -98,7 +111,7 @@ def _props(row: dict[str, Any]) -> dict[str, Any]:
             v = str(v)
         elif k in _ID_LISTS:
             v = [str(x) for x in v]
-        elif k == "label_point" and v is not None:
+        elif k in ("label_point", "hall_point") and v is not None:
             v = json.loads(v)
         elif k == "population_month" and v is not None:
             v = v.isoformat()

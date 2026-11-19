@@ -4,7 +4,17 @@ from datetime import date
 from typing import Any
 
 from geoalchemy2 import WKBElement
-from sqlalchemy import CHAR, BigInteger, Date, ForeignKey, Integer, String, text
+from sqlalchemy import (
+    CHAR,
+    BigInteger,
+    Date,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +56,29 @@ class Village(Base):
     pop65_est: Mapped[int | None] = mapped_column(Integer)
     pop0_14_est: Mapped[int | None] = mapped_column(Integer)
     houses_est: Mapped[int | None] = mapped_column(Integer)
+
+
+class AdminVillage(Base):
+    """행정리 1개(조례 「이장 정수」 별표) — 법정리 하나를 이장 여럿이 나눠 맡는 단위.
+
+    법정리(villages)는 그대로 두고 그 아래에 둔다. 경계는 공개 자료에 없어, 행정리 회관에서 시작하는
+    K-평균으로 법정리 안 주택을 나눈 마을 구역(geom)을 회관을 모두 찾은 법정리에만 둔다.
+    법정리가 나뉘지 않으면 행정리 = 법정리라 회관 · 구역이 없다.
+    """
+
+    __tablename__ = "admin_villages"
+    __table_args__ = (UniqueConstraint("village_id", "name"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    village_id: Mapped[int] = mapped_column(ForeignKey("villages.id"))
+    name: Mapped[str] = mapped_column(String(50))
+    seq: Mapped[int] = mapped_column(SmallInteger)  # 별표 순서(1리 · 2리 …)
+    hall_name: Mapped[str | None] = mapped_column(String(100))
+    hall_point: Mapped[WKBElement | None] = geometry("POINT", nullable=True)
+    hall_source: Mapped[str | None] = mapped_column(String(200))
+    geom: Mapped[WKBElement | None] = geometry("MULTIPOLYGON", nullable=True)  # 마을 구역
+    houses_est: Mapped[int | None] = mapped_column(Integer)  # 구역 안 주택 동수
+    attrs: Mapped[dict[str, Any]] = jsonb_object()  # 구역 만든 방법 · 회관 대조 메모
 
 
 class Facility(Base):

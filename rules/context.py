@@ -26,7 +26,14 @@ from rules.core.stage import (
     stage_trend,
 )
 from rules.core.sun import is_night, next_events
-from rules.core.villages import Reached, Village, VillageField, reached_villages
+from rules.core.villages import (
+    AdminVillage,
+    EdgeOnly,
+    Reached,
+    Village,
+    VillageField,
+    reached_villages,
+)
 from rules.core.weather import WindSummary, summarize_wind
 
 NEXT_P = 5  # 「곧」을 보는 끝 구간: 곧 지휘권자 · 지휘권자가 올라가는 구간(단계 판정의 P5와 같음)
@@ -68,6 +75,7 @@ class Inputs:
     neighbors: Mapping[str, Sequence[str]] = field(default_factory=dict)  # 시군구 → 인접 시군구
     forest_dept: Mapping[str, str] = field(default_factory=dict)  # 시군구 → 산림 부서 이름
     prev_alerts: Sequence[tuple[str, str, str]] = ()  # 직전 제안서 (시군구, 읍면, go · set)
+    admin_villages: Sequence[AdminVillage] = ()  # 행정리(회관 · 마을 구역). 없으면 법정리로만 판정
 
 
 @dataclass(frozen=True)
@@ -94,7 +102,8 @@ class Context:
     commander_now: Commander  # 지금 지휘권자(현재 화선 기준)
     commander_next: Commander  # 곧 지휘권자(P5 기준)
     commander_steps: list[tuple[int, Commander]]  # 지휘권자가 올라가는 구간(P1 ~ P5)과 그 지휘권자
-    villages: list[Reached]  # P8 안 마을과 처음 닿는 P
+    villages: list[Reached]  # P8 안 마을(주택이 닿는 리)과 처음 닿는 P
+    edge_villages: list[EdgeOnly]  # 경계만 걸친 리(8시간 안 주택 없음)
     site: tuple[float, float]
     field: Mapping[int, VillageField]
     sunset: datetime  # 0시 뒤 처음 오는 일몰
@@ -126,8 +135,9 @@ def build_context(inputs: Inputs) -> Context:
     6. 걸친 지역(R-02): 현재 화선 · P5
     7. 지휘권자(L-01): P0 ~ P5 범위마다 면적 · 걸친 지역으로 정한다. 지금 = P0, 곧 = P5,
        올라가는 구간 = 앞보다 높은 지휘권자가 처음 나오는 Pn(넘어가는 시각, 11/19 평가 R1)
-    8. P8 안 마을과 처음 닿는 P(R-02 · R-04). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류
-       (자료는 나중에 채운다 — 빠진 채로 판정하지 않음, 11/7)
+    8. P8 안 마을과 처음 닿는 P(R-02 · R-04). 리 안 주택이 처음 닿는 P로 정하고, 경계만 걸친 리는
+       따로 둔다(11/19 평가 R3). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류(자료는 나중에
+       채운다 — 빠진 채로 판정하지 않음, 11/7). 행정리 자료가 없으면 법정리로만 판정(오류 아님)
     9. 0시 뒤 처음 오는 일몰 · 일출, 0시가 밤인가(C-05 · J2)
     """
     p0, p5 = inputs.ranges[0], inputs.ranges[5]
@@ -147,6 +157,7 @@ def build_context(inputs: Inputs) -> Context:
     spans = [span_now] + [_span(inputs.ranges[p], inputs) for p in range(1, NEXT_P)] + [span_p5]
     by_p = [decide_commander(areas[p], s.sido, s.sigungu) for p, s in enumerate(spans)]
     commander_now, commander_next = by_p[0], by_p[NEXT_P]
+    villages, edges = _villages(inputs)  # 8
     return Context(
         base_at=inputs.base_at,
         generated_at=inputs.generated_at,
@@ -164,7 +175,8 @@ def build_context(inputs: Inputs) -> Context:
         commander_now=commander_now,
         commander_next=commander_next,
         commander_steps=handover_steps(by_p),
-        villages=_villages(inputs),  # 8
+        villages=villages,
+        edge_villages=edges,
         site=inputs.site,
         field=inputs.field,
         sunset=sunset,  # 9
@@ -174,10 +186,10 @@ def build_context(inputs: Inputs) -> Context:
     )
 
 
-def _villages(inputs: Inputs) -> list[Reached]:
-    """P8 안 마을. P8이 걸친 시 · 군 · 구 중 리 자료가 없는 곳이 있으면 오류."""
+def _villages(inputs: Inputs) -> tuple[list[Reached], list[EdgeOnly]]:
+    """P8 안 마을 · 경계만 걸친 마을. P8이 걸친 시 · 군 · 구 중 리 자료가 없는 곳이 있으면 오류."""
     have = {v.sigungu for v in inputs.villages}
     missing = [sg for sg in spanned(inputs.ranges[8], inputs.sigungu) if sg not in have]
     if missing:
         raise ValueError(f"리 자료가 없는 시 · 군 · 구: {missing}")
-    return reached_villages(inputs.villages, inputs.ranges)
+    return reached_villages(inputs.villages, inputs.ranges, inputs.houses, inputs.admin_villages)

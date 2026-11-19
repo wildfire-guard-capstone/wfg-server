@@ -8,7 +8,9 @@
 
 from typing import Any
 
+from rules.items.e1 import village_targets
 from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
+from rules.items.names import admin_names
 
 ID, NAME = "S2", "진화 우선지역·보호대상·시설 보호"
 COUNT_BASIS = "주용도 확인 건물 기준, 최소값"
@@ -19,6 +21,7 @@ def _life_village(r: dict[str, Any]) -> dict[str, Any]:
     f = r["field"]
     return {
         "name": r["name"],
+        "admin_villages": admin_names(r),
         "emd": r["emd"],
         "zone": r["zone"],
         "from": r["from"],
@@ -128,7 +131,7 @@ def s2_input(bundles: dict[str, Any]) -> dict[str, Any]:
 
 
 def _targets(v: dict[str, Any], vul: dict[str, Any], pr: dict[str, Any]) -> list[str]:
-    ids = [f"village:{r['id']}" for r in v["burning"] + v["p5"]]
+    ids = village_targets(v, ("burning", "p5"))
     ids += [f"facility:{r['id']}" for r in vul["in_range"] if r["zone"] != "p8"]
     ids += [f"map_feature:power_line:{r['id']}" for r in pr["power_lines"]]
     ids += [

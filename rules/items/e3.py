@@ -15,6 +15,7 @@ from rules.items.jurisdiction import (
     jurisdiction,
     jurisdiction_unknown,
 )
+from rules.items.names import village_label
 
 ID, NAME = "E3", "취약시설 조치"
 
@@ -25,6 +26,7 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
         "name": r["name"],
         "kind": r["kind"],
         "village": r["village"],
+        "admin_village": r["admin_village"],
         "emd": r["emd"],
         "zone": r["zone"],
         "from": r["from"],
@@ -71,7 +73,14 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _list(rows: list[dict[str, Any]]) -> str:
-    return " · ".join(f"{r['name']}({r['kind'] or '종류 모름'}, {r['village']})" for r in rows)
+    return " · ".join(f"{r['name']}({r['kind'] or '종류 모름'}, {place(r)})" for r in rows)
+
+
+def place(r: dict[str, Any]) -> str:
+    """시설이 든 마을: 「신안리(신안1리)」 · 리를 모르면 「리 모름」."""
+    if not r["village"]:
+        return "리 모름"
+    return village_label(r["village"], [r["admin_village"]] if r["admin_village"] else None)
 
 
 def _finding(

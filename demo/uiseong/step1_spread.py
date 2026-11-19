@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from shapely import wkt
-from shapely.geometry import mapping
+from shapely.geometry import Point, mapping
 from shapely.ops import unary_union
 
 from demo.uiseong.data import MapData, to4326
@@ -38,7 +38,50 @@ CAL_METHODS = {
 # 11/9 최종 설정(로컬 실험과 같게): 안계면 양곡리 산83-19 발화(14:39)를 점 발화로 함께 넣는다.
 # 원좌표(1085314.9, 1824259.3)가 농경지 칸이라 20 m 서쪽 초지 칸. 회차 시각이 14:39 뒤면 시작 1분 뒤에 붙는다.
 # 괴산리 화선과 따로 타므로 P1 ~ P8에 양곡리 쪽 면적이 함께 들어간다(검증 지표는 괴산리 쪽만 보면 같다).
+# 11/19 평가 R3(사용자 결정 D4): 회차 시각에 아직 안 난 불은 넣지 않는다(그 시각에는 알 수 없음).
+# 의성 1 ~ 4보(12:50 ~ 14:20)는 모두 14:39 전이라 양곡리 발화가 빠진다.
 EXTRA_IGNITIONS = ((1085295.0, 1824255.0, 13140.0),)
+FUTURE_PART_M = 60.0  # 발화점에서 이 거리 안의 범위 조각 = 그 발화로 탄 조각(30 m 칸 두 개)
+
+
+def known_ignitions(rd: Round) -> tuple[tuple[float, float, float], ...]:
+    """회차 시각까지 이미 난 추가 발화만(D4)."""
+    return tuple(ig for ig in EXTRA_IGNITIONS if ig[2] <= rd.t_s)
+
+
+def drop_future_ignitions(sp: "SpreadResult", rd: Round) -> "SpreadResult":
+    """앞 결과를 다시 쓸 때(--reuse-spread): 회차 시각 뒤 발화로 탄 범위 조각을 지운다(D4).
+
+    따로 탄 불은 본 화선과 붙지 않아, 그 발화를 빼고 ELMFIRE를 다시 돌린 것과 같다.
+    1. 회차 시각 뒤 추가 발화마다 그 점에서 `FUTURE_PART_M` 안의 조각을 P0 ~ P8에서 지운다
+    2. 면적을 다시 세고, 지운 발화를 `extra.future_ignitions_dropped`에 남긴다
+    """
+    future = [ig for ig in EXTRA_IGNITIONS if ig[2] > rd.t_s]
+    if not future:
+        return sp
+    pts = [Point(x, y) for x, y, _ in future]
+
+    def keep(g):
+        parts = [
+            q for q in getattr(g, "geoms", [g]) if all(q.distance(pt) > FUTURE_PART_M for pt in pts)
+        ]
+        return unary_union(parts) if parts else g
+
+    ranges = [keep(g) for g in sp.ranges]  # 1
+    dropped = [
+        {"x": x, "y": y, "t_s": t, "ha_p8": round((sp.ranges[-1].area - ranges[-1].area) / 1e4, 1)}
+        for x, y, t in future
+    ]
+    return SpreadResult(  # 2
+        calibration=sp.calibration,
+        ranges=ranges,
+        observed=sp.observed,
+        areas_ha=[round(g.area / 1e4, 1) for g in ranges],
+        validation=sp.validation,
+        wall_s=sp.wall_s,
+        reused_from=sp.reused_from,
+        extra={**sp.extra, "future_ignitions_dropped": dropped},
+    )
 
 
 @dataclass
@@ -154,7 +197,7 @@ def run_spread(
     observed = md.report(rd.at)
     t0 = time.time()
     cal = calibrate_round(deck, work, md, rd, sc, method)
-    res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"], EXTRA_IGNITIONS)
+    res = pr.run(deck, work / f"fcst_{rd.no}", rd.t_s, 8, observed, cal["adj"], known_ignitions(rd))
     rngs = pr.ranges(res, observed)
     return SpreadResult(
         calibration=cal,

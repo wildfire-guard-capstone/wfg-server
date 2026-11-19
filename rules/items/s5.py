@@ -8,6 +8,8 @@
 
 from typing import Any
 
+from rules.items.names import village_label
+
 ID, NAME = "S5", "진화인력 안전·투입 관리"
 RULE_BASIS = ["SM-p077", "REG-ROLE-a8", "REG-ROLE-a9-h01-03", "REG-ROLE-a9-h04"]
 RULE_BASIS += [f"REG-ROLE-t{t}-p{p}" for t in (2, 3) for p in range(1, 5)]
@@ -33,7 +35,9 @@ def s5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "org_count": crew["org_count"],
         "front": {  # 2
             "dir": sp["dir"],
-            "villages": [r["name"] for r in sp["next_villages"]],
+            "villages": [
+                village_label(r["name"], r["admin_villages"]) for r in sp["next_villages"]
+            ],
         },
         "wind": {"label": label, "dir": w["max"]["dir"], "ms": w["max"]["ms"]},  # 3
     }

@@ -100,6 +100,7 @@ def make_inputs(
         sido=md.sido,
         sigungu=md.sigungu,
         villages=md.villages,
+        admin_villages=md.admin_villages,
         site=(lat, lon),
         field=field,
         temp_c=rd.temp_c,

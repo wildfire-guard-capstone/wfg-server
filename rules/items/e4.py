@@ -1,8 +1,9 @@
 """E4 대피소 지정 및 관련 통제: 엔진 JSON 묶음에서 E4 입력을 만든다.
 
-판정하지 않는다. `shelters`(마을별 후보)와 `roads`(큰 도로 구간)를 옮긴다. 어느 대피소로
-안내할지 · 누구에게 통제를 요청할지는 LLM이 p.75 · 79 · 95로 쓴다. 대피 인원(전 주민 / 고령자)은
-판정하지 않고 인구 · 65세 이상을 둘 다 넘긴다. 마을도 도로도 없으면 E4를 만들지 않는다.
+판정하지 않는다. `shelters`(마을별 후보 · 거리 재는 점)와 `roads`(큰 도로 구간)를 옮긴다.
+어느 대피소로 안내할지 · 누구에게 통제를 요청할지는 LLM이 p.75 · 79 · 95로 쓴다.
+대피 인원(전 주민 / 고령자)은 판정하지 않고 인구 · 65세 이상을 둘 다 넘긴다.
+마을도 도로도 없으면 E4를 만들지 않는다.
 """
 
 from typing import Any
@@ -13,6 +14,7 @@ ID, NAME = "E4", "대피소 지정 및 관련 통제"
 def _village(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "village": r["village"],
+        "admin_villages": r["admin_villages"],
         "emd": r["emd"],
         "zone": r["zone"],
         "from": r["from"],
@@ -20,6 +22,7 @@ def _village(r: dict[str, Any]) -> dict[str, Any]:
         "night": r["night"],
         "people": r["population"],
         "elderly": r["pop65_est"],
+        "origin": r["origin"],
         "village_sites": r["village_sites"],
         "hub_sites": r["hub_sites"],
         "excluded": r["excluded"],
@@ -62,7 +65,12 @@ def e4_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "name": NAME,
         "status": status,
         "finding": _finding(sh, roads),
-        "facts": {"shelters": villages, "excluded_in_p8": sh["counts"]["in_p8"], "roads": roads},
+        "facts": {
+            "shelters": villages,
+            "excluded_in_p8": sh["counts"]["in_p8"],
+            "excluded_in_targets": sh["counts"]["in_targets"],
+            "roads": roads,
+        },
         "targets": [],
         "withheld": sh["unknown"] + rd["unknown"],
         "rule_basis": sh["basis"] + rd["basis"],
@@ -79,7 +87,8 @@ def _finding(sh: dict[str, Any], roads: list[dict[str, Any]]) -> str:
             if c["no_options"]
             else f"대피 대상 {c['villages']}개 리 모두 대피소 후보 있음"
         )
-        parts.append(f"{head} · 8시간 범위 안 대피소 {c['in_p8']}곳")
+        targets = f" · 대피 대상 마을 안 대피소 {c['in_targets']}곳" if c["in_targets"] else ""
+        parts.append(f"{head} · 8시간 범위 안 대피소 {c['in_p8']}곳{targets}")
     if roads:
         listed = " · ".join(f"{r['road']} {r['section']}({r['until']})" for r in roads)
         parts.append(f"5시간 안 큰 도로 구간: {listed}")

@@ -109,6 +109,9 @@ def main() -> None:
         # 1. 확산 예측
         if a.reuse_spread:
             sp = step1_spread.load(a.reuse_spread / f"round_{rd.no}" / "01_spread")
+            sp = step1_spread.drop_future_ignitions(sp, rd)  # 11/19 R3 D4
+            for ig in sp.extra.get("future_ignitions_dropped", []):
+                print(f"  1 확산: 회차 뒤 발화 조각을 뺌 · P8에서 {ig['ha_p8']} ha", flush=True)
             print(
                 f"  1 확산: {a.reuse_spread.name}의 결과를 다시 씀 · 배율 {sp.calibration['adj']:.3f}",
                 flush=True,

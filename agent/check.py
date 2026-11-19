@@ -150,6 +150,27 @@ def now_area_errors(text: str, now_at: str, now_ha: Any) -> list[str]:
     return out
 
 
+REL_AT = re.compile(r"(\d{1,2})\s?시간\s?(?:뒤|후)(?:인|의|에는|에|,)?\s?\(?\s?(\d{1,2}):(\d{2})")
+
+
+def relative_time_errors(text: str, now_at: str) -> list[str]:
+    """「N시간 뒤인 HH:MM」의 두 시각이 맞지 않는 것(11-19 p1p3 시범: 기준 12:50에 「5시간 뒤인 14:50」 —
+    14:50은 100 ha를 넘는 때, 5시간 뒤는 17:50). P3: 시각은 입력의 HH:MM만 쓴다."""
+    if not now_at or not re.fullmatch(r"\d{1,2}:\d{2}", now_at):
+        return []
+    h0, m0 = (int(x) for x in now_at.split(":"))
+    out = []
+    for m in REL_AT.finditer(text):
+        n, hh, mm = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        want = ((h0 + n) % 24) * 60 + m0
+        if hh * 60 + mm != want:
+            out.append(
+                f"「{m.group(0)}」: 기준 {now_at}에서 {n}시간 뒤는 {want // 60:02d}:{want % 60:02d}입니다. "
+                "「N시간 뒤」를 빼고 입력에 그 대상과 함께 적힌 시각만 쓰십시오"
+            )
+    return out
+
+
 UPPER = re.compile(r"도지사|특별시장|광역시장|특별자치|산림청장")
 VAGUE = re.compile(r"(?:보호|대응|필요한|적절한|관련)\s?조치를\s?취하|철저히\s?하|만전을\s?기하")
 MAX_LEN = 450
@@ -859,6 +880,7 @@ def fact_sentence_errors(
     errs += language_errors(s)
     if now:
         errs += now_area_errors(s, *now)
+        errs += relative_time_errors(s, now[0])
     if "십시오" in s:
         errs.append("할 일(「~하십시오」)은 상황 · 상태 · 판단이 아니라 제안(proposals)에 쓰십시오")
     if item_id in FACT_FORBID_IDS:

@@ -72,6 +72,9 @@ ITEM_TOPICS: list[tuple[str, str]] = [
 # 묻는 것(답의 꼴) — 11-19 의도 판별 비교(「의도 판별 비교(20261119)」): 도구 선택 호출에 칸 하나로 함께 받는다
 ASKS = prompt.ASKS
 EXPLAIN_ASKS = ("이유", "규정", "확인")  # 근거 문서가 있어야 답할 수 있는 꼴 → 검색을 꼭 넣는다
+# 가능 · 허용 여부(「밤에도 헬기를 띄울 수 있어?」): 묻는 것이 「값」으로 나와도 답은 규정에 달림 → 검색을 넣는다
+# (11-19 RAGAS Q18 · O3 — 상황 경로가 문서 검색 없이 답함). 묻는 것 판별을 바꾸지 않고 자료만 더한다
+CAN = re.compile(r"[가-힣]\s?수\s?(?:있|없)|해도\s?(?:돼|되)|가능")
 CODE = re.compile(r"(?<![A-Za-z])([SsEe][1-7])(?!\d)")
 
 
@@ -229,7 +232,7 @@ def merge(
         out.calls.insert(0, ("item", item_code))
     if (
         can_search
-        and out.ask in EXPLAIN_ASKS
+        and (out.ask in EXPLAIN_ASKS or CAN.search(text))
         and out.route != "OUT_OF_SCOPE"
         and not any(t == "search" for t, _ in out.calls)
     ):

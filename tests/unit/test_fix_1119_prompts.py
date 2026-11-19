@@ -232,3 +232,26 @@ def test_road_question_goes_to_e4_not_alerts():
     assert ("item", "E4") in p.calls and ("item", "E5") not in p.calls
     m = merge(None, plan_rules(box, "재난문자는 어느 지역에 보내야 하나요?", None), None)
     assert ("item", "E5") in m.calls
+
+
+def test_relative_time_must_match_base():
+    # 기준 12:50: 「5시간 뒤인 14:50」은 틀림(14:50은 100 ha를 넘는 때), 「5시간 뒤(17:50)」는 맞음
+    errs = check.relative_time_errors("5시간 뒤인 14:50에는 100 ha를 넘을 수 있습니다.", "12:50")
+    assert errs and "17:50" in errs[0]
+    assert check.relative_time_errors("5시간 뒤(17:50) 461.9 ha로 커질 수 있습니다.", "12:50") == []
+    assert check.relative_time_errors("23:00에서 2시간 뒤인 01:00", "23:00") == []
+
+
+def test_possibility_question_gets_search_even_as_value():
+    box = ToolBox(make_context(), FakeEvidence())
+    llm_plan = plan_rules(box, "밤에도 헬기를 띄울 수 있어?", None)
+    llm_plan.ask = "값"
+    llm_plan.calls = [("weather", "")]
+    m = merge(
+        llm_plan,
+        plan_rules(box, "밤에도 헬기를 띄울 수 있어?", None),
+        None,
+        text="밤에도 헬기를 띄울 수 있어?",
+        can_search=True,
+    )
+    assert any(t == "search" for t, _ in m.calls) and m.ask == "값"

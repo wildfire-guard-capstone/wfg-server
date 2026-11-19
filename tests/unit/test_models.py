@@ -13,17 +13,25 @@ def ddl(table: str) -> str:
     return str(CreateTable(Base.metadata.tables[table]).compile(dialect=DIALECT))
 
 
-def test_all_17_tables_registered():
+def test_all_18_tables_registered():
     assert set(Base.metadata.tables) == {
         "users", "event_logs",
         "incidents", "fire_perimeters",
         "predictions", "prediction_slices",
         "proposals", "proposal_items",
         "situation_corrections", "qa_messages",
-        "admin_areas", "villages", "facilities", "map_features",
+        "admin_areas", "villages", "admin_villages", "facilities", "map_features",
         "resource_bases", "resources",
         "weather_hours",
     }  # fmt: skip
+
+
+def test_admin_villages_under_villages():
+    # 행정리(11/19): 법정리 아래, 이름은 법정리 안에서 하나. 회관 · 구역은 찾은 곳만.
+    sql = ddl("admin_villages")
+    assert "FOREIGN KEY(village_id) REFERENCES villages (id)" in sql
+    assert "UNIQUE (village_id, name)" in sql
+    assert "geom geometry(MULTIPOLYGON,5179)," in sql and "hall_point geometry(POINT,5179)," in sql
 
 
 def test_geometries_use_utm_k():

@@ -128,6 +128,25 @@ def test_deployed_type_matches_rules():
     Deployed(helicopter={"산림청": 5})  # 투입 자원 칸 이름은 규칙 엔진과 같은 라벨을 쓴다
 
 
+def test_local_coords_are_meters_from_ignition():
+    """11-19 사용자 결정(64K에 맞추기): 발화점 기준 동 · 북 미터(10 m 단위)."""
+    text = raw_table.build(MD(), RD, SPREAD, INPUTS, coords="local")
+    assert "발화점 0 0(WGS84 128.60000 36.37000)" in text and "동쪽 · 북쪽이 +" in text
+    assert "요양원 | 노인요양원 | 29 | 24 | 100 0" in text  # 발화점에서 동쪽 100 m
+    assert "의성경찰서 | 경찰서 | 의성군 | 600 0" in text
+    rows = {ln.split(" | ")[0]: ln for ln in text.splitlines() if " | 의성군 | " in ln}
+    # 마을 경계(발화점에서 동 · 북으로 500 m 정사각형)의 꼭짓점 네 개가 미터로 나온다
+    ring = rows["가까운리"].split(" | ")[-1]
+    assert {c.strip() for c in ring.split(";")} == {"0 0", "500 0", "500 500", "0 500"}
+    assert "128.6" not in text.split("## 확산")[1]  # 발화점 줄 말고는 경위도가 없다
+    wgs = raw_table.build(MD(), RD, SPREAD, INPUTS)
+    assert len(text) < len(wgs)
+    import pytest
+
+    with pytest.raises(ValueError):
+        raw_table.build(MD(), RD, SPREAD, INPUTS, coords="utm")
+
+
 def test_near_mode_range_follows_spread_not_ignition():
     """11-19 대안: 경계 · 큰 도로 구역을 확산 범위 둘레 2 km로(추가 발화 조각이 발화점에서 멀 때)."""
     far = NS(

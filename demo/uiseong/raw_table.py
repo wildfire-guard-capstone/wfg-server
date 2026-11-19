@@ -14,6 +14,8 @@ C1 · C2는 규칙층 없이 원자료로 판단(범위 포함 · 거리 · 도�
   (map 19층 — 정답 누설), 규칙층이 계산한 값 전부(면적 · 포함 · 도달 시각 · 단계 · 지휘권자 …), 송전철탑, 소로,
   상황 보고의 화선 면적 메모(규칙 엔진도 읽지 않음).
 - 좌표는 WGS84 경도 · 위도, 소수 5자리(약 1 m). centers_only=True면 마을 경계를 빼고 중심 좌표만 준다(D5 대안).
+- coords="local"(11-19 사용자 결정, 64K에 맞추기): 발화점을 (0, 0)으로 한 평면 좌표 「동쪽 m 북쪽 m」(EPSG:5179,
+  10 m 단위). 좌표 글이 짧아 원자료 표 토큰이 약 42% 줄고(회차 4: 85,078 → 49,491), 모양 · 단순화는 그대로다.
 """
 
 from datetime import timedelta
@@ -43,16 +45,30 @@ def _xy(x: float, y: float) -> str:
     return f"{lon:.5f} {lat:.5f}"
 
 
-def pt(g) -> str:
+LOCAL_STEP_M = 10  # coords="local"의 반올림 단위(m)
+
+
+def local_xy(origin):
+    """발화점 기준 평면 좌표(동 · 북, m, LOCAL_STEP_M 단위)를 쓰는 함수."""
+
+    def f(x: float, y: float) -> str:
+        e = round((x - origin.x) / LOCAL_STEP_M) * LOCAL_STEP_M
+        n = round((y - origin.y) / LOCAL_STEP_M) * LOCAL_STEP_M
+        return f"{e:.0f} {n:.0f}"
+
+    return f
+
+
+def pt(g, xy=_xy) -> str:
     c = g if g.geom_type == "Point" else g.representative_point()
-    return _xy(c.x, c.y)
+    return xy(c.x, c.y)
 
 
-def _ring(coords) -> str:
-    return "; ".join(_xy(x, y) for x, y, *_ in coords)
+def _ring(coords, xy=_xy) -> str:
+    return "; ".join(xy(x, y) for x, y, *_ in coords)
 
 
-def poly_text(g, tol: float) -> str:
+def poly_text(g, tol: float, xy=_xy) -> str:
     """면(EPSG:5179) → 단순화한 꼭짓점 글. 여러 조각 · 구멍은 「| 조각」 「(구멍 …)」으로."""
     g = g.simplify(tol, preserve_topology=True)
     parts = list(g.geoms) if isinstance(g, MultiPolygon) else [g]
@@ -60,17 +76,17 @@ def poly_text(g, tol: float) -> str:
     for p in parts:
         if not isinstance(p, Polygon) or p.is_empty:
             continue
-        s = _ring(p.exterior.coords)
-        holes = [f"(구멍 {_ring(h.coords)})" for h in p.interiors if Polygon(h).area > 1e4]
+        s = _ring(p.exterior.coords, xy)
+        holes = [f"(구멍 {_ring(h.coords, xy)})" for h in p.interiors if Polygon(h).area > 1e4]
         out.append(" ".join([s, *holes]))
     return " | ".join(out)
 
 
-def line_text(g, tol: float) -> str:
+def line_text(g, tol: float, xy=_xy) -> str:
     g = g.simplify(tol, preserve_topology=False)
     parts = list(g.geoms) if isinstance(g, MultiLineString) else [g]
     return " | ".join(
-        _ring(p.coords) for p in parts if isinstance(p, LineString) and not p.is_empty
+        _ring(p.coords, xy) for p in parts if isinstance(p, LineString) and not p.is_empty
     )
 
 
@@ -91,12 +107,14 @@ def build(
     prev_alerts: tuple = (),
     centers_only: bool = False,
     near_mode: str = "ignition",
+    coords: str = "wgs84",
 ) -> str:
     """회차 하나의 원자료 표 글. inputs = step2_rules.make_inputs의 요약(바람 · 현장 입력 · 투입 자원).
 
     near_mode = 마을 경계 · 큰 도로를 넣을 구역. "ignition" = 발화점 10 km 안(D6 글 그대로),
     "range" = 이번 회차 P0 ~ P8 범위 둘레 2 km 안(11-19 밤 대안: 확산 모형의 추가 발화 조각이 발화점에서
-    약 13.6 km라 D6 구역 밖에 불이 닿는 마을 · 도로가 생김 — 아침 확인)."""
+    약 13.6 km라 D6 구역 밖에 불이 닿는 마을 · 도로가 생김 — 아침 확인).
+    coords = 좌표 꼴. "wgs84" = 경도 · 위도 소수 5자리(표 9 글 그대로), "local" = 발화점 기준 동 · 북 미터."""
     base = rd.base_at
     ig = md.ignition
     if near_mode == "range":
@@ -107,9 +125,25 @@ def build(
         zone = "발화점 10 km 안"
     else:
         raise ValueError(f"near_mode는 ignition 또는 range: {near_mode}")
+    if coords == "wgs84":
+        xy = _xy
+        coord_note = "좌표: WGS84 「경도 위도」, 소수 5자리."
+    elif coords == "local":
+        xy = local_xy(ig)
+        coord_note = (
+            f"좌표: 발화점을 0 0으로 한 평면 좌표 「동쪽 거리 북쪽 거리」(단위 m, {LOCAL_STEP_M} m 단위로 반올림). "
+            "동쪽 · 북쪽이 +, 서쪽 · 남쪽이 −입니다."
+        )
+    else:
+        raise ValueError(f"coords는 wgs84 또는 local: {coords}")
+
+    def P(g) -> str:  # noqa: N802 — 이 표의 좌표 꼴로 점 하나
+        return pt(g, xy)
+
     L: list[str] = [
         "[원자료 표 — 이번 회차의 원자료입니다. 규칙으로 미리 계산한 값(면적 · 포함 여부 · 거리 · 도달 시각 · 단계 · 지휘권자)은 없습니다. 필요한 판단은 이 자료로 하십시오]",
-        "좌표: WGS84 「경도 위도」, 소수 5자리. 면은 꼭짓점을 「;」로 이어 첫 점으로 닫고, 여러 조각은 「|」로 나눕니다. 선도 꼭짓점을 「;」로 잇습니다.",
+        coord_note
+        + " 면은 꼭짓점을 「;」로 이어 첫 점으로 닫고, 여러 조각은 「|」로 나눕니다. 선도 꼭짓점을 「;」로 잇습니다.",
     ]
     # ── 있는 자료
     L.append(
@@ -120,14 +154,15 @@ def build(
     # ── 시각 · 발화점 · 화선
     L.append("\n## 기준 시각 · 발화 · 화선 보고")
     L.append(f"- 기준 시각(지금): {base:%Y-%m-%d %H:%M}")
-    L.append(f"- 발화: {md.perimeters['ignition'].get('at', '')} · 발화점 {pt(ig)}")
+    wgs = "" if coords == "wgs84" else f"(WGS84 {pt(ig)})"
+    L.append(f"- 발화: {md.perimeters['ignition'].get('at', '')} · 발화점 {P(ig)}{wgs}")
     L.append(f"- 화선 보고: {rd.report}({rd.at}, 상황도) — 아래 P0이 이 화선입니다")
     # ── 확산
     L.append(
         "\n## 확산 예측 P0 ~ P8(P0 = 기준 시각 화선, Pn = 기준 시각부터 n시간 뒤까지 불이 닿을 수 있는 범위, 30 m 단순화)"
     )
     for h, g in enumerate(spread.ranges):
-        L.append(f"P{h}(~{base + timedelta(hours=h):%H:%M}): {poly_text(g, TOL_SPREAD)}")
+        L.append(f"P{h}(~{base + timedelta(hours=h):%H:%M}): {poly_text(g, TOL_SPREAD, xy)}")
     # ── 기상 · 해
     L.append("\n## 기상(0시간 = 상황 보고, 1 ~ 8시간 = 기상 예보)")
     L.append(_row("시각", "풍속 m/s", "풍향(불어오는 쪽)"))
@@ -200,27 +235,27 @@ def build(
             v.sigungu,
             v.population,
             houses.get(v.id, "") or "",
-            pt(v.geom.centroid),
+            P(v.geom.centroid),
         ]
         if not centers_only and v.geom.intersects(near):
-            cells.append(poly_text(v.geom, TOL_VILLAGE))
+            cells.append(poly_text(v.geom, TOL_VILLAGE, xy))
         L.append(_row(*cells))
     # ── 시설
     vul = _props(md, "07")
     L.append(f"\n## 취약시설 {len(vul)}곳 — 이름 | 종류 | 정원 | 현원 | 위치")
     for p, place in zip(vul, md.vulnerable, strict=True):
-        L.append(_row(p["name"], p.get("group"), p.get("cap"), p.get("now"), pt(place.geom)))
+        L.append(_row(p["name"], p.get("group"), p.get("cap"), p.get("now"), P(place.geom)))
     L.append(
         f"\n## 대피소 후보 {len(md.shelters)}곳(이재민 임시주거시설) — 이름 | 종류 | 수용 인원 | 위치"
     )
     for s in md.shelters:
-        L.append(_row(s.name, s.kind, s.capacity if s.capacity is not None else "모름", pt(s.geom)))
+        L.append(_row(s.name, s.kind, s.capacity if s.capacity is not None else "모름", P(s.geom)))
     L.append(f"\n## 국가유산 {len(md.heritage)}곳 — 이름 | 종류 | 위치")
-    L += [_row(h.name, h.kind, pt(h.geom)) for h in md.heritage]
+    L += [_row(h.name, h.kind, P(h.geom)) for h in md.heritage]
     L.append(f"\n## 변전소 · 발전소 {len(md.substations)}곳 — 이름 | 종류 | 위치")
-    L += [_row(s.name, s.kind, pt(s.geom)) for s in md.substations]
+    L += [_row(s.name, s.kind, P(s.geom)) for s in md.substations]
     L.append(f"\n## 송전선 {len(md.power_lines)}개 — 전압 | 선(30 m 단순화)")
-    L += [_row(f"{p.voltage_kv} kV", line_text(p.geom, TOL_SPREAD)) for p in md.power_lines]
+    L += [_row(f"{p.voltage_kv} kV", line_text(p.geom, TOL_SPREAD, xy)) for p in md.power_lines]
     # ── 큰 도로(10 km 안, 이름 · 등급별로 이어 붙임)
     groups: dict[tuple, list] = {}
     for r in md.roads:
@@ -231,22 +266,22 @@ def build(
     L.append(f"\n## 큰 도로({zone} {len(groups)}개 노선 · 등급) — 이름 | 등급 | 선(30 m 단순화)")
     for (name, grade), gs in sorted(groups.items()):
         merged = linemerge(unary_union(gs)) if len(gs) > 1 else gs[0]
-        txt = line_text(merged, TOL_SPREAD)
+        txt = line_text(merged, TOL_SPREAD, xy)
         if txt:
             L.append(_row(name, grade, txt))
     # ── 기관
     L.append(f"\n## 소방 {len(md.fire_stations)}곳 — 이름 | 종류 | 시군 | 위치")
-    L += [_row(f.name, f.kind, f.sigungu, pt(f.geom)) for f in md.fire_stations]
+    L += [_row(f.name, f.kind, f.sigungu, P(f.geom)) for f in md.fire_stations]
     L.append(f"\n## 경찰 {len(md.police)}곳 — 이름 | 종류 | 시군 | 위치")
-    L += [_row(f.name, f.kind, f.sigungu, pt(f.geom)) for f in md.police]
+    L += [_row(f.name, f.kind, f.sigungu, P(f.geom)) for f in md.police]
     hos = _props(md, "12")
     L.append(f"\n## 응급 의료기관 {len(hos)}곳 — 이름 | 종류 | 시군 | 위치")
     for p, h in zip(hos, md.hospitals, strict=True):
-        L.append(_row(p["name"], p.get("kind"), h.sigungu, pt(h.geom)))
+        L.append(_row(p["name"], p.get("kind"), h.sigungu, P(h.geom)))
     bp = _props(md, "10")
     L.append(f"\n## 진화헬기 기지 {len(bp)}곳 — 이름 | 운영 | 시군 | 헬기 대수 | 기종 | 위치")
     for p, b in zip(bp, md.bases, strict=True):
-        L.append(_row(p["name"], b.kind, b.sigungu, p.get("n"), p.get("models"), pt(b.geom)))
+        L.append(_row(p["name"], b.kind, b.sigungu, p.get("n"), p.get("models"), P(b.geom)))
     return "\n".join(L)
 
 

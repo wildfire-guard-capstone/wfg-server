@@ -81,6 +81,7 @@ def main() -> None:
     ap.add_argument("--rounds", default="1,2,3,4")
     ap.add_argument("--centers-only", action="store_true")
     ap.add_argument("--near", default="ignition", choices=["ignition", "range"])
+    ap.add_argument("--coords", default="wgs84", choices=["wgs84", "local"])
     ap.add_argument("--evidence", default="")
     ap.add_argument("--trial", type=Path)
     a = ap.parse_args()
@@ -101,7 +102,7 @@ def main() -> None:
             continue
         llm_in = ru["llm_input"]
         raw = raw_table.build(
-            md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only, a.near
+            md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only, a.near, a.coords
         )
         for c in conds:
             common = step3_agent.with_situation(llm_in)

@@ -4,7 +4,7 @@
     python -m demo.uiseong.run_demo --input <demo-uiseong/input> --elmfire <실행 파일> --out <결과>
         [--rounds 1,2,3,4] [--items S1,E2] [--reuse-spread <앞 결과 폴더>] [--spread-only] [--skip-llm]
         [--calibration fixed|blend|interval|rate|from_first] [--k 8] [--llm …:8031] [--evidence …:8032]
-        [--risk-mode mean_0_5|at_p5] [--no-risk] [--condition C1|C2|C3] [--k-naive 5] [--centers-only]
+        [--risk-mode mean_0_5|at_p5] [--no-risk] [--condition C1|C2|C3] [--k-naive 5] [--centers-only] [--near ignition|range] [--coords wgs84|local]
 
 --condition: 성능 평가 비교 조건(11/19 재설계). C3 = 제품(규칙층 + 검색, 기본), C1 = 원자료 표만, C2 = 원자료 표 + 검색(상위 --k-naive개, C3와 같은 k).
 같은 규칙 판정을 쓰려면 --reuse-spread로 같은 확산 결과를 다시 쓴다.
@@ -86,6 +86,12 @@ def main() -> None:
         default="ignition",
         choices=["ignition", "range"],
         help="원자료 표의 마을 경계 · 큰 도로 구역: 발화점 10 km(D6) 또는 확산 범위 둘레 2 km",
+    )
+    ap.add_argument(
+        "--coords",
+        default="wgs84",
+        choices=["wgs84", "local"],
+        help="원자료 표 좌표 꼴: WGS84 경도 · 위도(표 9) 또는 발화점 기준 동 · 북 미터(64K에 맞추기)",
     )
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -211,7 +217,15 @@ def main() -> None:
             raw = ""
             if a.condition in ("C1", "C2"):  # 평가 기준선: 원자료 표(11/19 재설계 6장)
                 raw = raw_table.build(
-                    md, rd, sp, ru["inputs"], stage_before, alerts_before, a.centers_only, a.near
+                    md,
+                    rd,
+                    sp,
+                    ru["inputs"],
+                    stage_before,
+                    alerts_before,
+                    a.centers_only,
+                    a.near,
+                    a.coords,
                 )
                 (rdir / "02_rules" / "raw_table.txt").write_text(raw, encoding="utf-8")
                 print(f"  2b 원자료 표: {len(raw):,}자", flush=True)

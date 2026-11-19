@@ -28,7 +28,7 @@ def e5_sections(e5: dict[str, Any]) -> dict[str, Any]:
             "type": "action",
             "id": "E5-a1",
             "topic": "재난문자 · 자막방송",
-            "use": ["areas"],
+            "use": ["areas", "jurisdiction"],
             "anchors": ["p.76", "p.78"],
             "see": "E6",
         },

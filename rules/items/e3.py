@@ -3,9 +3,18 @@
 판정하지 않는다. `vulnerable`에서 구간(이름표)으로 거르고 `time`의 요일 · 지금 밤을 옮긴다.
 「우선 대피 · 이송」 · 「사전대피 · 이송 준비」와 시한은 LLM이 p.75 · 79 · 84 · 95로 정한다.
 P8 안 마을에 취약시설이 없으면 E3를 만들지 않는다.
+관할 보건소 등 관할 이름과 이송받을 응급의료기관도 함께 넘긴다(11/19 평가 RE-R2 — 전에는 E6 요청
+표에만 있었다). 이송을 누가 맡는지는 LLM이 p.89로 쓴다.
 """
 
 from typing import Any
+
+from rules.items.jurisdiction import (
+    hospitals,
+    hospitals_unknown,
+    jurisdiction,
+    jurisdiction_unknown,
+)
 
 ID, NAME = "E3", "취약시설 조치"
 
@@ -32,6 +41,7 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     1. 5시간 안(이미 닿음 · 위험구역) 시설 / 잠재 위험구역 시설로 나눈다(이름표로 거르기)
     2. 낮에만 운영 개수 · 요일 · 지금 밤을 옮긴다
     3. finding 틀 — 사실만
+    4. 관할 이름 · 응급의료기관(이름 · 시군구 · 거리)을 옮긴다
     """
     v, t = bundles["vulnerable"], bundles["time"]
     rows = v["in_range"]
@@ -45,6 +55,8 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "daytime_only_count": v["counts"]["daytime_only"],  # 2
         "weekday": t["weekday"],
         "now_is_night": t["sun"]["now_is_night"],
+        "jurisdiction": jurisdiction(bundles),  # 4
+        "hospitals": hospitals(bundles),
     }
     return {
         "id": ID,
@@ -53,7 +65,7 @@ def e3_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "finding": _finding(immediate, pre_evac, v["counts"]),  # 3
         "facts": facts,
         "targets": [f"facility:{r['id']}" for r in rows],
-        "withheld": v["unknown"],
+        "withheld": v["unknown"] + jurisdiction_unknown(bundles) + hospitals_unknown(bundles),
         "rule_basis": v["basis"],
     }
 

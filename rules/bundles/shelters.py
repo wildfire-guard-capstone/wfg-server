@@ -29,16 +29,27 @@ UNKNOWN_FIXED = [
     {"field": "대피소 배정", "reason": "하지 않음(후보만 보여 줌)"},
 ]
 HOUSE_POINT = "주택 밀집 지점"
+DENSE_RADIUS_M = (
+    300.0  # 주택 밀집 지점: 이 반경 안 같은 리 주택 수가 가장 많은 주택(11/20 사용자 확정)
+)
 
 
 def _dense_point(ctx: Context, area) -> Point | None:
-    """영역 안 주택 점의 중심에 가장 가까운 주택 점(11/7 「주택 밀집 지점」). 주택이 없으면 None."""
+    """영역 안 주택 가운데 반경 `DENSE_RADIUS_M` 안에 같은 영역 주택이 가장 많은 주택 점
+    (11/20 사용자 결정 — 「주택 밀집 지점」 정의 ①). 같으면 영역 주택 무게중심에 가까운 점.
+    주택이 없으면 None.
+
+    전에는 무게중심에 가장 가까운 주택이었다 — 신월리처럼 주택 무리가 둘이면
+    두 무리 사이의 외딴 집이 될 수 있었다."""
     xs, ys = (np.asarray(a, dtype=float) for a in ctx.inputs.houses)
     if len(xs):
         inside = shapely.intersects_xy(area, xs, ys)
         if inside.any():
             hx, hy = xs[inside], ys[inside]
-            i = int(np.argmin((hx - hx.mean()) ** 2 + (hy - hy.mean()) ** 2))
+            d2 = (hx[:, None] - hx[None, :]) ** 2 + (hy[:, None] - hy[None, :]) ** 2
+            near = (d2 <= DENSE_RADIUS_M**2).sum(axis=1)
+            to_center = (hx - hx.mean()) ** 2 + (hy - hy.mean()) ** 2
+            i = int(np.lexsort((to_center, -near))[0])  # 이웃 많은 순, 같으면 무게중심 가까운 순
             return Point(hx[i], hy[i])
     return None
 
@@ -72,8 +83,8 @@ def safety(p: int | None) -> str:
 ORDER = {"safe": 0, "exception": 1, "excluded": 2}
 OWN_REASON = {"excluded": "5시간 안에 불이 닿음", "exception": "8시간 안에 불이 닿음"}
 UNIT_REASON = {
-    "excluded": "대피 대상 마을 안({}, 5시간 안에 주택이 닿음)",
-    "exception": "사전대피 마을 안({}, 5~8시간 안에 주택이 닿음)",
+    "excluded": "대피 대상 마을 안({}, 5시간 안에 불이 닿음)",
+    "exception": "사전대피 마을 안({}, 5~8시간 안에 불이 닿음)",
 }
 
 

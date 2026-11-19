@@ -37,7 +37,8 @@ def _houses(reached: Reached) -> dict[str, Any]:
         "total": reached.houses,
         "p5": c[P5] if c else None,
         "p8": c[P8] if c else None,
-        "by": "주택" if reached.by_houses else "리 경계(리 안 주택 자료 없음)",
+        # 판정은 리 경계(11/20 D1 — 경계 걸침도 대피 대상). 주택 수는 참고
+        "by": "리 경계",
     }
 
 

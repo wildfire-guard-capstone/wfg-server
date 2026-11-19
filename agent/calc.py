@@ -9,7 +9,7 @@ LLM에게 계산을 맡기면 틀리고, 검사(check.py)는 판정에 없는 �
 
 - E4: 대피소(머물 곳 후보) 수용 비교 — 첫 후보를 여러 마을이 함께 쓰면 합계, 마을마다 첫 후보 · 두 후보 합계
 - E5: 마을 → 대피 장소 짝(첫 후보가 넉넉한 마을만). 첫 후보가 모자란 마을은 「아직 정할 수 없음」
-- E3: 거주자 이송을 맡을 기관(E6 요청 표의 보건 행 — 계산은 아니지만 E3에 표가 없어 여기서 넘김)
+- (11/19 없앰) E3 「거주자 이송을 맡을 기관」: 담당 지정은 규칙층이 아니라 제안 문단이 쓴다(재설계 D3)
 - E1: 구역별 마을 수(이미 불이 닿은 마을도 위험구역), S4: 투입 헬기 · 인력(S3 판정)
 규칙 엔진 E4 facts(shelters)를 읽는다. 구조가 바뀌면 여기와 tests/unit/test_agent_calc.py를 함께 고친다.
 """
@@ -135,21 +135,6 @@ def pairing_lines(e4: dict[str, Any]) -> list[str]:
     )
 
 
-def health_lines(e6: dict[str, Any]) -> list[str]:
-    """E3: 거주자 이송을 맡을 기관(11/17 사용자 결정 — E6 요청 표의 보건 행 = 관할 시군 보건소장).
-    E3에는 요청 표가 없어서 E6 표에서 가져와 알려 준다."""
-    for s in e6.get("sections") or []:
-        for b in s.get("blocks") or []:
-            if b.get("type") != "table":
-                continue
-            for r in b.get("rows") or []:
-                if isinstance(r, dict) and r.get("group") == "보건" and r.get("agency"):
-                    return [
-                        f"거주자 이송을 맡을 기관(E6 요청 표): {r['agency']} — 매뉴얼의 현장응급의료소장(보건소장)이 응급의료 자원을 총괄하고 이송함"
-                    ]
-    return []
-
-
 def zone_lines(e1: dict[str, Any]) -> list[str]:
     """E1: 구역별 마을 수(회차 1 시험에서 LLM이 이미 불이 닿은 마을을 빼고 「위험구역 5곳」으로 셈 → 코드가 센다)."""
     z = (e1.get("facts") or {}).get("zones") or {}
@@ -188,8 +173,6 @@ def for_item(item_id: str, items_by_id: dict[str, dict[str, Any]]) -> list[str]:
             return shelter_check(get("E4"))["lines"]
         if item_id == "E5" and get("E4"):
             return pairing_lines(get("E4"))
-        if item_id == "E3" and get("E6"):
-            return health_lines(get("E6"))
         if item_id == "E1" and get("E1"):
             return zone_lines(get("E1"))
         if item_id == "S4" and get("S3"):

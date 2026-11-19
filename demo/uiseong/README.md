@@ -111,6 +111,29 @@ API(EC2)용 시군구 격자: `python -m demo.uiseong.build_risk_grid --input <i
 - **화면:** 제안 문장만 보이고, 근거 표기 · 근거 문장 · 원문 발췌는 문단에 마우스를 올리면(누르면 고정) 보인다(`viewer_template.html`)
 - 추론 모드는 기본 끔(`--thinking`), 입력(판정 · 상황 · 켜진 지침)이 직전 회차와 같은 항목은 직전 제안을 다시 쓴다
 
+## 성능 평가 비교 조건(`--condition`, 11/18)
+
+대응 제안 성능 평가(덱 「대응 제안 성능 지표 v2」)의 기준선. 세 조건 모두 같은 규칙 판정 · 판단 계산 값 · 판정 값 문장 · 작성 지침 ·
+문단 꼴 예시를 받고, **근거를 쓰는 방식만** 다르다. 출력 꼴(`03_rag` · `04_llm` · `05_output/proposal.json`)은 같다.
+
+| 조건 | 근거 | 생성 후 | 바뀌는 곳 |
+|---|---|---|---|
+| `C3` 우리 방식(기본) | 판정 근거(`rule_basis`) + 질의 여러 개 + 지침 질의(위 「근거 검색」) | 검사 · 사실부 문장 빼기 · 근거 바로잡기 · 다시 쓰기(최대 3번) | 없음(예전과 같음, `input_key`도 같음) |
+| `C2` 단순 RAG | 질의 하나 = 「항목 이름 + 다룰 주제」로 상위 `--k-naive`개(기본 5, `retrieve.naive`). 판정 근거는 붙이지 않음 | 한 번 생성. 호출 실패 · JSON 형식 오류만 다시 부름 | — |
+| `C1` 근거 없음 | 없음. 프롬프트에 [근거 발췌]가 없고, 지시문 · 작성 지침에서 근거를 말하는 구절을 뺌(`prompt.system("C1")`), json_schema에 evidence · quote 칸이 없음 | C2와 같음 | 문단에 근거 표기가 없음 |
+
+- 표기 정리(`check.tidy` · `strip_subject` · `fix_category` · `tidy_fact`)는 세 조건 모두 같게 한다. 검사로 문장을 빼거나 다시 쓰게 하는 것은 C3만.
+- C2의 `quote_ok`는 참고 값으로만 남긴다(근거를 바로잡지 않음). `03_rag/<항목>.json` · `04_llm/<항목>.json`에 `condition`이 적힌다.
+- 같은 규칙 판정을 쓰려면 확산 결과를 다시 쓴다(`--reuse-spread`). 예(4회차, 의성 e45 확산):
+
+```bash
+cd ~/wfg/demo/wfg-server
+for C in C1 C2 C3; do
+  OUT=~/wfg/demo/runs/eval-$C bash demo/uiseong/run_demo.sh --reuse-spread ~/wfg/demo/runs/e45-1109 \
+    --rounds 1,2,3,4 --no-risk --deck <deck_e45> --condition $C
+done
+```
+
 ## 실행 결과(2026-11-08 저녁, `runs/tune10` — 시나리오 v3 꼴 최종)
 
 확산 예측은 `runs/rebuild1`(ELMFIRE 포함 첫 실행)의 01_spread를 다시 썼다(`--reuse-spread`). 규칙 판정 · LLM 대응 생성은

@@ -64,37 +64,15 @@ def test_pairing_lines_only_for_villages_with_enough_room():
     assert not any("괴산리 →" in ln for ln in lines)
 
 
-def test_e3_gets_health_agency_from_e6_table():
+def test_e3_gets_no_transfer_agency_any_more():
+    """11/19 재설계 D3: 「거주자 이송을 맡을 기관」은 담당 지정이라 규칙층(판단 계산 값)에서 뺐다."""
     e6 = {
         "id": "E6",
         "sections": [
-            {
-                "title": "",
-                "blocks": [
-                    {
-                        "type": "table",
-                        "rows": [
-                            {
-                                "group": "보건",
-                                "agency": "의성군보건소장",
-                                "ask": "이송",
-                                "basis": "p.22·89",
-                            },
-                            {
-                                "group": "치안",
-                                "agency": "의성경찰서",
-                                "ask": "대피 지원",
-                                "basis": "p.96",
-                            },
-                        ],
-                    }
-                ],
-            }
+            {"blocks": [{"type": "table", "rows": [{"group": "보건", "agency": "의성군보건소장"}]}]}
         ],
     }
-    (line,) = calc.for_item("E3", {"E6": e6})
-    assert line.startswith("거주자 이송을 맡을 기관(E6 요청 표): 의성군보건소장")
-    assert calc.for_item("E3", {}) == []
+    assert calc.for_item("E3", {"E3": {"id": "E3"}, "E6": e6}) == []
 
 
 def test_no_e4_or_other_items_give_nothing():

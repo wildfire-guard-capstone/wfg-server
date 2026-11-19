@@ -35,15 +35,14 @@ def test_whole_proposal_has_12_items_and_request_tables():
         "산림 헬기",
         "임차 헬기",
     ]
-    assert groups(items["E6"]) == ["보건", "의료", "교통", "치안", "재난방송", "마을 조직"]
+    # 11/19 재설계 D3: 거주자 이송 담당(보건 행)은 규칙층에서 뺐다
+    assert groups(items["E6"]) == ["의료", "교통", "치안", "재난방송", "마을 조직"]
     (table,) = [b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "table"]
     broadcast = next(r for r in table["rows"] if r["group"] == "재난방송")
     assert broadcast["agency"] == "중앙재난안전상황실 또는 경상북도 재난안전상황실"
-    # 11/17 사용자 결정: 취약시설 거주자 이송은 관할 시군 보건소장
-    # (매뉴얼 p.22 현장응급의료소 · p.89)
-    health = next(r for r in table["rows"] if r["group"] == "보건")
-    assert health["agency"].endswith("보건소장") and health["basis"] == "p.22·89"
-    assert "SM-p022" in items["E6"]["anchor_basis"]
+    # 11/19 재설계 D3 · D1: 표에는 기관 · 대상 · 시각만(「요청 사항」 · 「근거」 칸 없음)
+    assert all(set(r) == {"group", "agency", "target", "when", "item"} for r in table["rows"])
+    assert items["E6"]["anchor_basis"] == []
     # E6은 LLM을 부르지 않는다(action 블록 없음)
     assert not [b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "action"]
     # 엔진 JSON · LLM 입력은 그대로 JSON으로 저장할 수 있다

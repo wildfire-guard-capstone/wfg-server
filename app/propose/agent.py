@@ -32,7 +32,7 @@ class AgentWriter:
     name: str = "agent"
 
     def write(self, llm_input: LlmInput) -> list[WrittenItem]:
-        # 상황 깃발(agent/situation.py): 항목별 작성 지침(agent/guides.py)을 고르는 데 쓴다
+        # 상황 깃발(agent/situation.py): 규칙층 구획의 「이번 상황」 한 줄에 쓴다
         situation = flags(llm_input["bundles"], llm_input["items"], llm_input["common"])
         common = llm_input["common"] | {"situation": situation}
         agent = Agent(self.llm, self.evidence, self.names(), workers=self.workers)

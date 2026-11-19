@@ -122,6 +122,18 @@ def field_text(f: dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "대피 보고 없음"
 
 
+def admin_of(v: dict[str, Any]) -> list[str]:
+    """마을 줄의 닿는 행정리 이름(main #58 RE-R3: 묶음 줄에 admin_villages). 없으면 빈 목록."""
+    return [a["name"] if isinstance(a, dict) else a for a in v.get("admin_villages") or []]
+
+
+def vlabel(v: dict[str, Any]) -> str:
+    """「안평면 신안리(신안1리)」 — 줄은 법정리, 닿는 행정리를 괄호로(rules.items.names.label_of와 같은 꼴, D2)."""
+    admin = admin_of(v)
+    name = f"{v['name']}({'·'.join(admin)})" if admin else v["name"]
+    return f"{v.get('emd', '')} {name}".strip()
+
+
 def plain(text: str) -> str:
     return (text or "").replace("**", "").strip()
 
@@ -335,6 +347,21 @@ class ToolBox:
                         nxt["title"] + (f"(사유: {reasons})" if reasons else ""),
                     )
                 )
+            # RE-1(main #55): 지휘권자가 올라가는 구간 시각 — 없으면 「5시간 뒤 이관」으로 지어냄(11-19 사실 정확도 22문항)
+            for i, s in enumerate(cm.get("steps") or []):
+                why = " · ".join(x.get("text", "") for x in s.get("reasons") or [] if x.get("text"))
+                when = (
+                    f"{s.get('from')} ~ {s.get('until')}"
+                    if s.get("from")
+                    else str(s.get("until", ""))
+                )
+                r.facts.append(
+                    Fact(
+                        f"context.commander.steps[{i}]",
+                        "지휘권자가 넘어갈 수 있는 시간대",
+                        f"{when} {s.get('title', '')}" + (f"(사유: {why})" if why else ""),
+                    )
+                )
         r.facts += unknowns("context.stage.unknown", st.get("unknown"))
         r.chunks = self.basis_chunks((st.get("basis") or []) + (cm.get("basis") or []))
         return r
@@ -538,8 +565,17 @@ class ToolBox:
             r.facts.append(
                 Fact(
                     f"context.villages.{v['zone']}[{v['id']}]",
-                    f"{v.get('emd', '')} {v['name']}",
+                    vlabel(v),
                     f"{ZONE.get(v['zone'], v['zone'])} · {reach(v)} · {pop} · {field_text(ctx.village_field(v['id']))}",
+                )
+            )
+        edge = _b(ctx, "villages").get("edge") or []
+        if edge:  # RE-R3 D1: 리 경계만 걸치고 8시간 안 주택이 없는 리 — 대피 대상에서 뺐음을 알린다
+            r.facts.append(
+                Fact(
+                    "context.villages.edge",
+                    "리 경계만 예측 범위에 걸친 마을(8시간 안에 닿는 주택 없음 — 대피 대상 아님)",
+                    " · ".join(f"{e.get('emd', '')} {e['name']}".strip() for e in edge),
                 )
             )
         # 11-10 평가: 「다음은 어디를 대피시켜야 해?」에 이미 불이 닿았고 대피 보고 없는 석탑리 · 신안리를 건너뛰고
@@ -575,8 +611,10 @@ class ToolBox:
 
     # 7. 마을 하나
     def find_villages(self, name: str) -> list[dict[str, Any]]:
-        """이름(「괴산리」 · 「괴산」 · 「안평면 괴산리」)으로 엔진 마을 → 마을 목록 순으로 찾는다."""
+        """이름(「괴산리」 · 「괴산」 · 「안평면 괴산리」 · 행정리 「괴산1리」)으로 엔진 마을 → 마을 목록 순으로 찾는다.
+        판정은 법정리 단위라 행정리 이름은 법정리로 찾는다(정정의 correction.resolve와 같게, 11-19 행정리 작업)."""
         name = re.sub(r"\s+", " ", name or "").strip()
+        name = re.sub(r"([가-힣])\s?\d{1,2}\s?리$", r"\1리", name)  # 괴산1리 · 괴산 1리 → 괴산리
         emd = None
         m = re.match(r"([가-힣]+[읍면동])\s+([가-힣]+)", name)
         if m:
@@ -617,6 +655,9 @@ class ToolBox:
         shelters = {s.get("village"): s for s in _b(ctx, "shelters").get("villages", [])}
         for v in hits:
             vid, label = str(v["id"]), f"{v.get('emd', '')} {v['name']}"
+            edge = {
+                str(e.get("id")): e for e in _b(ctx, "villages").get("edge") or [] if e.get("id")
+            }
             if vid in zone_ids:
                 z = next(x for x in ctx.zone_villages() if str(x["id"]) == vid)
                 r.facts.append(
@@ -626,6 +667,14 @@ class ToolBox:
                         ZONE.get(z["zone"], z["zone"]),
                     )
                 )
+                if admin_of(z):  # 닿는 행정리(줄 · 인구는 법정리, D2)
+                    r.facts.append(
+                        Fact(
+                            f"context.villages.{z['zone']}[{vid}].admin_villages",
+                            f"{label} 가운데 불이 닿는 행정리",
+                            " · ".join(admin_of(z)) + "(인구는 법정리 전체 값)",
+                        )
+                    )
                 r.facts.append(
                     Fact(
                         f"context.villages.{z['zone']}[{vid}].reach",
@@ -667,6 +716,14 @@ class ToolBox:
                                     f"{s['name']}({s.get('kind', '')}, {num(s.get('km'))} km{cap})",
                                 )
                             )
+            elif vid in edge:
+                r.facts.append(
+                    Fact(
+                        f"context.villages.edge[{vid}]",
+                        f"{label} 도달 구분",
+                        "리 경계만 예측 범위에 걸침(8시간 안에 닿는 주택 없음 — 대피 대상 아님)",
+                    )
+                )
             elif ctx.has_proposal:
                 r.facts.append(
                     Fact(
@@ -959,6 +1016,13 @@ class ToolBox:
                     f"{code} {name} 판정: {d['finding']}.",
                 )
             )
+        # 판정 자료(11-19 RAGAS Q16): 「이 항목은 왜 …」에 판정 한 줄 · 제안 문장만 가서 이유(요소별 기준 · 넘는 때)를
+        # 못 댐. 이 항목을 판정한 엔진 묶음 도구를 질문 말 · 묻는 것과 상관없이 늘 함께 싣는다(도구 호출 수를 쓰지 않음).
+        judged_chunks: list[dict[str, Any]] = []
+        for tool in JUDGED_BY.get(code, ()):
+            sub = TOOLS[tool].fn(self, "")
+            r.facts += sub.facts
+            judged_chunks += sub.chunks
         n = {
             "paragraph": 0,
             "list": 0,
@@ -1028,7 +1092,12 @@ class ToolBox:
                 )
             )
         r.facts += unknowns(f"items.{code}.withheld", d.get("withheld"))
-        r.chunks = list(it.get("evidence") or [])
+        # 근거: 제안이 인용한 원문 → 판정 묶음의 근거 → 엔진 항목의 판정 근거 쪽(rule_basis, 앞 3개 — 검색 조각 자리를 남김)
+        basis = self.basis_chunks((d.get("rule_basis") or [])[:3]) if d.get("rule_basis") else []
+        uniq: dict[str, dict[str, Any]] = {}
+        for c in list(it.get("evidence") or []) + judged_chunks + basis:
+            uniq.setdefault(c["chunk_id"], c)
+        r.chunks = list(uniq.values())
         return r
 
     # 14. 제안서 전체
@@ -1253,4 +1322,20 @@ TOOLS: dict[str, ToolSpec] = {
         "표준매뉴얼 · 법령 근거 검색(규정 · 기준 · 절차 · 이유를 물을 때)",
         "검색할 말",
     ),
+}
+
+# 항목 → 그 항목을 판정한 엔진 묶음 도구(규칙 엔진 12항목, rules/items/*.py가 읽는 묶음). item 도구가 늘 함께 싣는다
+JUDGED_BY: dict[str, tuple[str, ...]] = {
+    "S1": ("stage",),  # now · p5 · change · area · commander
+    "S2": ("villages", "facilities"),  # life · houses · power · substations · temple · heritage
+    "S3": ("resources",),  # deployed · scope · available_now · added_at_p5
+    "S4": ("weather",),  # sun · now · wind · max
+    "S5": ("resources", "weather"),  # crew · front · wind
+    "S6": ("agencies",),
+    "E1": ("villages",),  # zones
+    "E2": ("villages",),  # immediate · pre_evac · sunset
+    "E3": ("facilities",),  # vulnerable immediate · pre_evac
+    "E4": ("shelters", "roads"),  # shelters · excluded_in_p8 · roads
+    "E5": ("alerts",),  # areas · removed · alert_log
+    "E6": ("agencies",),
 }

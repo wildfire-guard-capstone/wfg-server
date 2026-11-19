@@ -35,9 +35,9 @@ def test_form_rules():
     assert "등" in joined and "부정" in joined and "하십시오" in joined and "입력 설명" in joined
 
 
-def test_upper_reader_authority():
-    bad = _c("신월리에 대피명령을 내리십시오.", reader="경상북도지사", item="E2")
-    assert any("시장 · 군수 권한" in e for e in bad)
+def test_no_authority_check_any_more():
+    """11/19 재설계(P1): 권한 검사는 다시 쓰기 지시로 법 지식을 넣으므로 없앴다."""
+    assert _c("신월리에 대피명령을 내리십시오.", reader="경상북도지사", item="E2") == []
     ok = _c(
         "의성군수에게 신월리 대피명령을 내리도록 지시하십시오.", reader="경상북도지사", item="E2"
     )

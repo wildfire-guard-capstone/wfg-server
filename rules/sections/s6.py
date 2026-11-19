@@ -26,7 +26,9 @@ def _table(rows: list[dict[str, str]]) -> dict[str, Any]:
 
 
 def _row_basis(rows: list[dict[str, str]]) -> list[str]:
-    return list(dict.fromkeys(i for r in rows for i in BASIS_IDS[r["basis"]]))
+    """11/19 재설계(D1 · D3): 표 행에 「근거」 칸이 없어졌다(매뉴얼 쪽 지정 가져오기를 쓰지 않음).
+    칸이 있는 예전 행만 읽는다."""
+    return list(dict.fromkeys(i for r in rows for i in BASIS_IDS.get(r.get("basis", ""), [])))
 
 
 def s6_sections(s6: dict[str, Any]) -> dict[str, Any]:

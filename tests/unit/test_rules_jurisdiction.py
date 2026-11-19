@@ -132,8 +132,11 @@ def test_topics_point_at_jurisdiction():
     assert "jurisdiction" in use["E5-a1"]  # 재난문자 · 자막방송 → 관할 시 · 도
 
 
-def test_e6_health_row_still_from_home_sigungu():
-    # 보건소 이름을 묶음 한 곳(agencies)에서 만들게 바꿨어도 E6 표 이름은 그대로
-    e6 = _items()["E6"]
-    table = next(b for s in e6["sections"] for b in s["blocks"] if b["type"] == "table")
-    assert "의성군보건소장" in [r["agency"] for r in table["rows"]]
+def test_health_name_only_via_jurisdiction():
+    # 평가 재설계 D3(11-18): E6 요청 표에서 보건(이송 담당) 행을 뺐다 —
+    # 누가 이송을 맡을지는 제안(LLM + 근거)이 정함. 보건소 이름은 관할 기관(jurisdiction)으로
+    # E3 입력에만 넘긴다(RE-R2).
+    items = _items()
+    table = next(b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "table")
+    assert "보건" not in [r["group"] for r in table["rows"]]
+    assert items["E3"]["facts"]["jurisdiction"]["by_sigungu"][0]["health"] == "의성군보건소"

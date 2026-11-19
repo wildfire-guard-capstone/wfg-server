@@ -2,7 +2,8 @@
 """상황 판정 → 항목별 작성 지침을 고를 깃발(11/8 저녁 사용자 결정).
 
 규칙 엔진 bundles에서 이번 회차의 상황을 읽어 참 · 거짓 깃발로 만든다. 깃발은 판정이지 제안이 아니다 —
-어떤 지침 줄을 프롬프트에 넣을지(guides.py)만 정하고, 문장 내용과 근거는 LLM이 근거 검색으로 정한다.
+11/19 재설계로 작성 지침(guides.py)은 없앴다. 지금은 C3(제품) 규칙층 구획의 「이번 상황」 한 줄(summary)과
+지금 면적 검사에만 쓴다. 문장 내용과 근거는 LLM이 근거 검색으로 정한다.
 
     f = flags(bundles, items, common)
     f["large_now"], f["escalation"], f["commander_change"], f["night_arrival"], …
@@ -13,6 +14,9 @@ from typing import Any
 STAGE_NO = {"초기대응": 0, "1단계": 1, "2단계": 2, "3단계": 3}
 LARGE_HA = 100  # 대형산불 = 피해면적 100 ha 이상(시행령 제21조① · 매뉴얼 p.114)
 UPPER = ("도지사", "특별시장", "광역시장", "특별자치", "산림청장")
+# 송출 지역 변화(rules/bundles/alerts.py `_change`): new · up · same · down. 「same」도 빈 글이 아니라서
+# 예전에는 any(change)가 늘 참이었다(eval1118 회차 2 · 4 E5가 「모두 새로 진입」으로 잘못 씀, 11/18)
+ALERT_CHANGED = ("new", "up", "down")
 
 
 def _any_night(rows: list[dict[str, Any]]) -> bool:
@@ -81,7 +85,9 @@ def flags(
         "shelters_no_options": (sh.get("counts") or {}).get("no_options", 0) > 0,
         "shelters_in_range": (sh.get("counts") or {}).get("in_p8", 0) > 0,
         "other_sigungu": any(v.get("sigungu") and v.get("sigungu") != home for v in all_vil),
-        "alerts_changed": any(a.get("change") for a in (b.get("alerts") or {}).get("areas") or []),
+        "alerts_changed": any(
+            a.get("change") in ALERT_CHANGED for a in (b.get("alerts") or {}).get("areas") or []
+        ),
         "alerts_removed": bool((b.get("alerts") or {}).get("removed")),
         "requests_s6": _requests(items, "S6"),
         "requests_e6": _requests(items, "E6"),

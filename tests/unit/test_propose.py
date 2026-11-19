@@ -50,25 +50,23 @@ def test_one_result_per_engine_item_in_order(engine, written):
 
 
 def test_four_steps_then_engine_lists(written):
-    """11/17 배치: 상황 · 상태 · 판단(fact) → 주제별 제안(paragraph).
-    11/18: 주제 자리 뒤의 목록은 그 제안의 자세한 자료(details)로 붙는다
-    (E2는 주제마다 마을 목록 하나씩)."""
+    """11/17 배치: 상황 · 상태 · 판단(fact) → 제안(paragraph).
+    11/19 재설계(D2): 제안을 주제로 묶지 않으므로 규칙 엔진 목록은 제안에 붙지 않고
+    그 아래 섹션에 남는다."""
     e2 = written["E2"]
     assert [b["type"] for b in blocks(e2, "fact", "paragraph", "list")] == [
         "fact",
         "fact",
         "fact",
         "paragraph",
-        "list",
         "paragraph",
         "list",
+        "list",
     ]
-    assert len(e2["sections"]) == 1  # 목록이 모두 제안에 붙어 따로 남은 판정 자료 섹션이 없다
-    assert all(len(p["details"]) == 1 for p in blocks(e2, "paragraph"))
+    assert e2["sections"][0]["title"] == "" and len(e2["sections"]) >= 2
+    assert all("details" not in p and "topic" not in p for p in blocks(e2, "paragraph"))
     assert [b["step"] for b in blocks(e2, "fact")] == ["situation", "status", "judgment"]
-    first, second = blocks(e2, "paragraph")
-    assert first["topic"] == "위험구역 마을 대피"
-    assert second["topic"] == "잠재 위험구역 사전대피"
+    first, _second = blocks(e2, "paragraph")
     assert first["text"] == "[테스트] 위험구역 마을 대피 제안 문장입니다 [테스트 문서]."
     assert first["body"] == "[테스트] 위험구역 마을 대피 제안 문장입니다."
     assert first["cite"] == "[테스트 문서]"
@@ -86,7 +84,7 @@ def test_item_without_topics_gets_one_proposal_first(written):
     e6 = written["E6"]  # 다룰 주제 없음(엔진 action 블록 없음)
     assert e6["sections"][0]["title"] == ""  # 네 단계 섹션은 소제목 없음
     (para,) = blocks(e6, "paragraph")
-    assert para["topic"] is None
+    assert "topic" not in para
     assert blocks(e6, "table")  # 요청 표는 그대로
 
 

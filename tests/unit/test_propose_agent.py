@@ -34,7 +34,7 @@ class FakeEvidence:
 
 
 class EchoLLM:
-    """받은 형식(schema)에서 첫 주제 · 첫 근거를 골라 제안 하나를 돌려준다."""
+    """받은 형식(schema)에서 첫 근거를 골라 제안 하나를 돌려준다(11/19: 주제 칸 없음)."""
 
     def __init__(self):
         self.calls = []
@@ -42,8 +42,8 @@ class EchoLLM:
     def chat(self, messages, schema=None, **kw):
         self.calls.append(kw.get("tag"))
         props = schema["properties"]["proposals"]["items"]["properties"]
+        assert "topic" not in props
         proposal = {
-            "topic": props["topic"]["enum"][0],
             "category": "즉시",
             "text": "주민을 대피시키십시오.",
             "evidence": [props["evidence"]["items"]["enum"][0]],

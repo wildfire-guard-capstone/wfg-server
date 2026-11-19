@@ -33,15 +33,18 @@ def known_names(md: MapData) -> set[str]:
 
 
 def run_agent(
-    agent: Agent, llm_input: dict, prev: dict, only: set[str] | None = None
+    agent: Agent, llm_input: dict, prev: dict, only: set[str] | None = None, raw_table: str = ""
 ) -> tuple[list, list]:
+    """raw_table = 원자료 표 글(C1 · C2 평가 기준선만, demo/uiseong/raw_table.py)."""
     items = [it for it in llm_input["items"] if not only or it["id"] in only]
     common = with_situation(llm_input)
+    if raw_table:
+        common = common | {"raw_table": raw_table}
     return agent.run(common, items, prev)
 
 
 def with_situation(llm_input: dict) -> dict:
-    """common + 상황 깃발(agent/situation.py): 항목별 작성 지침(agent/guides.py)을 고르는 데 쓴다.
+    """common + 상황 깃발(agent/situation.py): C3 규칙층 구획의 「이번 상황」 한 줄에 쓴다.
     깃발은 항목 전체(E2 대피 현황 · S6/E6 요청 건수)로 만든다(--items로 몇 항목만 돌려도 같은 깃발)."""
     f = flags(llm_input["bundles"], llm_input["items"], llm_input["common"])
     return llm_input["common"] | {"situation": f}
@@ -70,6 +73,7 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
         iid = lg["id"]
         rag_doc = {
             "id": iid,
+            "condition": lg.get("condition"),
             "retrieval": lg.get("retrieval"),
             "evidence": lg.get("evidence"),
             "reused_from": lg.get("reused_from"),
@@ -81,18 +85,24 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
             k: lg.get(k)
             for k in (
                 "id",
+                "condition",
                 "input_key",
-                "guide",
+                "kinds",
                 "situations",
                 "calc",
-                "extras",
+                "retrieval",
                 "messages",
+                "final_messages",
                 "attempts",
                 "dropped",
                 "facts",
                 "facts_removed",
                 "facts_fallback",
                 "evidence_fixed",
+                "cite_removed",  # 11/19: 제안 글에서 지운 근거 설명 문장
+                "repeated_removed",  # 앞 제안과 겹쳐 지운 문장
+                "facts_soft",
+                "values_lost",  # 11/18: 다시 쓴 제안이 이름 · 값을 많이 잃어 한 번 더 쓰게 한 기록
                 "reused_from",
             )
         }

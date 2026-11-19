@@ -93,6 +93,62 @@ def judgment_of(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 판정된 대상 종류(11/19 재설계 D2 · D1): 규칙층이 C3에 넘기는 것은 「닿는 대상 종류 · 시간대」뿐이고
+# 주제 이름 · 조치는 LLM이 근거 발췌로 정한다. 항목마다 facts의 칸 → 대상 종류(값이 비지 않았을 때만).
+KIND_KEYS: dict[str, list[tuple[str, str]]] = {
+    "S2": [
+        ("life.villages", "마을"),
+        ("life.vulnerable", "취약시설"),
+        ("houses.in_p5", "주택"),
+        ("power", "송전선"),
+        ("substations", "변전소"),
+        ("temple", "사찰"),
+        ("heritage.items", "국가유산"),
+    ],
+    "E1": [("zones.burning", "위험구역"), ("zones.p5", "위험구역"), ("zones.p8", "잠재 위험구역")],
+    "E2": [("immediate", "위험구역 마을"), ("pre_evac", "잠재 위험구역 마을")],
+    "E3": [("immediate", "위험구역 취약시설"), ("pre_evac", "잠재 위험구역 취약시설")],
+    "E4": [("shelters", "대피소"), ("roads", "큰 도로")],
+    "E5": [("areas", "재난문자 지역")],
+}
+
+
+def _get(d: Any, path: str) -> Any:
+    for k in path.split("."):
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
+def _full(v: Any) -> bool:
+    if isinstance(v, dict):
+        return any(_full(x) for x in v.values())
+    return bool(v)
+
+
+def _night(facts: Any) -> bool:
+    """밤에 닿는 대상(night=true · 아직 지나지 않음)이 있거나 지금이 밤인가."""
+    if isinstance(facts, dict):
+        if facts.get("now_is_night") is True:
+            return True
+        if facts.get("night") is True and not facts.get("passed"):
+            return True
+        return any(_night(v) for v in facts.values())
+    if isinstance(facts, list):
+        return any(_night(v) for v in facts)
+    return False
+
+
+def kinds(judgment: dict[str, Any]) -> list[str]:
+    """판정된 대상 종류와 시간대(C3 규칙층 구획 · 검색 질의에 더함). 예: ["마을", "송전선", "주택", "야간"]."""
+    facts = judgment.get("facts") or {}
+    out = [k for path, k in KIND_KEYS.get(judgment.get("id", ""), []) if _full(_get(facts, path))]
+    if _night(facts):
+        out.append("야간")
+    return list(dict.fromkeys(out))
+
+
 def text_of(judgment: dict[str, Any], common: dict[str, Any]) -> str:
     """검사용 글 덩어리(숫자 · 시각 · 이름이 입력에 있는지 볼 때)."""
     return json.dumps({"common": common, "judgment": judgment}, ensure_ascii=False)

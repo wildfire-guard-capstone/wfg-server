@@ -4,11 +4,15 @@
 누구를(전 주민 / 고령자) 언제까지(「일몰 전」 등) 대피시킬지는 LLM이 p.75 · 76 · 79로 정한다
 (11/7 — 옛 R-08 대피 인원 · R-06 시한은 엔진에서 뺌). P8 안에 마을이 없으면 E2를 만들지 않는다.
 관할 경찰서 등 관할 이름은 `jurisdiction`으로 함께 넘긴다(11/19 평가 RE-R2).
+마을은 리 안 주택이 처음 닿는 P로 고른다. 줄은 법정리이고 닿는 행정리 이름을 붙인다(11/19 R3).
+리 경계만 걸친 마을(8시간 안 주택 없음)은 대피 대상이 아니라 넣지 않는다(E1이 따로 알림).
 """
 
 from typing import Any
 
+from rules.items.e1 import village_targets
 from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
+from rules.items.names import admin_names, label_of
 
 ID, NAME = "E2", "대피 대상·순서·시점"
 
@@ -18,6 +22,7 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
     f = r["field"]
     return {
         "name": r["name"],
+        "admin_villages": admin_names(r),
         "emd": r["emd"],
         "zone": r["zone"],
         "people": r["population"],
@@ -69,7 +74,7 @@ def e2_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "status": status,
         "finding": _finding(v, pre_evac, sun),
         "facts": facts,
-        "targets": [f"village:{r['id']}" for z in ("burning", "p5", "p8") for r in v[z]],
+        "targets": village_targets(v),
         "withheld": v["unknown"] + jurisdiction_unknown(bundles),
         "rule_basis": ["SM-p075", "SM-p076", "SM-p079"],
     }
@@ -82,7 +87,7 @@ def _finding(v: dict[str, Any], pre_evac: list[dict[str, Any]], sun: dict[str, A
     if t["within_p5"]["count"]:
         parts.append(f"위험구역 {t['within_p5']['count']}곳 {t['within_p5']['population']:,}명")
     if pre_evac:
-        names = ", ".join(r["name"] + ("(밤에 닿음)" if r["night"] else "") for r in pre_evac)
+        names = ", ".join(label_of(r) + ("(밤에 닿음)" if r["night"] else "") for r in pre_evac)
         parts.append(f"잠재 위험구역 {t['p8']['count']}곳 {t['p8']['population']:,}명: {names}")
     tail = f" · 일몰 {sun['sunset']['at']}" if any(r["night"] for r in pre_evac) else ""
     return " / ".join(parts) + tail

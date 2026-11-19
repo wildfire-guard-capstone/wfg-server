@@ -122,6 +122,18 @@ def field_text(f: dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "대피 보고 없음"
 
 
+def admin_of(v: dict[str, Any]) -> list[str]:
+    """마을 줄의 닿는 행정리 이름(main #58 RE-R3: 묶음 줄에 admin_villages). 없으면 빈 목록."""
+    return [a["name"] if isinstance(a, dict) else a for a in v.get("admin_villages") or []]
+
+
+def vlabel(v: dict[str, Any]) -> str:
+    """「안평면 신안리(신안1리)」 — 줄은 법정리, 닿는 행정리를 괄호로(rules.items.names.label_of와 같은 꼴, D2)."""
+    admin = admin_of(v)
+    name = f"{v['name']}({'·'.join(admin)})" if admin else v["name"]
+    return f"{v.get('emd', '')} {name}".strip()
+
+
 def plain(text: str) -> str:
     return (text or "").replace("**", "").strip()
 
@@ -553,8 +565,17 @@ class ToolBox:
             r.facts.append(
                 Fact(
                     f"context.villages.{v['zone']}[{v['id']}]",
-                    f"{v.get('emd', '')} {v['name']}",
+                    vlabel(v),
                     f"{ZONE.get(v['zone'], v['zone'])} · {reach(v)} · {pop} · {field_text(ctx.village_field(v['id']))}",
+                )
+            )
+        edge = _b(ctx, "villages").get("edge") or []
+        if edge:  # RE-R3 D1: 리 경계만 걸치고 8시간 안 주택이 없는 리 — 대피 대상에서 뺐음을 알린다
+            r.facts.append(
+                Fact(
+                    "context.villages.edge",
+                    "리 경계만 예측 범위에 걸친 마을(8시간 안에 닿는 주택 없음 — 대피 대상 아님)",
+                    " · ".join(f"{e.get('emd', '')} {e['name']}".strip() for e in edge),
                 )
             )
         # 11-10 평가: 「다음은 어디를 대피시켜야 해?」에 이미 불이 닿았고 대피 보고 없는 석탑리 · 신안리를 건너뛰고
@@ -634,6 +655,9 @@ class ToolBox:
         shelters = {s.get("village"): s for s in _b(ctx, "shelters").get("villages", [])}
         for v in hits:
             vid, label = str(v["id"]), f"{v.get('emd', '')} {v['name']}"
+            edge = {
+                str(e.get("id")): e for e in _b(ctx, "villages").get("edge") or [] if e.get("id")
+            }
             if vid in zone_ids:
                 z = next(x for x in ctx.zone_villages() if str(x["id"]) == vid)
                 r.facts.append(
@@ -643,6 +667,14 @@ class ToolBox:
                         ZONE.get(z["zone"], z["zone"]),
                     )
                 )
+                if admin_of(z):  # 닿는 행정리(줄 · 인구는 법정리, D2)
+                    r.facts.append(
+                        Fact(
+                            f"context.villages.{z['zone']}[{vid}].admin_villages",
+                            f"{label} 가운데 불이 닿는 행정리",
+                            " · ".join(admin_of(z)) + "(인구는 법정리 전체 값)",
+                        )
+                    )
                 r.facts.append(
                     Fact(
                         f"context.villages.{z['zone']}[{vid}].reach",
@@ -684,6 +716,14 @@ class ToolBox:
                                     f"{s['name']}({s.get('kind', '')}, {num(s.get('km'))} km{cap})",
                                 )
                             )
+            elif vid in edge:
+                r.facts.append(
+                    Fact(
+                        f"context.villages.edge[{vid}]",
+                        f"{label} 도달 구분",
+                        "리 경계만 예측 범위에 걸침(8시간 안에 닿는 주택 없음 — 대피 대상 아님)",
+                    )
+                )
             elif ctx.has_proposal:
                 r.facts.append(
                     Fact(

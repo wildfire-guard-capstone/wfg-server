@@ -5,13 +5,14 @@
 시각: DB는 시간대가 있는 값(timestamptz), 엔진은 한국 시간 그대로(시간대 없음)를 쓴다.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
 from geoalchemy2.shape import to_shape
 from pyproj import Transformer
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 from sqlalchemy.orm import Session
 
 from app.core.time import KST
@@ -20,7 +21,7 @@ from app.repositories import base_data, incidents, predictions
 from rules.context import Inputs
 from rules.core.places import Deployed
 from rules.core.stage import Stage
-from rules.core.villages import VillageField
+from rules.core.villages import Village, VillageField
 
 AREA_BUFFER_M = 20_000  # P8 둘레 20 km 안 바탕 데이터를 읽는다(도로 · 대피소 · 시군구 경계 …)
 
@@ -124,6 +125,12 @@ def incident_info(session: Session, incident: Incident) -> dict[str, Any]:
     }
 
 
+def house_area(p8: BaseGeometry, villages: Sequence[Village]) -> BaseGeometry:
+    """주택을 읽을 곳 = P8 + P8에 걸친 리 전체(리 안 주택이 처음 닿는 P를 세려면 리 안 주택이
+    모두 있어야 한다 — P8 안만 읽으면 P8 밖 주택만 있는 리가 「주택 자료 없음」이 됨)."""
+    return unary_union([p8, *(v.geom for v in villages if v.geom.intersects(p8))])
+
+
 def build_inputs(
     session: Session,
     *,
@@ -135,7 +142,8 @@ def build_inputs(
     """예측 하나(없으면 그 산불의 최신 예측)로 규칙 엔진 입력과 산불 정보를 만든다.
 
     1. 산불 · 예측 · 예측의 시작 화선(P0)을 읽는다 → P0 ~ P8
-    2. 범위 = P8 둘레 20 km. 그 안 바탕 데이터를 읽는다(주택은 P8 안만 — P5 동수만 셈)
+    2. 범위 = P8 둘레 20 km. 그 안 바탕 데이터를 읽는다. 주택은 P8과 P8에 걸친 리 안만 읽는다
+       (2만여 개라 좁게 — 리 · 행정리가 처음 닿는 P와 P5 동수를 셈). 행정리는 읽은 리에 딸린 것
     3. 기상 = 예측에 넣은 시간별 기상(0시 기온 · 습도 포함)
     4. 현장 입력 = incidents.situation, 직전 단계 · 문자 단계 = 직전 제안서
     """
@@ -150,7 +158,8 @@ def build_inputs(
     area = ranges[-1].buffer(AREA_BUFFER_M)  # 2
     sido, sigungu = base_data.regions(session, area)
     places = base_data.facilities(session, area)
-    features = base_data.map_features(session, area, house_area=ranges[-1])
+    villages = base_data.villages(session, area)
+    features = base_data.map_features(session, area, house_area=house_area(ranges[-1], villages))
     wind_ms, wind_deg = hourly_wind(pred.weather)  # 3
     first = (pred.weather.get("hours") or [{}])[0]
     prev = incidents.latest_proposal(session, incident_id)  # 4
@@ -170,7 +179,8 @@ def build_inputs(
         sido=sido,
         sigungu=sigungu,
         neighbors=base_data.neighbors(session, area),
-        villages=base_data.villages(session, area),
+        villages=villages,
+        admin_villages=base_data.admin_villages(session, [v.id for v in villages]),
         field=village_fields(incident.situation),
         deployed=deployed_of(incident.situation),
         bases=base_data.bases(session, incident_id),

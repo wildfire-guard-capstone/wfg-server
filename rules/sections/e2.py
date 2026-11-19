@@ -7,6 +7,8 @@
 
 from typing import Any
 
+from rules.items.names import village_label
+
 ANCHOR_IDS = {"p.75": "SM-p075", "p.76": "SM-p076", "p.79": "SM-p079"}
 
 
@@ -35,7 +37,8 @@ def _rows(villages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for r in rs:
             mark = " (대피 완료)" if r["evacuated"] else ""
             mark += " (예상 시각 경과 — 새 화선 보고 필요)" if r["passed"] else ""
-            names.append(f"**{r['name']}**({r['people']:,}명){mark}")
+            label = village_label(r["name"], r["admin_villages"])
+            names.append(f"**{label}**({r['people']:,}명){mark}")
             if r["alert_sent_at"] and not r["evacuated"]:
                 sent = f"{r['name']}는 {r['alert_sent_at']} 대피 문자가 나갔지만"
                 notes.append(f"{sent} 대피 완료 보고가 없습니다.")

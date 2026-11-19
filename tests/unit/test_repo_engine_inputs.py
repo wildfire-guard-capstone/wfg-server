@@ -74,3 +74,17 @@ def test_map_feature_kinds():
     assert substation_kind({"type": "substation"}) == "변전소"
     assert substation_kind({"type": "plant", "source": "solar"}) == "태양광"
     assert substation_kind({"type": "plant", "source": "hydro"}) == "발전소"
+
+
+def test_house_area_covers_whole_villages_touching_p8():
+    from shapely.geometry import box
+
+    from app.repositories.engine_inputs import house_area
+    from rules.core.villages import Village
+
+    p8 = box(0, 0, 100, 100)
+    near = Village(1, "가리", "안평면", "의성군", box(90, 0, 500, 100), 10, None)
+    far = Village(2, "나리", "안평면", "의성군", box(600, 0, 700, 100), 10, None)
+    area = house_area(p8, [near, far])
+    assert area.covers(box(0, 0, 500, 100))  # P8 + 걸친 리 전체(P8 밖 주택도 읽음)
+    assert not area.intersects(far.geom)

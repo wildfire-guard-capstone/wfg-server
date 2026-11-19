@@ -84,15 +84,18 @@ def test_rule_part_carries_commander_handover_window():
     assert "지휘권자: 지금 경상북도지사\n" in same + "\n" and "→ 다음" not in same
 
 
-def test_haengjeongri_name_not_in_input_is_flagged():
+def test_haengjeongri_rule_matches_engine_label():
+    # 행정리 이름 검사 자체는 main #59(ADMIN_VILLAGE)가 맡는다 — 여기서는 지시문이 엔진 꼴(D2)과 맞는지만
+    s = prompt.system("C3")
+    assert "「○○리(○○1리)」) 그대로 옮기고" in s and "인구는 ○○리 값" in s
     errs = _c("신월1리 주택 최소 2동 주변에 소방차와 진화차를 집중 배치하십시오.")
-    assert any("행정리" in e and "신월리" in e for e in errs)
-    judged = JUDGED + " 신월1리"  # 입력(판정 · 근거)에 행정리 이름이 있으면 통과
+    assert any("신월1리" in e for e in errs)  # 판정 · 근거에 없는 행정리(#59)
+    judged = JUDGED + " 신월리(신월1리)"
     ok = check.check_one(
         "S2",
         {
             "category": "즉시",
-            "text": "신월1리 주택 최소 2동 주변에 소방차와 진화차를 집중 배치하십시오.",
+            "text": "신월리(신월1리) 주택 최소 2동 주변에 소방차와 진화차를 집중 배치하십시오.",
             "evidence": ["SM-p079-s02"],
         },
         EV,
@@ -101,8 +104,7 @@ def test_haengjeongri_name_not_in_input_is_flagged():
         NAMES,
         "의성군수",
     )
-    assert not any("행정리" in e for e in ok)
-    assert "○○1리" in prompt.system("C3")  # 규칙 1: 입력에 없는 행정리 이름을 만들지 않음
+    assert not any("신월1리" in e for e in ok)
 
 
 # ── 어시스턴트 ────────────────────────────────────────────────────────────
@@ -203,6 +205,25 @@ def test_haengjeongri_question_finds_beopjeongri():
     p = plan_rules(box, "괴산1리 대피 언제까지 해야 해?", None)
     assert ("village", "괴산리") in p.calls
     assert "○○1리" in aprompt.ANSWER_SYSTEM and "○○1리" in aprompt.PLAN_SYSTEM
+
+
+def test_village_tools_show_admin_and_edge_villages():
+    # RE-R3(main #58): 묶음 줄에 닿는 행정리 · 경계만 걸친 리(edge)
+    ctx = make_context()
+    vb = ctx.bundles["villages"]
+    first = (vb.get("burning") or vb.get("p5"))[0]
+    first["admin_villages"] = [{"id": 9, "name": first["name"].replace("리", "1리"), "zone": "p5"}]
+    vb["edge"] = [{"id": 777, "name": "용기리", "emd": "안계면", "boundary_p": 6}]
+    ctx.villages = list(ctx.villages) + [{"id": 777, "name": "용기리", "emd": "안계면"}]
+    box = ToolBox(ctx)
+    labels = [f.label for f in box.run("villages").facts]
+    admin = first["name"].replace("리", "1리")
+    assert any(f"{first['name']}({admin})" in x for x in labels)
+    assert any("경계만" in x for x in labels)
+    facts = {f.label: f.value for f in box.run("village", "용기리").facts}
+    assert any("대피 대상 아님" in v for v in facts.values())
+    facts = {f.label: f.value for f in box.run("village", admin).facts}
+    assert any(admin in v and "법정리 전체" in v for v in facts.values())
 
 
 def test_road_question_goes_to_e4_not_alerts():

@@ -8,6 +8,8 @@ app의 DB → Inputs 어댑터가 아직 없어(rules/README 8장) 같은 모양
   의성 밖(리 자료 없음) = SGIS 행정동 하나를 「○○면 전체」 마을 하나로(인구 SGIS 2024).
   읍면 칸에는 시군 이름
 - 주택 = 05_주택(단독 · 공동주택 건물 중심점 23,160동)
+- 행정리 = 21_행정리(선택, capston-data `적재/admin_villages.geojson`을 그대로 복사). 회관 점 ·
+  마을 구역. 파일이 없으면 행정리 없이 법정리로만 판정(11/19 R3)
 - 취약시설 = 07_취약시설 34곳. 주야간보호만 daytime_only
 - 대피소 = 06_이재민_임시주거시설 78곳. 경로당 → village, 숙박시설(모텔) → 후보 아님,
   그 밖(학교 · 복지 · 공공) → hub. 같은 이름은 작은 수용 인원 하나만
@@ -32,7 +34,7 @@ from shapely.strtree import STRtree
 
 from rules.core.places import Base, Place, PowerLine, RoadPiece
 from rules.core.regions import Region
-from rules.core.villages import Village
+from rules.core.villages import AdminVillage, Village
 
 _TF = Transformer.from_crs(4326, 5179, always_xy=True)
 _TB = Transformer.from_crs(5179, 4326, always_xy=True)
@@ -154,6 +156,29 @@ class MapData:
         for i in self._village_tree.query(pt, predicate="intersects"):
             return self.villages[int(i)].id
         return None
+
+    @cached_property
+    def admin_villages(self) -> list[AdminVillage]:
+        """21_행정리: 행정리 · 회관 점 · 마을 구역(없으면 None). 파일이 없으면 빈 목록."""
+        path = next((self.folder / "map").glob("21_*.geojson"), None)
+        if path is None:
+            return []
+        out = []
+        for i, f in enumerate(json.loads(path.read_text(encoding="utf-8"))["features"], 1):
+            p, g = f["properties"], f.get("geometry")
+            hall = to5179(Point(p["hall_lon"], p["hall_lat"])) if p.get("hall_lon") else None
+            out.append(
+                AdminVillage(
+                    i,
+                    int(p["bjd_cd"]),
+                    p["name"],
+                    int(p["seq"]),
+                    p.get("hall_name"),
+                    hall,
+                    to5179(shape(g)).buffer(0) if g else None,
+                )
+            )
+        return out
 
     @cached_property
     def houses(self) -> tuple[list[float], list[float]]:

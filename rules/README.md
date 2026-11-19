@@ -189,8 +189,10 @@ sections 1. 대응단계 판단 · 격상 검토: a1 현재 기준 단계, a2 5�
 
 [E1]
 context  reached_villages → 괴산리 0 · 신월리 0 · 신안리 1 · 철파리 2 · 정자리 8
-bundles  villages {burning: [괴산리, 신월리], p5: [신안리, 철파리], p8: [정자리]}
-items    facts.zones(구간별 이름 · 읍면), status = risk_zone
+         (리 안 주택이 처음 닿는 P, 주택 자료가 없는 리는 경계 P — 예시는 신월리만 주택이 있음.
+          경계만 걸치고 8시간 안 주택이 없는 리는 edge_villages로, 11/19 R3)
+bundles  villages {burning: [괴산리, 신월리], p5: [신안리, 철파리], p8: [정자리], edge: []}
+items    facts.zones(구간별 이름 · 읍면 · 닿는 행정리) · edge_only, status = risk_zone
          finding 「위험구역 4곳: 안평면 괴산리(이미 닿음) · … / 잠재 위험구역 1곳: 옥산면 정자리」
 sections a1 리 단위 구역 + 조립기 목록(구간별 마을)
 ```

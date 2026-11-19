@@ -5,7 +5,7 @@
 
 from typing import Any
 
-from rules.items.e1 import by_emd
+from rules.items.e1 import EDGE_LABEL, by_emd
 
 LABELS = {
     "burning": "위험구역(이미 닿음)",
@@ -18,7 +18,7 @@ def e1_sections(e1: dict[str, Any], bundles: dict[str, Any]) -> dict[str, Any]:
     """E1 입력과 엔진 묶음으로 섹션을 만든다.
 
     1. a1 리 단위 구역 — 늘 넣음
-    2. 목록: 마을이 있는 구간마다 한 줄, 읍면별로 묶음
+    2. 목록: 마을이 있는 구간마다 한 줄, 읍면별로 묶음. 경계만 걸친 마을은 마지막 줄
     3. 언급 금지 · 문단 근거 ID
     """
     v = bundles["villages"]
@@ -27,15 +27,17 @@ def e1_sections(e1: dict[str, Any], bundles: dict[str, Any]) -> dict[str, Any]:
             "type": "action",
             "id": "E1-a1",
             "topic": "리 단위 구역",
-            "use": ["zones"],
+            "use": ["zones", "edge_only"],
             "anchors": ["p.75"],
         },
     ]  # 1
     rows = [
-        {"zone": z, "text": f"**{LABELS[z]}**: {by_emd(v[z]).replace('·', ', ')}"}
+        {"zone": z, "text": f"**{LABELS[z]}**: {by_emd(v[z], sep=', ')}"}
         for z in ("burning", "p5", "p8")
         if v[z]
     ]  # 2
+    if v["edge"]:
+        rows.append({"zone": "edge", "text": f"**{EDGE_LABEL}**: {by_emd(v['edge'], sep=', ')}"})
     blocks.append({"type": "list", "style": "bullet", "writer": "조립기", "rows": rows})
     return {
         "sections": [{"title": "", "blocks": blocks}],

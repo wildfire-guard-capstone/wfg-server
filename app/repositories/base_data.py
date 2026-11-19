@@ -7,6 +7,7 @@
 
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any
 
 from shapely import wkb
@@ -18,7 +19,7 @@ from app.db.models._types import SRID
 from rules.core.facility import Points
 from rules.core.places import Base, Place, PowerLine, RoadPiece
 from rules.core.regions import Region
-from rules.core.villages import Village
+from rules.core.villages import AdminVillage, Village
 
 IN_AREA = "ST_Intersects({col}, ST_GeomFromText(:wkt, :srid))"
 
@@ -80,6 +81,24 @@ def villages(session: Session, area: BaseGeometry) -> list[Village]:
         _area(area),
     ).all()
     return [Village(i, n, emd, sgg, _geom(g), pop, p65) for i, n, emd, sgg, g, pop, p65 in rows]
+
+
+def admin_villages(session: Session, village_ids: Sequence[int]) -> list[AdminVillage]:
+    """리에 딸린 행정리 — 회관 점 · 마을 구역(없으면 None), 리 · 별표 순."""
+    if not village_ids:
+        return []
+    rows = session.execute(
+        text(
+            "SELECT id, village_id, name, seq, hall_name, ST_AsBinary(hall_point),"
+            " ST_AsBinary(geom) FROM admin_villages WHERE village_id = ANY(:ids)"
+            " ORDER BY village_id, seq"
+        ),
+        {"ids": list(village_ids)},
+    ).all()
+    return [
+        AdminVillage(i, vid, name, seq, hall_name, _geom(h) if h else None, _geom(g) if g else None)
+        for i, vid, name, seq, hall_name, h, g in rows
+    ]
 
 
 def facilities(session: Session, area: BaseGeometry) -> dict[str, list[Place]]:
@@ -229,12 +248,13 @@ def bases(session: Session, incident_id: int) -> list[Base]:
 
 
 def known_names(session: Session) -> set[str]:
-    """바탕 데이터의 고유 이름(리 · 읍면동 · 시군구 · 시설 · 기지, 두 글자 이상) —
+    """바탕 데이터의 고유 이름(리 · 행정리 · 읍면동 · 시군구 · 시설 · 기지, 두 글자 이상) —
     에이전트 작성기가 제안 문장에 나온 이름이 판정 · 근거에 있는지 검사할 때 쓴다
     (의성 시연의 demo.uiseong.step3_agent.known_names와 같은 범위)."""
     rows = session.execute(
         text(
             "SELECT name FROM villages"
+            " UNION SELECT name FROM admin_villages"
             " UNION SELECT name FROM admin_areas WHERE parent_id IS NOT NULL"
             " UNION SELECT name FROM facilities"
             " UNION SELECT name FROM resource_bases"

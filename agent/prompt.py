@@ -214,10 +214,18 @@ def rule_parts(
         head.append(f"지금 단계(판정 기준): {common['current_stage']}")
     cm = common.get("commander") or {}
     if cm.get("now"):
-        head.append(
-            f"지휘권자: 지금 {cm['now']}"
-            + (f" → 다음 {cm['next']}" if cm.get("next") and cm["next"] != cm["now"] else "")
-        )
+        # RE-1(main #55)의 올라가는 구간(steps: 지휘권자 · 시각 · 이유)을 함께 — 「지금 → 다음」만 주면 S1 밖 항목이
+        # 「5시간 뒤 이관」으로 씀(11-19 p1p3 시범: S1만 13:50 ~ 14:50, S2 · S4 · S6은 「5시간 뒤」)
+        steps = [
+            f"{s.get('title', '')}({s.get('at', '')}"
+            + (f", {s['why']}" if s.get("why") else "")
+            + ")"
+            for s in cm.get("steps") or []
+            if s.get("title")
+        ]
+        nxt = " → ".join(steps) if steps else cm.get("next")
+        show = bool(steps) or (bool(nxt) and nxt != cm["now"])
+        head.append(f"지휘권자: 지금 {cm['now']}" + (f" → 다음 {nxt}" if show else ""))
     if situation_line:
         head.append(
             f"이번 상황(산불 전체 — S1 · S4 · S5가 아니면 상황 문단에 옮기지 않음): {situation_line}"

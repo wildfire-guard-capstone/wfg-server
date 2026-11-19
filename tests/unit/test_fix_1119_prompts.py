@@ -58,6 +58,32 @@ def test_p3_missing_data_and_relative_time_rules():
     assert a.replace(prompt.EVIDENCE_RULE["C1"], "") == b.replace(prompt.EVIDENCE_RULE["C3"], "")
 
 
+def test_rule_part_carries_commander_handover_window():
+    # RE-1(main #55) steps가 C3 규칙층 구획까지 와야 S1 밖 항목도 「5시간 뒤 이관」으로 쓰지 않는다
+    common = {
+        "commander": {
+            "now": "의성군수",
+            "next": "경상북도지사",
+            "steps": [
+                {
+                    "title": "경상북도지사",
+                    "at": "13:50 ~ 14:50",
+                    "why": "피해면적 100 ha 이상 대형산불",
+                }
+            ],
+        }
+    }
+    head = prompt.rule_parts(common, {"finding": "x"})[0]
+    assert (
+        "지휘권자: 지금 의성군수 → 다음 경상북도지사(13:50 ~ 14:50, 피해면적 100 ha 이상 대형산불)"
+        in head
+    )
+    same = prompt.rule_parts(
+        {"commander": {"now": "경상북도지사", "next": "경상북도지사", "steps": []}}, {}
+    )[0]
+    assert "지휘권자: 지금 경상북도지사\n" in same + "\n" and "→ 다음" not in same
+
+
 def test_haengjeongri_name_not_in_input_is_flagged():
     errs = _c("신월1리 주택 최소 2동 주변에 소방차와 진화차를 집중 배치하십시오.")
     assert any("행정리" in e and "신월리" in e for e in errs)

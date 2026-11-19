@@ -151,3 +151,49 @@ def test_time_suffix_and_unknown_village():
         "마을 이름" in e
         for e in _c("신월리 주택 최소 2동 주변에 소방차를 배치하고 일자리 는 그대로 두십시오.")
     )
+
+
+# 행정리 이름(11/19 R3): 엔진이 닿는 행정리를 「신안리(신안1리)」로 넘긴다
+ADMIN_JUDGED = (
+    "위험구역 2곳: 안평면 신월리 · 신안리(신안1리) 주택 최소 11동 거리는 신안1리노인회관에서"
+)
+ADMIN_ALLOWED = check.allowed_from(ADMIN_JUDGED, EV_TEXT)
+
+
+def _a(text, names=frozenset({"신월리", "신안리"})):
+    p = {"category": "즉시", "text": text, "evidence": ["SM-p079-s02"]}
+    return check.check_one("E2", p, EV, ADMIN_ALLOWED, ADMIN_JUDGED, set(names), "의성군수")
+
+
+def test_admin_village_in_judgment_passes():
+    assert _a("신안1리 주민을 대피시키십시오.") == []
+    assert _a("신안리(신안1리) 주민 대피를 지원하십시오.") == []
+    assert _a("신안1리노인회관에 모이도록 안내하십시오.") == []
+
+
+def test_admin_village_not_in_judgment_is_caught():
+    # 닿지 않는 신안2리 · 없는 신안4리: 숫자 검사가 아니라 마을 이름 검사로 잡는다
+    errs = _a("신안2리와 신안4리 주민을 대피시키십시오.")
+    assert any("마을 이름 「신안2리」" in e for e in errs)
+    assert any("마을 이름 「신안4리」" in e for e in errs)
+    assert not any("숫자" in e for e in errs)
+    # 지도에 있는 행정리면 「판정 · 근거에 없는 이름」으로 잡는다(known_names)
+    errs = _a("신안2리 주민을 대피시키십시오.", names={"신월리", "신안리", "신안2리"})
+    assert any("이름 「신안2리」" in e for e in errs)
+
+
+def test_village_before_admin_paren_is_checked():
+    assert any("마을 이름 「신신리」" in e for e in _a("신신리(신안1리) 주민을 대피시키십시오."))
+
+
+def test_admin_number_is_not_a_count():
+    _, nums = check._nums("신안1리 · 용기6리 주민 12명, 물 2리터")
+    assert nums == {"12", "2"}
+
+
+def test_pair_quote_with_admin_village_is_not_a_message_text():
+    text = (
+        "「신안리(신안1리) 주민은 안평초등학교로, 신월리 주민은 의성여자고등학교로」 안내하십시오."
+    )
+    assert check.strip_pairs(text) == " 안내하십시오."
+    assert check.strip_pairs("「용기6리 주민은 안계고등학교로」") == ""

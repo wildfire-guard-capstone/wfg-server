@@ -67,7 +67,9 @@ FORBID = {
     # 「○○리 주민은 ○○학교로」 같은 마을–대피 장소 짝(11/17 사용자 결정)은 문안이 아니다 — strip_pairs가 먼저 지운다
     "E5": [(re.compile(r"[「“\"][^」”\"]{12,}[」”\"]|문안"), "재난문자 문안은 쓰지 마십시오")],
 }
-_PAIR = r"[가-힣]+리(?:\s?·\s?[가-힣]+리)*\s?주민은\s?[^,」”\"]+?(?:으로|로)"
+# 마을 이름: 법정리(「신안리」) · 행정리(「신안1리」) · 법정리(닿는 행정리)(「신안리(신안1리)」, 11/19 R3)
+_VNAME = r"[가-힣]+\d{0,2}리(?:\([가-힣\d·\s]+\))?"
+_PAIR = rf"{_VNAME}(?:\s?·\s?{_VNAME})*\s?주민은\s?[^,」”\"]+?(?:으로|로)"
 PAIR_QUOTE = re.compile(rf"[「“\"]\s?{_PAIR}(?:\s?,\s?{_PAIR})*\s?[」”\"]")
 
 
@@ -196,6 +198,17 @@ def parse(text: str) -> list[dict[str, Any]]:
 
 
 VILLAGE = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=[\s·,~)\]와과의에를은는도]|$)")
+# 행정리 이름(「신안1리」): 숫자가 들어 VILLAGE가 못 본다. 엔진이 닿는 행정리를 「신안리(신안1리)」로
+# 넘기므로(11/19 R3) 판정 · 근거에 없는 행정리(「신안3리」 · 없는 「신안4리」)를 따로 잡는다.
+# 「신안1리노인회관」처럼 시설 이름에 붙은 것은 보지 않는다(뒤에 조사 · 띄어쓰기 · 괄호가 와야 함).
+# 어시스턴트는 「괴산1리」를 괴산리로 찾아 답하므로(assistant/answer.py) 제안 검사에서만 쓴다
+ADMIN_VILLAGE = re.compile(
+    r"(?<![가-힣\d])([가-힣]{1,3}\d{1,2}리)(?=[\s·,~()\]와과의에를은는도]|$)"
+)
+# 법정리 뒤에 닿는 행정리 괄호가 붙은 꼴(「신안리(신안1리)」)의 법정리도 본다
+VILLAGE_BEFORE_PAREN = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=\()")
+# 행정리 번호(「신안1리」의 1)는 숫자 검사에서 뺀다 — 이름은 마을 이름 검사가 본다
+ADMIN_NUM = re.compile(r"(?<=[가-힣])\d{1,2}(?=리(?!터))")
 ORG = re.compile(
     r"(?<![가-힣])([가-힣]{1,4}[시군구])\s([가-힣]{2,8}?(?:과장|과|소방서장|소방서|경찰서장|경찰서|보건소장|보건소))(?=[에은는이가과와의을를도\s,·]|$)"
 )
@@ -253,7 +266,7 @@ def fix_category(text: str, category: str) -> str:
 
 def _nums(text: str) -> tuple[set[str], set[str]]:
     times = {f"{int(h)}:{m}" for h, m in TIME.findall(text)}
-    rest = TIME.sub(" ", text)
+    rest = ADMIN_NUM.sub("", TIME.sub(" ", text))
     nums = {n.replace(",", "") for n in NUM.findall(rest)}
     nums |= {str(int(h)) for h, _ in TIME.findall(text)}
     return times, nums
@@ -329,8 +342,9 @@ def value_errors(
         sigungu, org = m.group(1), m.group(2)
         if not any(x in blob for x in (f"{sigungu} {org}", org, org.removesuffix("장"))):
             errs.append(f"판정 · 근거에 없는 기관 이름 「{sigungu} {org}」")
-    # 지도 자료에도 없는 마을 이름(tune10: 「괴산리~신신리」 — 신안리를 잘못 씀). 「○○리」 꼴만 본다
-    for v in dict.fromkeys(VILLAGE.findall(text)):
+    # 지도 자료에도 없는 마을 이름(tune10: 「괴산리~신신리」 — 신안리를 잘못 씀). 「○○리」 · 「○○N리」 꼴만 본다
+    found = VILLAGE.findall(text) + VILLAGE_BEFORE_PAREN.findall(text) + ADMIN_VILLAGE.findall(text)
+    for v in dict.fromkeys(found):
         if v not in blob and v not in NOT_VILLAGE and v not in known_names:
             errs.append(f"판정 · 근거에 없는 마을 이름 「{v}」")
     if PLACEHOLDER.search(text):

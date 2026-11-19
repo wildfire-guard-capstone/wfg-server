@@ -198,6 +198,20 @@ def parse(text: str) -> list[dict[str, Any]]:
 
 
 VILLAGE = re.compile(r"(?<![가-힣\d])([가-힣]{2}리)(?=[\s·,~)\]와과의에를은는도]|$)")
+# 행정리 이름(「괴산1리」 · 「용기 6리」): 법정리 이름 뒤 숫자(이장 정수 조례 별표 꼴, 2026-11-19 행정리 작업)
+ADMIN_VILLAGE = re.compile(
+    r"(?<![가-힣\d])([가-힣]{1,3}\s?\d{1,2}리)(?=[\s·,~)\]와과의에를은는도이가]|$)"
+)
+DEADLINE_WORDS = ("즉시", "지금", "바로", "당장")
+
+
+def deadline_of(text: str) -> tuple[str, ...]:
+    """제안 글의 시한 표시(HH:MM · 즉시류) — 같은 조치라도 시한이 다르면 나눠 쓴 것으로 보지 않는다(P2)."""
+    times = {f"{int(h)}:{m}" for h, m in TIME.findall(text)}
+    words = {w for w in DEADLINE_WORDS if w in text}
+    return tuple(sorted(times | words))
+
+
 ORG = re.compile(
     r"(?<![가-힣])([가-힣]{1,4}[시군구])\s([가-힣]{2,8}?(?:과장|과|소방서장|소방서|경찰서장|경찰서|보건소장|보건소))(?=[에은는이가과와의을를도\s,·]|$)"
 )
@@ -363,6 +377,13 @@ def value_errors(
     for v in dict.fromkeys(VILLAGE.findall(text)):
         if v not in blob and v not in NOT_VILLAGE and v not in known_names:
             errs.append(f"판정 · 근거에 없는 마을 이름 「{v}」")
+    # 행정리(「괴산1리」): 숫자가 들어 위 검사를 빠져나간다. 판정은 법정리 단위라 입력에 없으면 지어낸 이름
+    for v in dict.fromkeys(ADMIN_VILLAGE.findall(text)):
+        if v not in blob and v not in known_names:
+            base = re.sub(r"[\s\d]+", "", v)
+            errs.append(
+                f"입력에 없는 행정리 이름 「{v}」 — 입력의 마을 이름(「{base}」)으로 쓰십시오"
+            )
     if PLACEHOLDER.search(text):
         errs.append(
             "문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 쓰지 말고 이번 판정의 값으로 쓰십시오"
@@ -945,17 +966,21 @@ def check(
             # 반복 검사는 문단 전체(상황 문장 + 할 일)로: 할 일만 보면 주제가 달라도 「…협의하십시오」로 같아진다(tune12)
             text = f"{sit} {text}"
         key = re.sub(r"[^가-힣0-9]", "", text)[:30]
-        # 대상(마을 · 시설 이름 · 숫자 · 시각)만 다른 같은 조치: 이름을 지운 꼴이 같으면 나눠 쓴 것
+        # 대상(마을 · 시설 이름 · 숫자)만 다른 같은 조치: 이름을 지운 꼴이 같으면 나눠 쓴 것.
+        # 다만 시한이 다르면 나눠 쓴 게 맞다(11/19 평가 P2: 시한이 다른 마을을 한 시한으로 합침) — 시한도 같아야 잡는다
         shape = text
         for n in names:
             shape = shape.replace(n, "")
         shape = re.sub(r"[^가-힣]", "", re.sub(r"\d+", "", shape))
+        when = deadline_of(text)
         if (key and key in seen) or i in (repeated or set()):
             errs.append("앞 제안과 같은 내용입니다. 주제마다 다른 할 일을 쓰십시오")
-        elif len(shape) >= 8 and shape in shapes:
-            errs.append("같은 조치를 대상만 바꿔 나눴습니다. 대상을 한 제안에 모아 쓰십시오")
+        elif len(shape) >= 8 and (shape, when) in shapes:
+            errs.append(
+                "같은 조치를 대상만 바꿔 나눴습니다. 시한이 같은 대상은 한 제안에 모아 쓰십시오"
+            )
         seen.append(key)
-        shapes.append(shape)
+        shapes.append((shape, when))
         if errs:
             out[i] = errs
     # 다룰 주제마다 제안이 있어야 한다(없으면 항목 전체를 다시 쓰게 한다)

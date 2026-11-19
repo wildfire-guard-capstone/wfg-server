@@ -133,11 +133,10 @@ def test_topics_point_at_jurisdiction():
 
 
 def test_health_name_only_via_jurisdiction():
-    # 평가 재설계 D3(11-18): E6 요청 표에서 보건(이송 담당) 행을 뺐다 — 누가 이송을 맡을지는 제안(LLM + 근거)이 정함.
-    # 보건소 이름은 관할 기관(jurisdiction)으로 E3 입력에만 넘긴다(RE-R2).
+    # 평가 재설계 D3(11-18): E6 요청 표에서 보건(이송 담당) 행을 뺐다 —
+    # 누가 이송을 맡을지는 제안(LLM + 근거)이 정함. 보건소 이름은 관할 기관(jurisdiction)으로
+    # E3 입력에만 넘긴다(RE-R2).
     items = _items()
-    table = next(
-        b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "table"
-    )
+    table = next(b for s in items["E6"]["sections"] for b in s["blocks"] if b["type"] == "table")
     assert "보건" not in [r["group"] for r in table["rows"]]
     assert items["E3"]["facts"]["jurisdiction"]["by_sigungu"][0]["health"] == "의성군보건소"

@@ -51,21 +51,27 @@ KEYWORDS: list[tuple[str, str]] = [
 ]
 WHY = re.compile(r"왜|이유|근거|기준|법|규정|매뉴얼|조항|권한|절차|책임|누가|누구|할\s?수\s?있")
 DO = re.compile(r"해야|하나요|할까|할\s?일|조치|어떻게\s?(?:하|대응)|무엇을|뭘|뭐\s?해")
-# 「무엇을 해야 하나」 질문의 주제 → 그 일을 다루는 항목
+# 「무엇을 해야 하나」 질문의 주제 → 그 일을 다루는 항목(규칙 엔진 12항목 번호 — context.ITEM_NAMES)
 ITEM_TOPICS: list[tuple[str, str]] = [
     ("S1", r"단계|격상|지휘권|인계"),
-    ("S2", r"우선\s?순위|보호\s?대상|먼저\s?지켜"),
+    (
+        "S2",
+        r"우선\s?순위|우선\s?지역|보호\s?대상|먼저\s?지켜|송전|변전|문화유산|국가유산|사찰|시설\s?보호",
+    ),
     ("S3", r"헬기|자원|동원|응원|투입"),
-    ("S4", r"야간|주간|밤|낮|일몰"),
-    ("S5", r"송전|변전|문화유산|국가유산|사찰|시설\s?보호"),
+    ("S4", r"야간|주간|밤|낮|일몰|진화\s?방식"),
+    ("S5", r"(?:인력|대원|진화대)\s?(?:안전|보호)|안전\s?관리|투입\s?관리"),
     ("S6", r"대책\s?회의|협조|관계\s?기관|유관\s?기관"),
     ("E1", r"위험\s?구역"),
-    ("E2", r"대피\s?(?:순서|시점|명령|언제)|먼저\s?대피|대피시켜|대피해야"),
+    ("E2", r"대피\s?(?:순서|시점|명령|언제|대상)|먼저\s?대피|대피시켜|대피해야"),
     ("E3", r"요양|취약\s?시설|학교|병원"),
-    ("E4", r"대피소|대피\s?장소"),
-    ("E5", r"도로|통제|교통"),
-    ("E6", r"문자|방송|전파"),
+    ("E4", r"대피소|대피\s?장소|도로|통제|교통"),
+    ("E5", r"문자|방송|전파"),
+    ("E6", r"기관에?\s?요청|요청할\s?기관"),
 ]
+# 묻는 것(답의 꼴) — 11-19 의도 판별 비교(「의도 판별 비교(20261119)」): 도구 선택 호출에 칸 하나로 함께 받는다
+ASKS = prompt.ASKS
+EXPLAIN_ASKS = ("이유", "규정", "확인")  # 근거 문서가 있어야 답할 수 있는 꼴 → 검색을 꼭 넣는다
 CODE = re.compile(r"(?<![A-Za-z])([SsEe][1-7])(?!\d)")
 
 
@@ -75,6 +81,16 @@ class Plan:
     calls: list[tuple[str, str]] = field(default_factory=list)
     source: str = "rules"
     matched: bool = False  # 규칙이 핵심어 · 마을 · 항목을 잡았는가(산불 질문이라는 뜻)
+    ask: str | None = None  # 묻는 것(ASKS) — 답의 꼴만 정한다(받을 자료는 정하지 않음)
+
+
+def ask_rules(text: str, item_code: str | None) -> str:
+    """LLM이 없을 때 묻는 것: 할 일 말 → 할 일, 이유 말 → (항목을 보면) 이유 / 규정, 그 밖 → 값. 「확인」은 못 가른다."""
+    if DO.search(text):
+        return "할 일"
+    if WHY.search(text):
+        return "이유" if (item_code or CODE.search(text)) else "규정"
+    return "값"
 
 
 def _add(calls: list[tuple[str, str]], tool: str, arg: str = "") -> None:
@@ -132,13 +148,22 @@ def plan_rules(box: ToolBox, text: str, item_code: str | None) -> Plan:
     for tool in hits[:3]:
         _add(plan.calls, tool)
     if why and box.evidence is not None:
-        _add(plan.calls, "search", text[:60])
+        _add(plan.calls, "search", search_query(text, item_code))
     if not plan.calls:
         _add(plan.calls, "overview")
         if box.evidence is not None:
             _add(plan.calls, "search", text[:60])
     plan.route = "PROPOSAL" if codes and (why or do) else "REGULATION" if why else "STATUS"
+    plan.ask = ask_rules(text, item_code)
     return plan
+
+
+def search_query(text: str, item_code: str | None) -> str:
+    """검색할 말. 항목을 보며 물으면 질문 말(「이 항목은 왜 …」 — 지시어뿐) 대신 항목 이름으로 고정한다
+    (11-19 RAGAS: 원문 검색이 엉뚱한 조각을 가져옴, 점수 0.43). 질문 말이 바뀌어도 같은 근거가 온다."""
+    if item_code and item_code in ITEM_NAMES:
+        return f"{ITEM_NAMES[item_code]} 판단 기준"
+    return text[:60]
 
 
 def plan_llm(llm: Any, box: ToolBox, text: str, item_code: str | None, trace: dict) -> Plan | None:
@@ -151,6 +176,7 @@ def plan_llm(llm: Any, box: ToolBox, text: str, item_code: str | None, trace: di
         prompt.plan_messages(text, item_code, items, villages),
         schema=prompt.plan_schema(),
         max_tokens=300,
+        temperature=0.0,  # 11-19: 같은 글(「밤에도 헬기를 띄울 수 있어?」)이 0.1에서 다섯 번에 세 가지 꼴로 갈림
         tag="plan",
     )
     try:
@@ -160,6 +186,8 @@ def plan_llm(llm: Any, box: ToolBox, text: str, item_code: str | None, trace: di
         return None
     trace["plan_llm"] = data
     plan = Plan(route=data.get("route", "STATUS"), source="llm")
+    if data.get("ask") in ASKS:
+        plan.ask = data["ask"]
     for c in data.get("calls") or []:
         tool, arg = c.get("tool"), (c.get("arg") or "").strip()
         if tool not in TOOLS:
@@ -179,17 +207,33 @@ def plan_llm(llm: Any, box: ToolBox, text: str, item_code: str | None, trace: di
     return plan
 
 
-def merge(llm_plan: Plan | None, rules: Plan, item_code: str | None, limit: int = 5) -> Plan:
+def merge(
+    llm_plan: Plan | None,
+    rules: Plan,
+    item_code: str | None,
+    limit: int = 5,
+    text: str = "",
+    can_search: bool = False,
+) -> Plan:
+    """LLM 계획 + 규칙 계획. 묻는 것(ask)은 LLM 것을 먼저, 없으면 규칙 것.
+    묻는 것이 이유 · 규정 · 확인인데 검색이 없으면 검색을 넣는다(근거 문서 없이 답하던 상황 경로 — 11-19 RAGAS O3)."""
     if llm_plan is None:
         out = rules
     else:
-        out = Plan(route=llm_plan.route, source="llm+rules")
+        out = Plan(route=llm_plan.route, source="llm+rules", ask=llm_plan.ask or rules.ask)
         if llm_plan.route == "OUT_OF_SCOPE" and rules.matched:
             out.route = rules.route  # 핵심어가 잡히면 산불 질문으로 본다
         for c in llm_plan.calls + rules.calls:
             _add(out.calls, *c)
     if item_code and ("item", item_code) not in out.calls:
         out.calls.insert(0, ("item", item_code))
+    if (
+        can_search
+        and out.ask in EXPLAIN_ASKS
+        and out.route != "OUT_OF_SCOPE"
+        and not any(t == "search" for t, _ in out.calls)
+    ):
+        _add(out.calls, "search", search_query(text, item_code))
     # 항목 · 마을 · 검색을 앞에(답의 핵심), 나머지는 순서대로 — 넘치면 뒤를 자른다
     first = [c for c in out.calls if c[0] in ("item", "village", "search")]
     rest = [c for c in out.calls if c not in first]
@@ -243,10 +287,18 @@ def gather(box: ToolBox, plan: Plan) -> Sources:
 
 
 def write_llm(
-    llm: Any, ctx: Context, text: str, item_code: str | None, src: Sources, trace: dict
+    llm: Any,
+    ctx: Context,
+    text: str,
+    item_code: str | None,
+    src: Sources,
+    trace: dict,
+    ask: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     facts = dict(src.facts)
-    msgs = prompt.answer_messages(ctx.reader, text, item_code, src.facts, src.chunks, src.results)
+    msgs = prompt.answer_messages(
+        ctx.reader, text, item_code, src.facts, src.chunks, src.results, ask=ask
+    )
     schema = prompt.answer_schema(len(src.facts), len(src.chunks))
     best: tuple[list[dict[str, Any]], list[str]] = ([], [])
     attempts = []
@@ -259,6 +311,7 @@ def write_llm(
             if item_code and r.name == "item"
             for f in r.facts
             if "(빠진 정보)" in f.label
+            and f.ref.startswith("items.")  # 판정 묶음의 빠진 정보는 빼고
         ]
     )
     for attempt in range(2):
@@ -410,8 +463,13 @@ def answer(
     item_code = item_code.upper() if item_code else None
     rules = plan_rules(box, text, item_code)
     llm_plan = plan_llm(llm, box, text, item_code, trace) if llm is not None else None
-    plan = merge(llm_plan, rules, item_code)
-    trace["plan"] = {"route": plan.route, "calls": plan.calls, "source": plan.source}
+    plan = merge(llm_plan, rules, item_code, text=text, can_search=evidence is not None)
+    trace["plan"] = {
+        "route": plan.route,
+        "ask": plan.ask,
+        "calls": plan.calls,
+        "source": plan.source,
+    }
     base = {
         "type": "ANSWER",
         "route": plan.route,
@@ -436,7 +494,7 @@ def answer(
         "hits": src.hits,
     }
     if llm is not None:
-        sentences, insufficient = write_llm(llm, ctx, text, item_code, src, trace)
+        sentences, insufficient = write_llm(llm, ctx, text, item_code, src, trace, plan.ask)
         if not sentences and (src.facts or src.chunks):
             # 11-10 평가: 묻는 값(대피 시한 · 추가 대수)이 없으면 EXAONE이 아는 값까지 비우거나, 두 번 다 검사에서
             # 떨어짐 → 「찾지 못했습니다」 대신 상황 값 문장(질문과 겹치는 것 먼저)으로 답한다

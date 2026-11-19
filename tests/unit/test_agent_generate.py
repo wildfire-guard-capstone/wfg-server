@@ -137,7 +137,7 @@ def test_prompt_c3_has_rule_layer_not_topics_or_examples():
     assert full["required"] == ["order", "situation", "status", "judgment", "proposals"]
     props = full["properties"]["proposals"]
     assert props["items"]["properties"]["evidence"]["items"]["enum"] == ["SM-p075-s01"]
-    assert "topic" not in props["items"]["properties"]  # 주제로 묶지 않고 제안 1 ~ 5개
+    assert "topic" not in props["items"]["properties"]  # 주제로 묶지 않음, 개수는 정하지 않음(상한만)
     assert props["minItems"] == 1 and props["maxItems"] == prompt.MAX_PROPOSALS
 
 

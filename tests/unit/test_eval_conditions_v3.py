@@ -146,7 +146,8 @@ def test_schema_evidence_fields_only_with_rag():
     assert set(c1["items"]["properties"]) == {"category", "text"}
     c3 = prompt.schema(["SM-p075-s01"])["properties"]["proposals"]
     assert set(c3["items"]["properties"]) == {"category", "text", "quote", "evidence"}
-    assert c1["minItems"] == c3["minItems"] == 1 and c1["maxItems"] == c3["maxItems"] == 5
+    # 11/19 P1: 「1 ~ 5개」 제한을 풀고 상한만(MAX_PROPOSALS = 10) — 세 조건 같음
+    assert c1["minItems"] == c3["minItems"] == 1 and c1["maxItems"] == c3["maxItems"] == 10
 
 
 # ── ② 구획(표 7) ───────────────────────────────────────────────────────────

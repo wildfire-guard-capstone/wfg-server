@@ -1,14 +1,13 @@
 """마을(법정리): 범위에 걸친 리를 찾아 처음 닿는 P를 붙인다(R-02 · R-04 · R-05).
 
-11/19 평가 R3: 리 경계가 범위와 조금만 겹쳐도 리 전체를 대상으로 보던 것(10/29)을 바꿔,
-**리 안 주택이 처음 닿는 P**로 판정한다. 회차 4에서 리 경계로는 위험구역 9곳 4,217명이었는데
-P5 안 주택은 13동이었다(산자락만 걸친 리가 리 인구 전체로 잡힘).
-
-- 경계는 P8과 겹치는데 8시간 안에 주택이 하나도 안 닿는 리 = 「경계만 걸침」(`EdgeOnly`).
-  대피 대상에서 빼고 따로 보여 준다
-- 리 안에 주택 자료가 없으면 경계 P를 그대로 쓴다(사람이 어디 사는지 모르니 넓게)
-- 행정리(이장 단위)는 법정리 아래에 붙인다. 마을 구역(주택 무리)이 있으면 구역마다 처음 닿는 P를
-  센다. 구역은 회관을 다 찾은 법정리에만 있다(그 법정리의 행정리 모두에 구역이 있음)
+11/20 사용자 결정(D1 다시 정함): 「행정리에 불이 닿는 경우에 해당 행정리 전원 대피
+대상임. 경계 걸침의 경우에는 대피 대상으로 간주.」
+- 리 경계가 P8과 겹치면 대피 대상이다(「경계만 걸침」도 대상). 판정 P = **리 경계가 처음 닿는 P**.
+  리 안 주택이 처음 닿는 P(`houses_by_p`)는 참고로만 남긴다
+- 행정리(이장 단위)는 법정리 아래에 붙인다. 마을 구역이 있으면 **구역에 불이 처음 닿는 P**를 센다 —
+  그 행정리 주민 전원이 대피 대상. 구역은 회관을 다 찾은 법정리에만 있다
+- `EdgeOnly`(11/19 밤판: 경계만 걸치고 8시간 안 주택이 없는 리를 대상에서 뺌)는 이제 만들지 않는다
+  (빈 목록 — 묶음 · 항목의 「경계만 걸침」 칸은 비어 있게 된다)
 - 구간(이미 닿음 · 위험구역 · 잠재 위험구역)은 변환 층의 `zone_of`가 P 번호로 정한다(J1, p.75)
 """
 
@@ -60,18 +59,18 @@ class VillageField:
 
 @dataclass(frozen=True)
 class AdminReached:
-    """행정리 하나: 구역 안 주택이 처음 닿는 P. 구역이 없으면 p = None · houses = 0."""
+    """행정리 하나: 구역에 불이 처음 닿는 P(11/20 D1). 구역이 없으면 p = None · houses = 0."""
 
     admin: AdminVillage
-    p: int | None  # 구역 안 주택이 처음 닿는 P. 8시간 안에 안 닿거나 구역이 없으면 None
+    p: int | None  # 구역에 불이 처음 닿는 P. 8시간 안에 안 닿거나 구역이 없으면 None
     houses: int  # 구역 안 주택 수
 
 
 @dataclass(frozen=True)
 class Reached:
     village: Village
-    p: int  # 판정에 쓰는 P: 리 안 주택이 처음 닿는 P(주택 자료가 없으면 경계 P)
-    boundary_p: int  # 리 경계가 처음 닿는 P(참고)
+    p: int  # 판정에 쓰는 P: 리 경계가 처음 닿는 P(11/20 D1 — 경계 걸침도 대피 대상)
+    boundary_p: int  # 리 경계가 처음 닿는 P(= p, 옛 칸 이름 그대로)
     houses: int  # 리 안 주택 수(0이면 `p` = 경계 P)
     houses_by_p: tuple[int, ...] = ()  # i번째 = Pi 안에 든 리 주택 수(누적)
     admin: tuple[AdminReached, ...] = ()  # 이 리의 행정리(별표 순서). 없으면 빈 묶음
@@ -144,15 +143,13 @@ def reached_villages(
     houses: Points = ((), ()),
     admin: Sequence[AdminVillage] = (),
 ) -> tuple[list[Reached], list[EdgeOnly]]:
-    """P8 안 마을(주택 기준)과 경계만 걸친 마을.
+    """P8 안 마을(리 경계 기준, 11/20 D1)과 경계만 걸친 마을(이제 늘 빈 목록).
 
-    1. 리 경계가 처음 닿는 P를 찾는다(R-04). P8과도 안 겹치면 뺀다
-    2. 리 안 주택이 Pi마다 몇 동 드는지 센다
-       - 리 안 주택이 없으면 경계 P를 쓴다
-       - 주택은 있는데 8시간 안에 하나도 안 닿으면 「경계만 걸침」
-       - 아니면 주택이 처음 닿는 P
-    3. 행정리를 붙인다: 구역이 있으면 구역 안 주택이 처음 닿는 P · 구역 주택 수
-    4. 닿는 순, 같으면 이름 순으로 놓는다(경계만 걸침은 경계 P 순)
+    1. 리 경계가 처음 닿는 P를 찾는다(R-04). P8과도 안 겹치면 뺀다.
+       이 P로 판정한다(경계 걸침도 대상)
+    2. 리 안 주택이 Pi마다 몇 동 드는지 센다(참고 — 시설피해 · 보고용)
+    3. 행정리를 붙인다: 구역이 있으면 구역에 불이 처음 닿는 P · 구역 주택 수
+    4. 닿는 순, 같으면 이름 순으로 놓는다
     """
     xs, ys = _xy(houses)
     by_village: dict[int, list[AdminVillage]] = {}
@@ -168,20 +165,14 @@ def reached_villages(
         hx, hy = xs[inside], ys[inside]
         n = len(hx)
         counts = houses_by_p(hx, hy, ranges) if n else ()
-        hp = first_hit(counts) if n else bp
-        if hp is None:
-            edges.append(EdgeOnly(v, bp, n))
-            continue
         units = []
         for a in by_village.get(v.id, []):  # 3
             if a.geom is None:
                 units.append(AdminReached(a, None, 0))
                 continue
             zin = _inside(a.geom, hx, hy)
-            units.append(
-                AdminReached(a, first_hit(houses_by_p(hx[zin], hy[zin], ranges)), int(zin.sum()))
-            )
-        hits.append(Reached(v, hp, bp, n, counts, tuple(units)))
+            units.append(AdminReached(a, first_p(a.geom, ranges), int(zin.sum())))
+        hits.append(Reached(v, bp, bp, n, counts, tuple(units)))
     hits.sort(key=lambda r: (r.p, r.village.name))  # 4
     edges.sort(key=lambda e: (e.boundary_p, e.village.name))
     return hits, edges

@@ -6,6 +6,8 @@
 
 from typing import Any
 
+from rules.items.names import village_label
+
 ANCHOR_IDS = {"p.77": "SM-p077", "p.79": "SM-p079", "p.95": "SM-p095"}
 NOTE_FIELDS = ("군사시설", "중요 산림자원")
 
@@ -21,7 +23,8 @@ def _life_row(life: dict[str, Any]) -> str:
         by_village.setdefault(f["village"], []).append(f["name"])
     groups: dict[str, dict[str, list[str]]] = {}
     for r in life["villages"]:
-        name = r["name"] + (" (대피 완료)" if r["evacuated"] else "")
+        name = village_label(r["name"], r["admin_villages"])
+        name += " (대피 완료)" if r["evacuated"] else ""
         if r["name"] in by_village:
             name += f"({'·'.join(by_village[r['name']])} 주변)"
         groups.setdefault(_when(r), {}).setdefault(r["emd"], []).append(name)

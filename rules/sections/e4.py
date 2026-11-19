@@ -6,6 +6,8 @@
 
 from typing import Any
 
+from rules.items.names import village_label
+
 ANCHOR_IDS = {"p.75": "SM-p075", "p.79": "SM-p079", "p.95": "SM-p095"}
 
 
@@ -29,7 +31,10 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
     people = f"{r['people']:,}명"
     if r["zone"] == "p8" and r["elderly"] is not None:
         people += f" · 65세 이상 {r['elderly']:,}명"
-    head = f"**{r['village']}**({_when(r)}, {people})"
+    o = r["origin"]
+    if o["kind"] == "회관" and o["name"]:
+        people += f", 거리는 {o['name']}에서"
+    head = f"**{village_label(r['village'], r['admin_villages'])}**({_when(r)}, {people})"
     if r["no_options"]:
         return {"village": r["village"], "text": f"{head}: 쓸 수 있는 대피소 후보 없음"}
     parts = []
@@ -84,13 +89,17 @@ def e4_sections(e4: dict[str, Any]) -> dict[str, Any]:
                     "rows": [_row(r) for r in potential],
                 }
             )
-        n = f["excluded_in_p8"]
+        n, t = f["excluded_in_p8"], f["excluded_in_targets"]
         head = (
             f"※ 8시간 범위 안에 든 대피소 {n}곳은 후보에서 뺐습니다"
             "(안전한 후보가 없을 때만 예외 후보)."
             if n
             else "※ 8시간 범위 안에 든 대피소가 없어 제외한 곳은 없습니다."
         )
+        if t:
+            head += (
+                f" 대피 대상 마을 안 대피소 {t}곳도 뺐습니다(대피하는 마을 안으로 대피시키지 않음)."
+            )
         text = f"{head} 대피소의 실제 개방 여부와 남은 수용 인원은 확인이 필요합니다."
         blocks.append({"type": "note", "writer": "조립기", "text": text})
         sections.append({"title": "1. 대피소 지정", "blocks": blocks})

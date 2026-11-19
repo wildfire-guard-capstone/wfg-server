@@ -7,6 +7,8 @@
 
 from typing import Any
 
+from rules.items.names import label_of
+
 HEAD = ["관련 기관", "세부 대상(기관명)", "요청 사항", "항목", "근거"]
 HELI_GROUP = {"산림청 헬기": "산림 헬기", "소방 헬기": "소방 헬기", "지자체 임차헬기": "임차 헬기"}
 CENTRAL_ROOM = "중앙재난안전상황실"  # 재난방송 송출 요청 곳(기관 이름은 표 틀에 둔다, 11/7)
@@ -103,7 +105,8 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
     3. 교통(p.79 · 83 · 95): 큰 도로 구간마다 → 가까운 경찰서 · 한국도로공사(p.83 · 95 기관별 임무
        「고속도로, 국도, 지방도 등 교통통제」)
     4. 치안(p.96): 위험구역 마을 → 관할 경찰서
-    5. 재난방송(p.78) · 마을 조직(p.76): Go · Set 읍면
+    5. 재난방송(p.78) · 마을 조직(p.76): Go · Set 읍면. 마을 조직은 대피할 마을(주택 기준)의
+       이장 — 행정리가 닿으면 행정리 이름까지(「안평면 신월리 · 신안리(신안1리) 이장」, 11/19 R3)
     """
     rows = []
     vul, home = b["vulnerable"]["in_range"], _home(b)
@@ -157,10 +160,14 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
         rows.append(
             _row("재난방송", f"{CENTRAL_ROOM} 또는 {sido} 재난안전상황실", ask, "E5", "p.78")
         )
-        emds = "·".join(dict.fromkeys(a["emd"] for a in areas))
+        v = b["villages"]
+        by_emd: dict[str, list[str]] = {}
+        for r in v["burning"] + v["p5"] + v["p8"]:
+            by_emd.setdefault(r["emd"], []).append(label_of(r))
+        heads = ", ".join(f"{emd} {' · '.join(names)}" for emd, names in by_emd.items())
         rows.append(
             _row(
-                "마을 조직", f"{emds} 이장, 마을순찰대", "주민 대피 안내와 이동 지원", "E2", "p.76"
+                "마을 조직", f"{heads} 이장, 마을순찰대", "주민 대피 안내와 이동 지원", "E2", "p.76"
             )
         )
     return rows

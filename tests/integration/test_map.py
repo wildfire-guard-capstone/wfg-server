@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy import text
+
 URL = "/api/v1/map/layers"
 # 의성 안평면 둘레(경도 · 위도)
 BBOX = "128.55,36.33,128.65,36.42"
@@ -8,7 +11,7 @@ def test_layers_report_what_is_loaded(client, login):
     layers = client.get(URL, headers=cmd).json()["data"]
     by_id = {x["id"]: x for x in layers}
     assert list(by_id) == [
-        "admin_areas", "villages", "facilities", "road", "track",
+        "admin_areas", "villages", "admin_villages", "facilities", "road", "track",
         "power_line", "power_tower", "substation", "water", "house",
     ]  # fmt: skip
     assert all(x["available"] for x in layers)
@@ -36,6 +39,22 @@ def test_features_in_bbox_with_paging(client, login):
     assert fac["features"] and "attrs" in fac["features"][0]["properties"]
     road = client.get(f"{URL}/road/features", params={"bbox": BBOX}, headers=rep).json()["data"]
     assert road["features"][0]["properties"]["kind"] == "road"
+
+
+def test_admin_village_zones_in_bbox(client, login, db):
+    rep = login("t_rep", "REPORTER")
+    if not db.scalar(text("SELECT EXISTS (SELECT 1 FROM admin_villages WHERE geom IS NOT NULL)")):
+        pytest.skip("행정리 마을 구역이 적재되지 않은 DB")
+    data = client.get(f"{URL}/admin_villages/features", params={"bbox": BBOX}, headers=rep).json()[
+        "data"
+    ]
+    by_name = {f["properties"]["name"]: f for f in data["features"]}
+    assert {"괴산1리", "괴산2리"} <= set(by_name)  # 안평면 괴산리는 회관 2곳 · 구역 2곳
+    f = by_name["괴산1리"]
+    assert (
+        f["geometry"]["type"] == "MultiPolygon" and f["properties"]["hall_point"]["type"] == "Point"
+    )
+    assert isinstance(f["properties"]["village_id"], str) and f["properties"]["houses_est"] > 0
 
 
 def test_bad_bbox_and_unknown_layer(client, login):

@@ -65,8 +65,18 @@ def build_items(bundles: Bundles) -> list[dict[str, Any]]:
     return items
 
 
+def handover_text(step: dict[str, Any]) -> dict[str, str]:
+    """올라가는 구간 하나를 LLM이 읽을 글로: 누가 · 언제(구간 시각) · 왜(이유 글)."""
+    why = " · ".join(r["text"] for r in step["reasons"])
+    return {"title": step["title"], "at": f"{step['from']} ~ {step['until']}", "why": why}
+
+
 def build_common(bundles: Bundles, incident: dict[str, Any]) -> dict[str, Any]:
-    """모든 호출의 `common`: 읽는 사람 · 산불(어댑터가 DB에서) · 제안서 시각 · 단계 · 지휘권자."""
+    """모든 호출의 `common`: 읽는 사람 · 산불(어댑터가 DB에서) · 제안서 시각 · 단계 · 지휘권자.
+
+    지휘권자에는 올라가는 구간(`steps`)도 싣는다 — 모든 항목이 「곧」의 시각을 「5시간 뒤」가 아니라
+    기준을 넘는 시각으로 보게(11/19 평가 R1). 지금 = 곧이면 빈 목록.
+    """
     t, c = bundles["time"], bundles["commander"]
     return {
         "reader": c["reader"],
@@ -77,7 +87,11 @@ def build_common(bundles: Bundles, incident: dict[str, Any]) -> dict[str, Any]:
             "weekday": t["weekday"],
         },
         "current_stage": STAGE_NAME[bundles["stage"]["now"]["stage"]],
-        "commander": {"now": c["now"]["title"], "next": c["next"]["title"]},
+        "commander": {
+            "now": c["now"]["title"],
+            "next": c["next"]["title"],
+            "steps": [handover_text(s) for s in c["steps"]],
+        },
     }
 
 

@@ -3,7 +3,8 @@
     python -m app.db.seed.base            # 대상 DB와 할 일만 보여 줌(아무것도 바꾸지 않음)
     python -m app.db.seed.base --yes      # 실제로 지우고 다시 넣음
 
-대상 테이블: admin_areas · villages · facilities · map_features · resource_bases · resources.
+대상 테이블: admin_areas · villages · admin_villages · facilities · map_features · resource_bases ·
+resources. admin_villages(행정리)는 적재 파일이 없으면 비워 둔다.
 이 테이블을 가리키는 시연 데이터(계정 · 산불 · 화선 · 예측 · 제안 …)도 함께 비워진다
 (TRUNCATE … CASCADE). 시연 데이터는 따로 다시 넣는다.
 
@@ -25,6 +26,7 @@ from app.core.config import get_settings
 BASE_TABLES = [
     "admin_areas",
     "villages",
+    "admin_villages",
     "facilities",
     "map_features",
     "resource_bases",
@@ -130,6 +132,44 @@ def load_villages(conn: Connection, data: Path, area_ids: dict[str, int]) -> dic
             },
         ).scalar_one()
     return ids
+
+
+def admin_village_row(feature: dict, village_ids: dict[str, int]) -> dict:
+    """행정리 적재 피처 1개 → INSERT 값. 회관 좌표 · 마을 구역이 없으면 None."""
+    p, g = feature["properties"], feature.get("geometry")
+    return {
+        "village": village_ids[p["bjd_cd"]],
+        "name": p["name"],
+        "seq": p["seq"],
+        "hall_name": p.get("hall_name"),
+        "lon": p.get("hall_lon"),
+        "lat": p.get("hall_lat"),
+        "hall_source": p.get("hall_source"),
+        "zone": json.dumps(g) if g else None,
+        "houses": p.get("houses_est"),
+        "attrs": json.dumps(p.get("attrs") or {}, ensure_ascii=False),
+    }
+
+
+def load_admin_villages(conn: Connection, data: Path, village_ids: dict[str, int]) -> int:
+    """행정리(조례 별표) · 회관 · 마을 구역. 파일이 없으면 건너뛴다(0)."""
+    path = data / "admin_villages.geojson"
+    if not path.exists():
+        return 0
+    rows = [admin_village_row(f, village_ids) for f in read_geojson(path)]
+    conn.execute(
+        text(
+            "INSERT INTO admin_villages (village_id, name, seq, hall_name, hall_point, hall_source,"
+            " geom, houses_est, attrs) VALUES (:village, :name, :seq, :hall_name,"
+            " ST_Transform(ST_SetSRID(ST_MakePoint(CAST(:lon AS double precision),"
+            " CAST(:lat AS double precision)), 4326), 5179), :hall_source,"
+            " ST_Multi(ST_Transform(ST_SetSRID("
+            "ST_GeomFromGeoJSON(CAST(:zone AS text)), 4326), 5179)),"
+            " :houses, CAST(:attrs AS jsonb))"
+        ),
+        rows,
+    )
+    return len(rows)
 
 
 def load_facilities(conn: Connection, data: Path, village_ids: dict[str, int]) -> int:
@@ -248,10 +288,32 @@ def load_resources(conn: Connection, data: Path) -> tuple[int, int, list[str]]:
     return len(base_ids), n, unresolved
 
 
+def reload_admin_villages(engine, data: Path, yes: bool) -> int:
+    """행정리만 다시 넣는다. 법정리는 DB에 이미 있는 것(code → id)에 붙이고, admin_villages를
+    가리키는 테이블이 없어 다른 데이터는 지워지지 않는다."""
+    if not (data / "admin_villages.geojson").exists():
+        print("admin_villages.geojson이 없습니다.")
+        return 2
+    print("지우고 다시 넣을 테이블: admin_villages (다른 바탕 · 시연 데이터는 그대로)")
+    if not yes:
+        print("확인만 했습니다. 실제로 하려면 --yes를 붙이세요.")
+        return 0
+    with engine.begin() as conn:
+        village_ids = dict(conn.execute(text("SELECT code, id FROM villages")).all())
+        conn.execute(text("TRUNCATE admin_villages RESTART IDENTITY"))
+        print(f"admin_villages: {load_admin_villages(conn, data, village_ids)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--data-dir", type=Path, default=get_settings().base_data_dir)
     parser.add_argument("--yes", action="store_true", help="실제로 지우고 다시 넣는다")
+    parser.add_argument(
+        "--admin-villages-only",
+        action="store_true",
+        help="행정리(admin_villages)만 지우고 다시 넣는다 — 다른 바탕 · 시연 데이터는 그대로",
+    )
     args = parser.parse_args(argv)
 
     if args.data_dir is None or not args.data_dir.is_dir():
@@ -261,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     engine = create_engine(get_settings().database_url)
     print(f"대상 DB: {engine.url.render_as_string(hide_password=True)}")
     print(f"적재 파일: {args.data_dir}")
+    if args.admin_villages_only:
+        return reload_admin_villages(engine, args.data_dir, args.yes)
     print(f"지우고 다시 넣을 테이블: {', '.join(BASE_TABLES)} (+ 이들을 가리키는 시연 데이터)")
     if not args.yes:
         print("확인만 했습니다. 실제로 하려면 --yes를 붙이세요.")
@@ -270,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
         conn.execute(text(f"TRUNCATE {', '.join(BASE_TABLES)} RESTART IDENTITY CASCADE"))
         area_ids = load_admin_areas(conn, args.data_dir)
         village_ids = load_villages(conn, args.data_dir, area_ids)
+        n_admin_villages = load_admin_villages(conn, args.data_dir, village_ids)
         n_fac = load_facilities(conn, args.data_dir, village_ids)
         kinds = load_map_features(conn, args.data_dir)
         n_bases, n_res, unresolved = load_resources(conn, args.data_dir)
@@ -278,7 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             conn.execute(text("SELECT level, count(*) FROM admin_areas GROUP BY level")).all()
         )
         print(f"admin_areas: {levels}")
-        print(f"villages: {len(village_ids)} · facilities: {n_fac}")
+        print(f"villages: {len(village_ids)} · admin_villages: {n_admin_villages}")
+        print(f"facilities: {n_fac}")
         print(f"map_features: {sum(kinds.values())} {kinds}")
         print(f"resource_bases: {n_bases} · resources: {n_res}")
         if unresolved:

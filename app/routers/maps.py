@@ -18,7 +18,14 @@ from app.schemas.map import LayerOut
 
 router = APIRouter(prefix="/map", tags=["지도"])
 areas_router = APIRouter(tags=["지도"])  # MAP-04는 /map 아래가 아니다(/admin-areas)
-ENTITY_TYPES = ("village", "facility", "map_feature", "resource_base", "admin_area")
+ENTITY_TYPES = (
+    "village",
+    "admin_village",
+    "facility",
+    "map_feature",
+    "resource_base",
+    "admin_area",
+)
 Viewer = require_roles("COMMANDER", "VIEWER", "REPORTER")
 
 

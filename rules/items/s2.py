@@ -3,9 +3,12 @@
 판정하지 않는다. `villages` · `vulnerable`(5시간 안) · `houses` · `protected`(8시간 안)에서 고른다.
 진화 우선순위 묶음(① 인명 ② 국가기간시설 · 문화유산 ③ 가옥 등 재산)은 매뉴얼 p.77의 고정 표로
 붙이는 이름이다(이름 바꾸기). 보호 조치와 요청 기관은 LLM이 p.79 · p.95로 쓴다.
+관할 소방서 등 관할 이름은 `jurisdiction`으로 함께 넘긴다(11/19 평가 RE-R2).
 """
 
 from typing import Any
+
+from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
 
 ID, NAME = "S2", "진화 우선지역·보호대상·시설 보호"
 COUNT_BASIS = "주용도 확인 건물 기준, 최소값"
@@ -71,6 +74,7 @@ def s2_input(bundles: dict[str, Any]) -> dict[str, Any]:
     2. ③ 주택 = 5시간 안 주택(리별)
     3. ② 송전선 · 변전소 · 전통사찰 · 국가유산 = 8시간 안(11/7)
     4. 상황 = 있는 순위의 이름(p.77 고정 표). 아무것도 없으면 forest_only
+    5. 관할 이름(주택 주변 소방차 배치를 요청할 관할 소방서 등)을 옮긴다
     """
     v, vul, h, pr = (
         bundles["villages"],
@@ -100,6 +104,7 @@ def s2_input(bundles: dict[str, Any]) -> dict[str, Any]:
             "in_p8": pr["heritage"]["in_p8"],
             "items": [_place(r) for r in pr["heritage"]["items"]],
         },
+        "jurisdiction": jurisdiction(bundles),  # 5
     }
     status = []  # 4
     if facts["life"]["villages"]:
@@ -115,7 +120,9 @@ def s2_input(bundles: dict[str, Any]) -> dict[str, Any]:
         "finding": _finding(facts, v, vul),
         "facts": facts,
         "targets": _targets(v, vul, pr),
-        "withheld": pr["unknown"] + [dict(u) for u in UNKNOWN_FIXED],
+        "withheld": pr["unknown"]
+        + [dict(u) for u in UNKNOWN_FIXED]
+        + jurisdiction_unknown(bundles),
         "rule_basis": pr["basis"],
     }
 

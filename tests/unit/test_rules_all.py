@@ -14,7 +14,14 @@ def test_whole_proposal_has_12_items_and_request_tables():
     items = {it["id"]: it for it in out["items"]}
     assert list(items) == ["S1", "S2", "S3", "S4", "S5", "S6", "E1", "E2", "E3", "E4", "E5", "E6"]
     assert out["common"]["current_stage"] == "확산대응 1단계"
-    assert out["common"]["commander"] == {"now": "의성군수", "next": "경상북도지사"}
+    # 곧 지휘권자만이 아니라 넘어가는 구간 시각 · 이유도(P2에 100 ha를 넘음, 11/19 평가 R1)
+    assert out["common"]["commander"] == {
+        "now": "의성군수",
+        "next": "경상북도지사",
+        "steps": [
+            {"title": "경상북도지사", "at": "13:50 ~ 14:50", "why": "피해면적 100 ha 이상 대형산불"}
+        ],
+    }
 
     def groups(item):
         (table,) = [b for s in item["sections"] for b in s["blocks"] if b["type"] == "table"]

@@ -25,6 +25,24 @@ def test_village_and_admin_area_detail(client, login, db, uiseong):
     assert "geometry" not in area  # 행정구역 DTO에는 도형이 없다(경계는 MAP-02)
 
 
+def test_admin_village_detail(client, login, db):
+    rep = login("t_rep", "REPORTER")
+    row = db.execute(
+        text(
+            "SELECT a.id, v.id FROM admin_villages a JOIN villages v ON v.id = a.village_id"
+            " WHERE a.name = '괴산2리' AND v.name = '괴산리'"
+        )
+    ).first()
+    if row is None:
+        pytest.skip("행정리가 적재되지 않은 DB")
+    r = client.get(f"{URL}/admin_village/{row[0]}", headers=rep)
+    assert r.status_code == 200, r.text
+    a = r.json()["data"]["entity"]
+    assert a["village_id"] == str(row[1]) and a["seq"] == 2
+    assert a["hall_point"]["type"] == "Point" and a["geometry"]["type"] == "MultiPolygon"
+    assert a["attrs"]["method"]["kmeans_from_halls"] is True
+
+
 def test_facility_and_map_feature_detail(client, login, db):
     cmd = login("t_cmd", "COMMANDER")
     facility_id = db.scalar(text("SELECT id FROM facilities ORDER BY id LIMIT 1"))

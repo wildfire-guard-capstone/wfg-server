@@ -2,9 +2,12 @@
 
 판정하지 않는다. `alerts`(읍면 Go · Set · 변화 · 문자 기록)를 옮긴다. 송출 요청 · 함께 쓸 전파
 수단은 LLM이 p.76 · 78로 쓴다. 문안은 쓰지 않는다. P8 안 마을이 없으면 E5를 만들지 않는다.
+관할 시 · 도 등 관할 이름은 `jurisdiction`으로 함께 넘긴다(11/19 평가 RE-R2).
 """
 
 from typing import Any
+
+from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
 
 ID, NAME = "E5", "재난문자·방송 전파"
 CHANGED = ("new", "up")
@@ -16,6 +19,7 @@ def e5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     1. 읍면 줄을 옮긴다(`level` → `stage` 이름 바꾸기)
     2. 상황: 처음 들어오거나 오른(new · up) 읍면이 있으면 changed, 아니면 unchanged
     3. finding 틀
+    4. 관할 이름(송출 요청에 쓸 관할 시 · 도 등)을 옮긴다
     """
     al = bundles["alerts"]
     if not al["areas"]:
@@ -37,9 +41,14 @@ def e5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
         "name": NAME,
         "status": "changed" if changed else "unchanged",
         "finding": _finding(areas, al["removed"]),  # 3
-        "facts": {"areas": areas, "removed": al["removed"], "alert_log": al["log"]},
+        "facts": {
+            "areas": areas,
+            "removed": al["removed"],
+            "alert_log": al["log"],
+            "jurisdiction": jurisdiction(bundles),  # 4
+        },
         "targets": [],
-        "withheld": [{"field": "문안", "reason": "사람이 작성"}],
+        "withheld": [{"field": "문안", "reason": "사람이 작성"}] + jurisdiction_unknown(bundles),
         "rule_basis": al["basis"],
     }
 

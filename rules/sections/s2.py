@@ -80,7 +80,7 @@ def s2_sections(s2: dict[str, Any]) -> dict[str, Any]:
         first.append({"type": "note", "writer": "조립기", "text": text})
     second = []  # 2
     if f["houses"]["in_p5_total"]:
-        second.append(_action(2, "주택", "주택 보호 배치", ["houses"], ["p.79"]))
+        second.append(_action(2, "주택", "주택 보호 배치", ["houses", "jurisdiction"], ["p.79"]))
     if f["power"] or f["substations"]:
         second.append(_action(3, "송전시설", "송전시설 보호", ["power", "substations"], ["p.95"]))
     if f["temple"] or f["heritage"]["items"]:

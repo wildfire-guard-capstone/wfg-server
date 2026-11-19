@@ -41,6 +41,7 @@ docker exec wfg-api alembic current                        # 마이그레이션 
 docker exec wfg-api alembic upgrade head                   # 테이블 구조를 바꾼 PR을 머지한 뒤
 docker exec wfg-api python -m app.db.seed.base             # 바탕 데이터: 대상 DB · 할 일만 확인
 docker exec wfg-api python -m app.db.seed.base --yes       # 바탕 데이터: 모두 지우고 다시 넣기
+docker exec wfg-api python -m app.db.seed.base --admin-villages-only --yes  # 행정리만 다시 넣기(시연 데이터 그대로)
 
 docker compose logs --tail 100 api                         # 로그(worker도 같은 방식)
 docker compose up -d api                                   # 같은 버전으로 다시 켜기

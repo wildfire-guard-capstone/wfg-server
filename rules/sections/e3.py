@@ -45,7 +45,7 @@ def e3_sections(e3: dict[str, Any]) -> dict[str, Any]:
     1. 위험구역 시설이 있으면 「1. 우선 대피」: a1 「위험구역 시설」 + 마을별 목록
        낮에만 운영하는 시설이 있으면 a2 「낮에만 운영하는 시설」(근거 없는 확인 문단)
     2. 잠재 위험구역 시설이 있으면 「2. 사전대피」: a3 「잠재 위험구역 시설」 + 목록
-    3. 「3. 이송」: a4 「거주자 이송」(세부는 E6) — 시설이 있으면 늘 넣음
+    3. 「3. 이송」: a4 「거주자 이송」(관할 · 응급의료기관 값, 세부는 E6) — 시설이 있으면 늘 넣음
     """
     f = e3["facts"]
     sections = []
@@ -83,7 +83,9 @@ def e3_sections(e3: dict[str, Any]) -> dict[str, Any]:
     sections.append(  # 3
         {
             "title": "3. 이송",
-            "blocks": [_action(4, "거주자 이송", [], ["p.95"], see="E6")],
+            "blocks": [
+                _action(4, "거주자 이송", ["jurisdiction", "hospitals"], ["p.95"], see="E6")
+            ],
         }
     )
     anchors = [

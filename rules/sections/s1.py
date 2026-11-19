@@ -41,7 +41,8 @@ def s1_sections(s1: dict[str, Any], bundles: dict[str, Any]) -> dict[str, Any]:
     1. a1 현재 기준 단계 — 늘 넣음
     2. a2 5시간 뒤 단계 — 상황이 escalation_expected일 때만.
        P5 단계를 면적이 정했으면 면적 흐름도 봄
-    3. a3 지휘권자 — 늘 넣음. 근거는 p.72 + 지금 · 곧 지휘권자를 정한 이유 종류별 근거
+    3. a3 지휘권자 — 늘 넣음. 근거는 p.72 + 지금 · 곧 · 올라가는 구간의 지휘권자를 정한 이유
+       종류별 근거
     4. 언급 금지(do_not_state) = 비운 칸(withheld)의 이름
     5. 문단 근거(anchors)를 근거 청크 ID로 바꿔 모은다(anchor_basis)
     """
@@ -52,7 +53,8 @@ def s1_sections(s1: dict[str, Any], bundles: dict[str, Any]) -> dict[str, Any]:
         blocks.append(_action(2, "5시간 뒤 단계", use, ["p.73", "p.91"]))
     # 3
     commander = facts["commander"]
-    kinds = [r["kind"] for side in ("now", "next") for r in commander[side]["reasons"]]
+    sides = [commander["now"], commander["next"], *commander["steps"]]
+    kinds = [r["kind"] for side in sides for r in side["reasons"]]
     anchors = _unique(["p.72"] + [a for k in kinds for a in REASON_ANCHORS[k]])
     sections = [
         {"title": TITLE_STAGE, "blocks": blocks},

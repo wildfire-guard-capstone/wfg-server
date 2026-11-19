@@ -76,7 +76,7 @@ def _finding(status: str, facts: dict[str, Any]) -> str:
     3. escalation_expected: 「현재 기준 ○(…) · P5 기준 ○(…) → 5시간 안에 ○ 기준 도달 예상」
        maintain, 두 단계가 같음: 「현재 · P5 기준 모두 ○(현재 근거 → P5 근거)」
        maintain, P5가 더 낮음: 「현재 기준 ○(…) · P5 기준 ○(…)」
-    4. 끝에 「지휘권자 지금」, 바뀌면 「 → 곧」
+    4. 끝에 「지휘권자 지금」, 올라가면 구간마다 「 → 곧(from ~ until)」(11/19 평가 R1)
     """
     now, p5, change = facts["now"], facts["p5"], facts["change"]
     basis_now, basis_p5 = _basis(now), _basis(p5)  # 1
@@ -93,6 +93,8 @@ def _finding(status: str, facts: dict[str, Any]) -> str:
     else:
         head = f"현재 기준 {s_now}({basis_now}{prev}) · P5 기준 {s_p5}({basis_p5})"
     # 4
-    c_now, c_next = facts["commander"]["now"]["title"], facts["commander"]["next"]["title"]
-    commander = c_now if c_now == c_next else f"{c_now} → {c_next}"
-    return f"{head} · 지휘권자 {commander}"
+    cm = facts["commander"]
+    chain = [cm["now"]["title"]] + [
+        f"{s['title']}({s['from']} ~ {s['until']})" for s in cm["steps"]
+    ]
+    return f"{head} · 지휘권자 {' → '.join(chain)}"

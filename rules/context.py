@@ -12,7 +12,7 @@ from datetime import datetime
 from shapely.geometry.base import BaseGeometry
 
 from rules.core.area import range_areas
-from rules.core.commander import Commander, decide_commander
+from rules.core.commander import Commander, decide_commander, handover_steps
 from rules.core.facility import FacilityCount, Points, count_facilities
 from rules.core.places import Base, Deployed, Place, PowerLine, RoadPiece
 from rules.core.regions import Region, spanned
@@ -28,6 +28,8 @@ from rules.core.stage import (
 from rules.core.sun import is_night, next_events
 from rules.core.villages import Reached, Village, VillageField, reached_villages
 from rules.core.weather import WindSummary, summarize_wind
+
+NEXT_P = 5  # 「곧」을 보는 끝 구간: 곧 지휘권자 · 지휘권자가 올라가는 구간(단계 판정의 P5와 같음)
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ class Context:
     span_p5: Span
     commander_now: Commander  # 지금 지휘권자(현재 화선 기준)
     commander_next: Commander  # 곧 지휘권자(P5 기준)
+    commander_steps: list[tuple[int, Commander]]  # 지휘권자가 올라가는 구간(P1 ~ P5)과 그 지휘권자
     villages: list[Reached]  # P8 안 마을과 처음 닿는 P
     site: tuple[float, float]
     field: Mapping[int, VillageField]
@@ -121,7 +124,8 @@ def build_context(inputs: Inputs) -> Context:
          두 시점 모두 0~5시간 평균을 쓰는 안이 있으나 나중에 정한다(11/7)
     5. 추세(P5 vs 현재) · 단계 변화(이번 vs 직전 제안서)
     6. 걸친 지역(R-02): 현재 화선 · P5
-    7. 지휘권자(L-01): 지금 = 현재 화선 면적 · 걸친 지역, 곧 = P5 면적 · 걸친 지역
+    7. 지휘권자(L-01): P0 ~ P5 범위마다 면적 · 걸친 지역으로 정한다. 지금 = P0, 곧 = P5,
+       올라가는 구간 = 앞보다 높은 지휘권자가 처음 나오는 Pn(넘어가는 시각, 11/19 평가 R1)
     8. P8 안 마을과 처음 닿는 P(R-02 · R-04). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류
        (자료는 나중에 채운다 — 빠진 채로 판정하지 않음, 11/7)
     9. 0시 뒤 처음 오는 일몰 · 일출, 0시가 밤인가(C-05 · J2)
@@ -140,8 +144,9 @@ def build_context(inputs: Inputs) -> Context:
     span_now, span_p5 = _span(p0, inputs), _span(p5, inputs)
     sunset, sunrise = next_events(inputs.base_at, *inputs.site)
     # 7
-    commander_now = decide_commander(areas[0], span_now.sido, span_now.sigungu)
-    commander_next = decide_commander(areas[5], span_p5.sido, span_p5.sigungu)
+    spans = [span_now] + [_span(inputs.ranges[p], inputs) for p in range(1, NEXT_P)] + [span_p5]
+    by_p = [decide_commander(areas[p], s.sido, s.sigungu) for p, s in enumerate(spans)]
+    commander_now, commander_next = by_p[0], by_p[NEXT_P]
     return Context(
         base_at=inputs.base_at,
         generated_at=inputs.generated_at,
@@ -158,6 +163,7 @@ def build_context(inputs: Inputs) -> Context:
         span_p5=span_p5,
         commander_now=commander_now,
         commander_next=commander_next,
+        commander_steps=handover_steps(by_p),
         villages=_villages(inputs),  # 8
         site=inputs.site,
         field=inputs.field,

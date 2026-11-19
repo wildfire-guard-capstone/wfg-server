@@ -4,7 +4,7 @@ from typing import Any
 
 from rules.context import Context
 from rules.core.commander import LARGE_FIRE_HA, Commander, Level, Reason, ReasonKind
-from rules.core.convert import num_text, round1
+from rules.core.convert import num_text, p_from, p_until, round1
 
 BASIS_COMMANDER = ["SM-p072"]  # 단계별 통합지휘권자 · 단서 ①②
 BASIS_AREA = ["SM-p114", "DEC-FDPA-a21-h01-02"]  # 대형산불 · 시행령 제21조
@@ -31,13 +31,27 @@ def _commander(c: Commander) -> dict[str, Any]:
     }
 
 
+def _step(ctx: Context, p: int, c: Commander) -> dict[str, Any]:
+    """지휘권자가 올라가는 구간 하나: 구간 시각(from ~ until)에 그 지휘권자 · 이유를 붙인다."""
+    return {
+        "p": p,
+        "from": p_from(ctx.base_at, p),
+        "until": p_until(ctx.base_at, p),
+        **_commander(c),
+    }
+
+
 def commander_bundle(ctx: Context) -> dict[str, Any]:
-    """`commander`: 읽는 사람 · 지금(현재 화선) · 곧(P5) 지휘권자와 이유.
+    """`commander`: 읽는 사람 · 지금(현재 화선) · 곧(P5) 지휘권자와 이유 · 올라가는 구간.
 
     인계할지 · 누가 인수할지는 LLM이 세 이름을 보고 정한다(11/7, `handover` 뺌).
+    `steps` = 지휘권자가 올라가는 구간과 시각(11/19 평가 R1). 「곧」만 넘기면 LLM이 「5시간 뒤
+    이관」으로 써서, 기준을 처음 넘는 구간의 시각 · 이유를 함께 넘긴다. 지금 = 곧이면 빈 목록.
     근거 청크 = p.72 + 이유에 면적이 있으면 대형산불 근거 + 걸친 지역이 있으면 법 제34조.
     """
+    steps = [_step(ctx, p, c) for p, c in ctx.commander_steps]
     reasons = ctx.commander_now.reasons + ctx.commander_next.reasons
+    reasons += tuple(r for _, c in ctx.commander_steps for r in c.reasons)
     basis = list(BASIS_COMMANDER)
     if any(r.kind is ReasonKind.AREA for r in reasons):
         basis += BASIS_AREA
@@ -47,6 +61,7 @@ def commander_bundle(ctx: Context) -> dict[str, Any]:
         "reader": ctx.reader,
         "now": _commander(ctx.commander_now),
         "next": _commander(ctx.commander_next),
+        "steps": steps,
         "basis": basis,
         "unknown": [],
     }

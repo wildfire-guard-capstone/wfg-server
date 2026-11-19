@@ -90,3 +90,26 @@ def decide_commander(area_ha: float, sido: Sequence[str], sigungu: Sequence[str]
     else:
         title = head_title(sigungu[0])
     return Commander(level, title, reasons)
+
+
+def handover_steps(by_p: Sequence[Commander]) -> list[tuple[int, Commander]]:
+    """구간마다 정한 지휘권자에서 지휘권자가 올라가는 구간을 찾는다(R1, 11/19 평가).
+
+    `by_p[i]` = Pi 범위로 정한 지휘권자(0 = 현재 화선). 결과 = (처음 올라간 구간, 그 지휘권자).
+    지휘권자가 바뀌는 시각을 「곧(P5)」 하나로만 넘기면 LLM이 「5시간 뒤 이관」으로 쓴다.
+
+    1. 지금(0번) 지휘권자에서 시작한다
+    2. 1번부터 차례로 보며 앞보다 높은 지휘권자가 처음 나오는 구간을 남긴다.
+       이유는 그 구간에서 그 지휘권자를 만든 조건이다(면적 · 걸친 지역 중 먼저 맞은 것)
+    3. 같거나 낮으면 건너뛴다(범위가 누적이라 내려가지 않음).
+       기준을 끝까지 안 넘으면 빈 목록, 두 단계를 넘으면 두 개
+    """
+    if not by_p:
+        raise ValueError("지휘권자가 하나 이상 있어야 한다(0 = 현재 화선)")
+    steps = []
+    top = by_p[0]  # 1
+    for p, c in enumerate(by_p[1:], start=1):  # 2 · 3
+        if c.level > top.level:
+            steps.append((p, c))
+            top = c
+    return steps

@@ -122,6 +122,58 @@ def shelter_check(e4: dict[str, Any]) -> dict[str, Any]:
     return {"lines": ([ASSUME] + lines) if lines else [], "short": short, "pairs": pairs}
 
 
+def shelter_table(e4: dict[str, Any]) -> list[dict[str, Any]]:
+    """E4 「대피소 지정」 자세히 보기(11/24 BLUF): 첫 후보에 몰리는 인원 표 — shelter_check와 같은 계산을 표로.
+    행 = ① 여러 마을이 함께 쓰거나 넘치는 첫 후보 ② 첫 후보만으로 모자라는 마을의 두 후보 합계."""
+    rows: list[list[str]] = []
+    first: dict[str, dict[str, Any]] = {}
+    for r in _rows(e4):
+        hubs = _hubs(r)
+        if hubs:
+            first.setdefault(hubs[0]["name"], {"cap": hubs[0]["capacity"], "rows": []})[
+                "rows"
+            ].append(r)
+    for name, g in first.items():
+        tot = sum(r["people"] for r in g["rows"])
+        if len(g["rows"]) < 2 and tot <= g["cap"]:
+            continue
+        res = f"{_n(tot - g['cap'])}명 넘침" if tot > g["cap"] else "다 들어감"
+        rows.append(
+            [
+                f"{name}({_n(g['cap'])}명)",
+                _join([r["village"] for r in g["rows"]]),
+                f"{_n(tot)}명",
+                res,
+            ]
+        )
+    for r in _rows(e4):
+        hubs, p = _hubs(r), r["people"]
+        if len(hubs) < 2 or p <= hubs[0]["capacity"]:
+            continue
+        c12 = hubs[0]["capacity"] + hubs[1]["capacity"]
+        if p <= c12:
+            continue  # 두 후보로 들어가는 마을은 표에 넣지 않는다(목업: 모자라는 마을만)
+        res = f"{_n(p - c12)}명 모자람"
+        rows.append(
+            [
+                f"{hubs[0]['name']} + {hubs[1]['name']}({_n(c12)}명)",
+                f"{r['village']}(두 후보)",
+                f"{_n(p)}명",
+                res,
+            ]
+        )
+    if not rows:
+        return []
+    return [
+        {
+            "type": "table",
+            "caption": "첫 후보에 몰리는 인원",
+            "head": ["대피소(수용)", "첫 후보로 둔 마을", "인원", "결과"],
+            "rows": rows,
+        }
+    ]
+
+
 def pairing_lines(e4: dict[str, Any]) -> list[str]:
     """E5: 마을 → 대피 장소 짝(첫 후보가 넉넉한 마을만) + 장소를 아직 정할 수 없는 마을."""
     chk = shelter_check(e4)

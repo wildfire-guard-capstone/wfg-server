@@ -40,7 +40,11 @@ class EvidenceOut(BaseModel):
 class SectionOut(BaseModel):
     title: str
     # paragraph · list · table(rows = 열 순서 배열) · note · failed — 06 PROP-02 블록 표
+    # 11/24 소제목 형식: fact · reason(핵심 판단 근거) · basis(판단 근거) · detail(자세히 보기)
     blocks: list[dict[str, Any]]
+    kind: str | None = (
+        None  # 11/24 소제목 형식: facts(현황) · part(소제목) · notes(누락된 정보), 예전 꼴은 없음
+    )
 
 
 class ProposalItemOut(BaseModel):

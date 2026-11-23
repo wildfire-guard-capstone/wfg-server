@@ -40,7 +40,9 @@ ETC = re.compile(r"(?<=[가-힣\)\s])\s등(?=[\s,.을이의은과도에]|으로)
 STAGE = re.compile(r"초기대응|확산대응\s?[12]단계|(?<![가-힣\d])[123]단계")
 NEG = re.compile(
     # 「대피하지 않은 주민」처럼 꾸미는 말(않은 · 않는 + 명사)은 할 일을 부정한 것이 아니다(tune13 E2)
-    r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않(?![은는]\s)|마)[가-힣]*"
+    # 「대피하지 않았음을 확인하고 …하십시오」 「대피하지 않았는지」처럼 사실을 말하는 꼴도 아니다(11/24 bluf-r4 E2:
+    # 가장 급한 「신월리 즉시 대피」 제안이 이 검사로 빠짐)
+    r"(?:협의|인계|대피|요청|지시|투입|배치|설정|지정|발령|통보|보고)(?:하지|시키지)\s*(?:않(?![은는]\s|았(?:음|는지|다는))|마)[가-힣]*"
 )
 # 문단 꼴 예시의 가린 값(N · HH:MM · ○○)을 그대로 옮긴 것
 PLACEHOLDER = re.compile(
@@ -401,6 +403,9 @@ def value_errors(
     # 시군 부서 · 기관 이름 오기(tune11 · 12: 「의성군 산림녹색과」 — 산림녹지과). 「○○군 ○○과(장)」 꼴만 본다
     for m in ORG.finditer(text):
         sigungu, org = m.group(1), m.group(2)
+        # 「의성군 안평면과 의성읍」의 「과」는 이음 조사다(지명 + 과) — 부서 이름이 아니다(11/24 bluf-r4 E1)
+        if org.endswith("과") and re.search(r"[면읍동리]$", org[:-1]):
+            continue
         if not any(x in blob for x in (f"{sigungu} {org}", org, org.removesuffix("장"))):
             errs.append(f"판정 · 근거에 없는 기관 이름 「{sigungu} {org}」")
     # 지도 자료에도 없는 마을 이름(tune10: 「괴산리~신신리」 — 신안리를 잘못 씀). 「○○리」 · 「○○N리」 꼴만 본다
@@ -1016,3 +1021,171 @@ def check(
             for tp in missing
         ]
     return out
+
+
+# ── 11/24 소제목 형식(BLUF, 제품 C3) ─────────────────────────────────────
+# 「제안-프롬프트-개편-계획(20261124).md」 7장: 제안은 지금 검사를 소제목마다, 판단 근거 문장은 제안과 같은 검사
+# (「판정 값」 = 값 대조, 「기준」 = 발췌 ID · quote가 원문에 있는지 — 끝까지 안 맞으면 그 문장을 뺀다),
+# 핵심 판단 근거 = 값 대조 · 「므로」 · 한 구절, 다른 항목 번호 = [관련 항목의 일] · [다른 항목]에 있는 번호만.
+BASIS_VALUE, BASIS_RULE, BASIS_NOTE = "value", "rule", "note"
+_LABEL_VALUE = re.compile(r"^\s*판정\s?값\s*[:：]\s*")
+_LABEL_RULE = re.compile(r"^\s*기준\s*[:：]\s*")
+ITEM_CODE = re.compile(r"(?<![A-Za-z0-9])([SE][1-6])(?![0-9])")
+HANDOFF = re.compile(
+    r"(?:[SE][1-6]\s?참조|세부\s?내용은|→\s?[SE][1-6]|[SE][1-6]\s?에서\s?다룹니다)"
+)
+
+
+def parse_out_parts(text: str, titles: list[str]) -> dict[str, Any]:
+    """LLM 답(소제목 형식) → {situation, status, judgment, parts: {소제목: {show, basis, reason, proposals, show_detail}}}.
+    빠진 소제목 · 칸은 빈 값으로 채운다(스키마가 묶으므로 보통 없음)."""
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    s, e = text.find("{"), text.rfind("}")
+    if s < 0 or e < 0:
+        raise ValueError("JSON이 없습니다")
+    out = json.loads(text[s : e + 1])
+    raw_parts = out.get("parts")
+    if not isinstance(raw_parts, dict):
+        raise ValueError("parts가 객체가 아닙니다")
+    parts: dict[str, dict[str, Any]] = {}
+    for t in titles:
+        po = raw_parts.get(t) if isinstance(raw_parts.get(t), dict) else {}
+        parts[t] = {
+            "show": po.get("show", True) is not False,
+            "basis": [b for b in po.get("basis") or [] if isinstance(b, dict)],
+            "reason": po.get("reason") if isinstance(po.get("reason"), str) else "",
+            "proposals": [p for p in po.get("proposals") or [] if isinstance(p, dict)],
+            "show_detail": bool(po.get("show_detail", False)),
+        }
+    facts = {k: out.get(k) if isinstance(out.get(k), str) else "" for k in FACT_STEPS}
+    return facts | {"parts": parts}
+
+
+def basis_kind(text: str) -> str:
+    """판단 근거 문장의 종류: 「판정 값:」 · 「기준:」 이름표(LLM이 씀) · 이름표 없음(맺는 문장)."""
+    if _LABEL_VALUE.match(text or ""):
+        return BASIS_VALUE
+    if _LABEL_RULE.match(text or ""):
+        return BASIS_RULE
+    return BASIS_NOTE
+
+
+_SRC_PAREN = re.compile(
+    r"\s*\((?:[^()]*?(?:p\.\s?\d|표준매뉴얼|매뉴얼|규정|시행령|시행규칙|법률|고시)[^()]*)\)"
+)
+_BULLET = re.compile(
+    r"^[\*\-·•▪—–:：]+\s*"
+)  # 머리 기호 · 이름표 뒤 쌍점(「기준: — …」 「기준: : …」)
+
+
+def tidy_basis(text: str) -> str:
+    """판단 근거 문장 표기 정리(11/24 bluf-r4: 「기준: SM-p076-s03 (p.76 · … 표준매뉴얼 p.76 · ) …」 · 「* 대형 산불 …」).
+    발췌 ID · 출처 괄호 · 머리 기호는 지우고(출처는 evidence 칸), 이름표는 그대로 둔다."""
+    text = tidy_fact(text)
+    label = ""
+    for pat in (_LABEL_VALUE, _LABEL_RULE):
+        if m := pat.match(text):
+            label, text = m.group(0).strip() + " ", text[m.end() :]
+            break
+    before = text
+    text = _SRC_PAREN.sub("", CHUNK_ID.sub(" ", text))
+    stripped = text != before  # 발췌 ID · 출처 괄호를 지웠으면 남은 글이 있어야 한다
+    text = _BULLET.sub("", text.strip())
+    text = re.sub(r"^[,\s]+", "", re.sub(r"\s{2,}", " ", text)).replace(" ,", ",").strip()
+    core = re.sub(r"[^가-힣A-Za-z0-9]", "", text)
+    if not core or (stripped and len(core) < 6):
+        return ""
+    return (label + text).strip()
+
+
+ITEM_REF = re.compile(r"\(([SE][1-6])\)")
+
+
+def strip_label(text: str) -> str:
+    """화면에 낼 때 이름표를 지운다(사용자 11-24: LLM에는 「판정 값:」을 두고 화면에서만 지움)."""
+    return _LABEL_RULE.sub("", _LABEL_VALUE.sub("", text or "")).strip()
+
+
+def basis_sentence_errors(
+    s: str,
+    allowed: tuple[set[str], set[str], str],
+    judged_text: str,
+    known_names: set[str],
+    pairs: dict[str, Any] | None = None,
+    item_id: str = "",
+    codes_ok: set[str] | None = None,
+) -> list[str]:
+    """판단 근거 문장 하나의 값 · 말투 문제(이름표를 뗀 글로 본다). 출처(발췌 ID · quote)는 generate가 본다.
+    codes_ok = 쓸 수 있는 다른 항목 번호(「재난방송 송출 요청은 재난문자·방송 전파(E5)에서 냅니다」 같은 문장)."""
+    body = strip_label(s)
+    errs = value_errors(body, allowed, judged_text, known_names)
+    if codes_ok is not None:
+        errs += [e for e in xref_errors(body, item_id, codes_ok) if not e.startswith(SOFT)]
+    errs += pair_errors(body, pairs)
+    errs += language_errors(body)
+    if "십시오" in body:
+        errs.append("할 일(「~하십시오」)은 판단 근거가 아니라 제안(proposals)에 쓰십시오")
+    if CHUNK_ID.search(body):
+        errs.append("발췌 ID는 문장에 쓰지 말고 evidence 칸에 다십시오")
+    return errs
+
+
+def tidy_reason(text: str) -> str:
+    """핵심 판단 근거: 한 구절 — 끝 마침표 · 쉼표를 지운다(화면이 「…므로,」로 붙인다)."""
+    text = BRACKET.sub("", (text or "").strip())
+    text = re.sub(r"\s+", " ", text)
+    text = _KOR_TIME.sub(r"\1:\2", text)
+    return text.rstrip(" .,")
+
+
+def reason_errors(
+    text: str,
+    allowed: tuple[set[str], set[str], str],
+    judged_text: str,
+    known_names: set[str],
+    pairs: dict[str, Any] | None = None,
+) -> list[str]:
+    """핵심 판단 근거 문제. 값 · 할 일 오류 = 뺌(hard), 「므로」로 끝나지 않음 · 너무 김 = SOFT."""
+    errs = value_errors(text, allowed, judged_text, known_names) + pair_errors(text, pairs)
+    if "십시오" in text:
+        errs.append("핵심 판단 근거에는 할 일을 넣지 말고 「~므로」로 끝나는 까닭만 쓰십시오")
+    if text and not re.search(r"(?:므로|때문에|으니|니까)$", text):
+        errs.append(SOFT + "핵심 판단 근거는 「~므로」로 끝나는 한 구절로 쓰십시오")
+    if len(text) > 200:
+        errs.append(SOFT + f"핵심 판단 근거가 너무 깁니다({len(text)}자, 200자 이하)")
+    return errs
+
+
+# 항목 범위 밖 할 일(11/24 bluf-r4 S2: 「…주민을 우선 대피시키고 … 거주자의 대피를 즉시 지원하십시오」) — 다시 쓰게만 한다(SOFT)
+SCOPE_SOFT = {
+    "S2": (
+        re.compile(r"대피시키|대피를\s?(?:지원|완료|실시)|대피하도록"),
+        "주민 · 거주자 대피는 E2 · E3이 다룹니다. 이 항목에는 진화 순서와 시설 주변 진화 배치만 쓰십시오",
+    ),
+}
+
+
+def scope_errors(text: str, item_id: str) -> list[str]:
+    rule = SCOPE_SOFT.get(item_id)
+    return [SOFT + rule[1]] if rule and rule[0].search(text or "") else []
+
+
+def xref_errors(text: str, item_id: str, codes_ok: set[str]) -> list[str]:
+    """다른 항목 언급: 문장 속 「(S6)」 번호는 [관련 항목의 일] · [다른 항목]에 있는 번호만(자기 번호 ✕),
+    다른 항목으로 넘기는 말(「S6 참조」 「세부 내용은」 「→ S6」)은 다시 쓰게 한다(SOFT)."""
+    errs = []
+    for code in dict.fromkeys(ITEM_CODE.findall(text or "")):
+        if code == item_id:
+            errs.append(f"자기 항목 번호({code})를 문장에 쓰지 마십시오")
+        elif code not in codes_ok:
+            errs.append(f"입력에 없는 항목 번호({code})를 썼습니다")
+    if m := HANDOFF.search(text or ""):
+        errs.append(
+            SOFT
+            + f"「{m.group(0)}」처럼 다른 항목으로 넘기지 말고, 함께 할 일이면 「…요청(S6)과 함께, …하십시오」처럼 문장 속에서 말하십시오"
+        )
+    return errs

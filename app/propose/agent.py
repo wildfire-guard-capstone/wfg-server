@@ -30,12 +30,16 @@ class AgentWriter:
     names: Callable[[], set[str]] = set  # 지명 목록(제안 문장의 이름 검사) — 쓸 때 부른다
     workers: int = 4
     name: str = "agent"
+    # 11/24 소제목 형식(BLUF): 제품은 켠다. 화면(wfg-client)이 새 블록
+    # (reason · basis · detail)을 그려야 하므로
+    # 화면 PR을 먼저 머지한다(11-18 PR #11과 같은 순서)
+    parts: bool = True
 
     def write(self, llm_input: LlmInput) -> list[WrittenItem]:
         # 상황 깃발(agent/situation.py): 규칙층 구획의 「이번 상황」 한 줄에 쓴다
         situation = flags(llm_input["bundles"], llm_input["items"], llm_input["common"])
         common = llm_input["common"] | {"situation": situation}
-        agent = Agent(self.llm, self.evidence, self.names(), workers=self.workers)
+        agent = Agent(self.llm, self.evidence, self.names(), workers=self.workers, parts=self.parts)
         items, logs = agent.run(common, llm_input["items"])
         if items and all(_never_reached(log) for log in logs):
             raise WriterUnavailable("LLM 서버에 닿지 못했습니다(터널 · vLLM 확인)")

@@ -144,9 +144,9 @@ def evidence_text(chunks: list[dict[str, Any]]) -> str:
     parts = []
     for c in chunks:
         where = f"{c.get('doc_name', '')} {c.get('section') or ''}".strip()
-        parts.append(
-            f"■ {c['chunk_id']} ({c.get('label', '')} · {where} · {c.get('origin', '')})\n{c['text']}"
-        )
+        # 소제목별 검색(11/24 BLUF): 어느 소제목 질의로 찾았는지 붙인다(「검색: 시설 보호」)
+        origin = f"검색: {c['part']}" if c.get("part") else c.get("origin", "")
+        parts.append(f"■ {c['chunk_id']} ({c.get('label', '')} · {where} · {origin})\n{c['text']}")
     return "\n\n".join(parts)
 
 
@@ -208,8 +208,20 @@ def rule_parts(
     value_sentences: list[str] | None = None,
     calc: list[str] | None = None,
     kinds: list[str] | None = None,
+    product: bool = False,
 ) -> list[str]:
-    """C3 규칙층 구획: 판정 · 판정 값 문장 · 판단 계산 값 · 판정 자료(재설계 표 7)."""
+    """C3 규칙층 구획: 판정 · 판정 값 문장 · 판단 계산 값 · 판정 자료(재설계 표 7).
+    product = 11/24 소제목 형식: 「판단」 문단을 「파악」으로 부르고, 판정 자료는 소제목별 [자세히 보기 자료]로 따로 넣는다."""
+    if product:
+        out = rule_parts(
+            common, judgment | {"data": []}, situation_line, value_sentences, calc, kinds
+        )
+        return [
+            p.replace("상황 · 상태 · 판단에", "상황 · 상태 · 파악 · 판단 근거에").replace(
+                "판단 · 제안에 쓸 수 있는", "파악 · 판단 근거 · 제안에 쓸 수 있는"
+            )
+            for p in out
+        ]
     head = [RULE_HEAD]
     if common.get("current_stage"):
         head.append(f"지금 단계(판정 기준): {common['current_stage']}")
@@ -360,4 +372,227 @@ def retry_message(
         + tail
         + "\n".join(f"- {e}" for e in errors)
         + (f"\n\n[직전 제안]\n{shown}" if shown else ""),
+    }
+
+
+# ══ 11/24 소제목 형식(BLUF, 제품 C3 전용) ══════════════════════════════════════════════
+# 「제안-프롬프트-개편-계획(20261124).md」 · 사용자 결정(11-24): 제품만(C1 · C2는 위 지시문 그대로), 소제목 · 자세히 보기는
+# LLM의 True/False, 소제목 숨김은 코드 먼저(agent/parts.py), 판단 근거 문장의 출처는 제안과 같은 검사,
+# 「판정 값: 」 「기준: 」 이름표는 LLM이 쓰고 화면에 낼 때만 지운다, 요청은 원래 항목 · S6 · E6 모두 제안 가능,
+# 다른 항목은 링크가 아니라 문장 속 「(S6)」로 말한다. 생성 순서 = 상황 → 상태 → 파악 → 소제목마다
+# 판단 근거 → 핵심 판단 근거 → 제안(사용자 인정). 화면 순서는 BLUF(제안 먼저).
+
+ORDER_PARTS = "상황 → 상태 → 파악 → 소제목"  # json_schema 첫 칸(고정값)
+LABEL_VALUE = "판정 값:"  # 판단 근거 첫 문장 이름표(화면에서 지움)
+LABEL_RULE = "기준:"  # 판단 근거의 근거 발췌 문장 이름표(화면에서 지움)
+
+PRODUCT_SYSTEM = """당신은 산불 통합지휘권자(읽는 사람)에게 올릴 대응 제안서의 한 항목을 쓰는 보조자입니다.
+입력의 구획에 적힌 자료로 씁니다.
+
+[쓰는 순서: 상황 → 상태 → 파악 → 소제목마다 판단 근거 → 핵심 판단 근거 → 제안]
+한 항목을 현황 세 문단(상황 · 상태 · 파악)과 [소제목]에 적힌 소제목들로 씁니다. 화면에는 소제목별 제안이 맨 위에 보이고, 현황과 판단 근거는 그 아래 접힌 칸에 보입니다.
+- situation(상황): 불 쪽 — 무엇이 언제 닥치는가. 대상(마을 · 시설 · 도로 · 송전선 이름)과 불이 닿는 시각, 면적 · 바람의 변화를 1~3문장으로 씁니다.
+- status(상태): 우리 쪽 — 지금 무엇이 있는가. 할 일을 바꾸는 조건(인원 · 시설 종류 · 대피소 거리와 수용 인원 · 투입 자원 · 지휘권자 · 관할 기관)과 정보가 없는 것을 1~4문장으로 씁니다.
+- judgment(파악): 상황과 상태를 맞대 본 결과 — 무엇이 모자라거나 몰리거나 겹치거나 가장 급한가를 수치와 함께 1~3문장으로 씁니다. 파악할 거리가 없으면 빈 글("")로 둡니다.
+상황 · 상태 · 파악은 「~입니다 · ~습니다」로 끝나는 서술문으로 쓰고, 할 일(「~하십시오」)을 넣지 않습니다.
+- 상황은 이 항목의 대상에 대해서만 씁니다. 산불 전체의 발생 시각 · 위치 · 면적 · 바람은 S1(면적) · S4 · S5(바람)만 씁니다. 다른 항목은 그 항목의 대상(마을 · 시설 · 도로 · 송전선)에 불이 닿는 시각을 씁니다.
+- 산불을 부를 때는 「산불」 또는 입력의 산불 이름만 씁니다. 입력에 없는 산 이름 · 지명을 만들지 않습니다.
+- 시각과 값은 입력에서 함께 적힌 짝으로만 씁니다(틀림: 지금 면적을 다른 시각과 묶어 「HH:MM 무렵 N ha」).
+- 「정보가 없습니다」는 [없는 자료]에 있는 것 가운데 이 항목의 할 일을 바꾸는 것만 한 번 씁니다. 다른 항목이 다루는 정보가 없다고 쓰지 않고, 입력에 있는 것을 없다고 쓰지 않습니다.
+- 문단 앞에 「상황:」 「(파악)」 같은 이름이나 기호를 붙이지 않습니다.
+
+[소제목 쓰는 법]
+parts에는 [소제목]에 적힌 소제목이 그 순서대로 있습니다. 소제목마다 아래 순서로 씁니다.
+A. show(소제목이 둘 이상인 항목만): 이 소제목에서 읽는 사람이 할 일이 있으면 true, 없으면 false입니다. false이면 basis와 proposals는 빈 목록([]), reason은 빈 글("")로 둡니다. 적어도 한 소제목은 true입니다.
+B. basis(판단 근거): 이 소제목의 제안이 나온 까닭을 2~4문장으로 쓰고, 문장 하나를 칸 하나에 넣습니다.
+   - 첫 문장은 「판정 값: 」으로 시작해, 이 소제목의 제안에 쓴 판정 값(대상 이름 · 시각 · 수)을 입력에 적힌 그대로 옮깁니다. evidence는 빈 목록, quote는 빈 글입니다.
+   - 다음 한두 문장은 「기준: 」으로 시작해, [근거 발췌]에 적힌 기준 · 조치를 이번 대상에 맞게 씁니다. 문장마다 그 발췌 ID(evidence)와 기준을 적은 원문 구절(quote)을 답니다.
+   - 마지막 문장은 이름표 없이 판정 값과 기준을 이어 왜 이 제안을 했는지 씁니다(「그래서 …」). 정보가 없어 정하지 않은 것이 있으면 여기서 밝힙니다. evidence는 빈 목록, quote는 빈 글입니다.
+   - 판단 근거 문장(text)에는 발췌 ID · 쪽 번호 · 문서 이름을 쓰지 않습니다(출처는 evidence 칸에). 원문의 머리 기호(*, -)는 옮기지 않습니다.
+C. reason(핵심 판단 근거): 이 소제목의 제안을 하게 만든 가장 결정적인 판정 값(시각 · 인원 · 거리 · 수용) 한두 개를 담아 「~므로」로 끝나는 한 구절로 씁니다. 마침표를 찍지 않고 할 일을 넣지 않습니다.
+D. proposals(제안): 아래 [제안 쓰는 법]을 따릅니다. 이 소제목이 다루는 일만 씁니다.
+E. show_detail(입력에 [자세히 보기 자료 — 그 소제목]이 있는 소제목만): 그 자료를 화면에 펼쳐 보여야 제안을 이해할 수 있으면 true(대상 · 시각 · 기관이 여럿이라 제안 문장에 다 담기 어렵거나 수용 비교가 필요함), 제안 문장만으로 충분하면 false입니다. 자료 내용은 코드가 화면에 넣으므로 옮겨 쓰지 않습니다.
+
+[다른 항목과 이어지는 일]
+- 이 항목 범위 밖의 일(다른 항목이 다루는 대상 · 조치)은 쓰지 않습니다.
+- [관련 항목의 일]은 다른 항목에서도 다루는 일입니다. 이 항목의 대상에 필요하면 이 항목에서도 제안할 수 있습니다. 이 항목의 할 일과 함께 해야 하면 그 할 일 문장 속에 「○○에 대한 ○○ 요청(S6)과 함께, …하십시오」처럼 항목 번호를 괄호로 붙여 한 번 말합니다.
+- 「S6 참조」 「세부 내용은 …」 「→」처럼 다른 항목으로 넘기는 말은 쓰지 않습니다. 항목 번호는 [쓸 수 있는 다른 항목 번호]에 적힌 번호만 쓰고(진화 항목의 기관 요청은 S6, 대피 항목의 기관 요청은 E6), 현황(상황 · 상태 · 파악) 문단에는 항목 번호를 쓰지 않습니다.
+
+[값 규칙 — 모든 칸]
+1. 입력에 없는 값 · 이름을 지어내지 않습니다. 단계 · 시각 · 면적 · 인원 · 이름은 입력에 적힌 그대로 씁니다. 마을은 입력에 적힌 꼴 그대로 씁니다: 닿는 행정리가 괄호로 붙어 있으면(「○○리(○○1리)」) 그대로 옮기고, 입력에 없는 「○○1리」 같은 행정리 이름을 만들거나 인구를 행정리로 나누어 쓰지 않습니다(인구는 ○○리 값).
+2. [없는 자료]의 값은 추측하지 않고, 그 값으로 파악 · 제안을 만들지 않습니다(틀림: 「○○ 정보가 없어 ○○에 제약이 있을 수 있습니다」 「○○ 정보가 없으므로 ○○를 줄이십시오」). 정할 수 없는 것은 「~는 정보가 없습니다」로만 밝힙니다.
+3. 입력에 없는 상황(강풍 · 야간 · 피해 발생 · 통신 두절)이나 대상(도로 · 시설 · 마을)을 가정하지 않습니다.
+4. 지금의 일과 앞으로의 일을 구분합니다. 「HH:MM 무렵 N단계 기준」 「지휘권자 ○○ → ○○(HH:MM ~ HH:MM)」 「HH:MM ~ HH:MM 닿을 수 있음」처럼 앞으로의 일은 「~할 수 있습니다」로 쓰고, 제안은 「…까지(…되면) …하십시오」로 씁니다(구분 대기). 아직 일어나지 않은 일을 지금 하라고 쓰지 않습니다.
+   시각은 입력에 적힌 HH:MM(또는 HH:MM ~ HH:MM)으로 씁니다. 「5시간 뒤」 「N시간 후」처럼 상대 시각으로 바꿔 쓰지 않고, 같은 줄에 적힌 시각을 씁니다. 입력에 시각이 없으면 시각을 만들지 않습니다.
+
+[제안 쓰는 법]
+5. 파악에서 드러난 문제마다, 그리고 이 소제목이 다루는 대상(마을 · 시설 · 도로 · 기관) 가운데 할 일이 있는 것마다 빠짐없이 제안을 씁니다. 개수는 정하지 않고 인명 보호와 급한 일부터 씁니다. 제안 하나는 1~3문장, 합쇼체입니다.
+6. {EVIDENCE_RULE}
+7. 구체적으로 씁니다: 누가(읽는 사람, 또는 읽는 사람이 지시 · 요청할 기관) 무엇을 어디에(마을 · 시설 · 구간) 언제까지(입력의 시각) 하는지. 일반 문구를 그대로 옮기지 말고 이번 상황의 대상 · 시각에 맞게 씁니다. 파악에서 모자람 · 몰림이 드러났으면 그것을 메우는 다음 안(두 번째 후보 · 추가 지정 · 먼저 할 대상)을 씁니다. 정보가 없어 정할 수 없는 것은 지어내지 말고 「~를 확인하십시오」처럼 확인할 일로 씁니다.
+8. 할 일은 반드시 읽는 사람에게 「~하십시오」로 씁니다.
+   - 읽는 사람이 직접 할 일: 「…을 발령하십시오」 「…을 ○○과 협의하십시오」
+   - 소속 부서 · 하급 기관이 할 일: 「○○에게 …하도록 지시하십시오」
+   - 다른 기관에 맡길 일: 「○○에 …을 요청하십시오」
+   틀림: 「○○과장은 …하라」 「○○군수는 …해야 합니다」 「…조치를 취해야 합니다」(제삼자에게 시키거나 서술로 끝냄). 읽는 사람을 주어로 쓰지 않습니다(틀림: 「○○군수는 …하십시오」).
+   할 일을 부정하는 문장(「~하지 않습니다」), 「등」, 「보호 조치를 취하십시오」 「철저히 하십시오」처럼 방법이 빠진 말은 쓰지 않습니다. 근거 표기([p.N] 같은 괄호) · 발췌 ID · 「근거는 …」 같은 근거 설명은 제안 문장(text)에 쓰지 않습니다(근거 설명은 basis에).
+9. 제안마다 서로 다른 조치를 씁니다. 같은 조치를 대상(마을 · 시설)만 바꿔 여러 제안으로 나누지 말고, 대상을 한 제안에 모아 씁니다(「○○리 · ○○리 주민을 …」). 다만 시한이 다른 대상을 하나의 시한으로 합치지 않습니다. 대상마다 자기 시한을 붙이거나(「○○리 · ○○리는 즉시, ○○리는 HH:MM 전까지 …」) 시한이 다른 무리끼리 제안을 나눕니다. 같은 조치를 두 소제목에 되풀이하지 않습니다.
+10. category: 즉시(지금 할 일) · 대기(조건이 되면 할 일, 미리 준비할 일) · 협의(다른 권한자와 협의) · 요청(다른 기관에 요청).
+
+[출력] JSON 하나만: {"order": "상황 → 상태 → 파악 → 소제목", "situation": "<상황 문단>", "status": "<상태 문단>", "judgment": "<파악 문단 또는 빈 글>", "parts": {"<소제목>": {"show": true, "basis": [{"text": "판정 값: …", "evidence": [], "quote": ""}, {"text": "기준: …", "evidence": ["<발췌 ID>"], "quote": "<원문 구절>"}, {"text": "그래서 …", "evidence": [], "quote": ""}], "reason": "…므로", "proposals": [{"category": "<구분>", "text": "<제안>", "evidence": ["<발췌 ID>"], "quote": "<원문 구절>"}], "show_detail": true}}}. parts의 소제목 · 칸은 입력에 맞춰 정해져 있습니다(show · show_detail이 없는 소제목도 있음)."""
+
+
+def product_system() -> str:
+    """제품(C3) 소제목 형식 지시문."""
+    return PRODUCT_SYSTEM.replace(RULE_MARK, EVIDENCE_RULE["C3"])
+
+
+LAST_PARTS = "위 자료로 상황 · 상태 · 파악을 쓰고, [소제목]마다 판단 근거 · 핵심 판단 근거 · 대응 제안을 근거 발췌에서 골라 JSON으로 쓰십시오."
+
+
+def parts_block(parts: list[Any]) -> str:
+    """[소제목] 구획. parts = agent.parts.Part 목록(title · scope · untitled)."""
+    if len(parts) == 1 and parts[0].untitled:
+        return f"[소제목]\n이 항목은 소제목이 없습니다. parts에 「{parts[0].title}」 하나만 씁니다."
+    return "[소제목 — parts에 이 순서로 씁니다]\n" + "\n".join(
+        f"- {p.title}: {p.scope}" for p in parts
+    )
+
+
+def detail_parts(parts: list[Any], lines_of: Any) -> list[str]:
+    """소제목별 [자세히 보기 자료] 구획(자료가 있는 소제목만). lines_of = 블록 → 글줄(agent.parts.detail_lines)."""
+    out = []
+    for p in parts:
+        if not p.detail:
+            continue
+        name = "이 항목" if p.untitled else p.title
+        body = [ln for b in p.detail for ln in lines_of(b) if ln]
+        out.append(
+            f"[자세히 보기 자료 — {name}(화면에 목록 · 표로 넣을 수 있습니다. show_detail을 정할 때 봅니다)]\n"
+            + "\n".join(body)
+        )
+    return out
+
+
+def messages_parts(
+    common: dict,
+    judgment: dict,
+    chunks: list[dict],
+    parts: list[Any],
+    lines_of: Any,
+    related: list[str] | None = None,
+    codes: list[str] | None = None,
+    notes: list[str] | None = None,
+    situation_line: str = "",
+    value_sentences: list[str] | None = None,
+    calc: list[str] | None = None,
+    kinds: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """제품(C3) 소제목 형식 사용자 입력. 앞부분(지시문 → 읽는 사람 → 산불 기본 정보 → 없는 자료)은 예전과 같아 접두 캐시를 공유한다."""
+    iid = judgment["id"]
+    scope, rule = ITEM_SCOPE.get(iid, ("", ""))
+    head = f"이번 항목: {iid} {judgment.get('name', '')}"
+    if scope:
+        head += f"\n이 항목이 다루는 것: {scope}"
+    if rule:
+        head += f"\n이 항목에서 지킬 것: {rule}"
+    others = " · ".join(f"{k} {v[0]}" for k, v in ITEM_SCOPE.items() if k != iid)
+    out = common_parts(common, "", "C3") + [
+        head,
+        parts_block(parts),
+        "[다른 항목 — 이 항목 범위 밖]\n" + others,
+    ]
+    if related:
+        out.append(
+            "[관련 항목의 일 — 다른 항목에서도 다루는 일입니다. 이 항목의 할 일과 함께 할 일이면 문장 속에 「(S6)」처럼 그 항목 번호를 붙여 말합니다]\n"
+            + "\n".join(related)
+        )
+    # 11/24 bluf-r4: E2 · E4가 E6 대신 「(S6)」을 씀 → 쓸 수 있는 번호를 적어 준다(검사도 이 번호만 받음)
+    out.append(
+        "[쓸 수 있는 다른 항목 번호] "
+        + (" · ".join(codes) if codes else "없음 — 이 항목에서는 다른 항목 번호를 쓰지 않습니다")
+    )
+    out += rule_parts(common, judgment, situation_line, value_sentences, calc, kinds, product=True)
+    out += detail_parts(parts, lines_of)
+    if notes:
+        out.append("[규칙층 안내 — 화면 아래 「누락된 정보」에 따로 보입니다]\n" + "\n".join(notes))
+    out.append("[근거 발췌]\n" + evidence_text(chunks))
+    out.append(LAST_PARTS)
+    return [
+        {"role": "system", "content": product_system()},
+        {"role": "user", "content": "\n\n".join(out)},
+    ]
+
+
+def parts_schema(parts: list[Any], evidence_ids: list[str]) -> dict[str, Any]:
+    """소제목 형식 json_schema. parts = 이름을 키로 한 객체(순서 · 이름 고정), 소제목 칸 순서 = 생성 순서
+    (show → basis → reason → proposals → show_detail). show는 소제목이 둘 이상일 때만, show_detail은 자세히 보기
+    자료가 있는 소제목만 둔다."""
+    ids = list(evidence_ids) or ["(없음)"]
+    ev_any = {"type": "array", "maxItems": MAX_EVIDENCE, "items": {"type": "string", "enum": ids}}
+    ev_one = ev_any | {"minItems": 1}
+    basis_item = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}, "evidence": ev_any, "quote": {"type": "string"}},
+        "required": ["text", "evidence", "quote"],
+    }
+    prop_item = {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "enum": CATEGORIES},
+            "text": {"type": "string"},
+            "quote": {"type": "string"},
+            "evidence": ev_one,
+        },
+        "required": ["category", "text", "evidence", "quote"],
+    }
+    multi = len(parts) > 1
+    part_props: dict[str, Any] = {}
+    for p in parts:
+        props: dict[str, Any] = {}
+        if multi:
+            props["show"] = {"type": "boolean"}
+        props["basis"] = {"type": "array", "maxItems": 5, "items": basis_item}
+        props["reason"] = {"type": "string"}
+        props["proposals"] = {
+            "type": "array",
+            "minItems": 0 if multi else 1,
+            "maxItems": MAX_PROPOSALS,
+            "items": prop_item,
+        }
+        if p.detail:
+            props["show_detail"] = {"type": "boolean"}
+        part_props[p.title] = {
+            "type": "object",
+            "properties": props,
+            "required": list(props),
+            "additionalProperties": False,
+        }
+    return {
+        "type": "object",
+        "properties": {
+            "order": {"type": "string", "enum": [ORDER_PARTS]},
+            "situation": {"type": "string"},
+            "status": {"type": "string"},
+            "judgment": {"type": "string"},
+            "parts": {
+                "type": "object",
+                "properties": part_props,
+                "required": [p.title for p in parts],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["order", "situation", "status", "judgment", "parts"],
+    }
+
+
+def parts_retry_message(errors: list[str], shown: list[str]) -> dict[str, str]:
+    """소제목 형식 다시 쓰기 지시. errors = 「「시설 보호」 제안 2: …」처럼 소제목 이름을 붙인 문제, shown = 같은 꼴의 직전 제안."""
+    return {
+        "role": "user",
+        "content": "검사에서 아래 문제가 나왔습니다. 같은 JSON 형식으로 상황 · 상태 · 파악과 소제목을 모두 다시 쓰되, 아래에 적힌 값 · 낱말 · 문장만 고치십시오. "
+        "검사에 걸리지 않은 문장과 대상 이름 · 값(마을 · 시설 · 기관 · 기지 · 도로 이름, 시각, 수), show · show_detail은 직전 글 그대로 두고, "
+        "「응원 기지」 「해당 마을」 「관련 기관」처럼 묶어 부르는 말로 바꾸거나 지우지 마십시오. "
+        "입력에 없는 숫자 · 시각은 그 값(과 그 값에 붙은 말)만 빼거나 입력의 값으로 바꾸고, 근거 발췌에서 찾을 수 없는 조치 · 기준은 그것만 빼십시오.\n"
+        + "\n".join(f"- {e}" for e in errors)
+        + ("\n\n[직전 제안]\n" + "\n".join(shown) if shown else ""),
     }

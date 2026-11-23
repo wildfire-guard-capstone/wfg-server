@@ -78,12 +78,33 @@ def version_rows(session: Session, rows: Sequence[Proposal], limit: int) -> list
 
 def _block(b: dict[str, Any]) -> dict[str, Any]:
     if b.get("type") == "table":
-        return {"type": "table", "head": b["head"], "rows": [table_row(r) for r in b["rows"]]}
+        # 요청 표(S6 · E6)는 행이 사전(표 머리 순서 키),
+        # 11/24 자세히 보기 표(agent/parts.py)는 행이 이미 열 순서 배열
+        out = {
+            "type": "table",
+            "head": b["head"],
+            "rows": [table_row(r) if isinstance(r, dict) else list(r) for r in b["rows"]],
+        }
+        return out | ({"caption": b["caption"]} if b.get("caption") else {})
     if b.get("type") == "list":
-        return {
+        out = {
             "type": "list",
             "style": b.get("style"),
             "rows": [{"text": r["text"]} for r in b["rows"]],
+        }
+        return out | ({"caption": b["caption"]} if b.get("caption") else {})
+    if b.get("type") == "detail":  # 11/24 소제목의 자세히 보기(목록 · 표 묶음)
+        return {
+            "type": "detail",
+            "show": bool(b.get("show")),  # LLM이 펼쳐 보이라고 했는지(화면은 true일 때만 그림)
+            "blocks": [_block(d) for d in b.get("blocks", [])],
+        }
+    if b.get("type") == "basis":  # 11/24 판단 근거 문장(이름표 뗀 글 · 출처 ID)
+        return {
+            "type": "basis",
+            "sentences": [
+                {k: v for k, v in s.items() if k not in HIDDEN} for s in b.get("sentences", [])
+            ],
         }
     out = {k: v for k, v in b.items() if k not in HIDDEN}
     if b.get("type") == "paragraph":
@@ -97,6 +118,7 @@ def sections_out(sections: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """문단의 quote_ok · action을 빼고 구분을 영문 코드로, 표 행을 열 순서 배열로."""
     return [
         {"title": s.get("title", ""), "blocks": [_block(b) for b in s.get("blocks", [])]}
+        | ({"kind": s["kind"]} if s.get("kind") else {})  # 11/24 소제목 형식: facts · part · notes
         for s in sections
     ]
 

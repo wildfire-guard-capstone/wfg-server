@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.schemas.common import DateTimeOut, Geometry, Id, In
 
@@ -99,11 +99,19 @@ class IncidentCreateIn(In):
     reported_at: AwareDatetime
     report_text: str | None = None
     reporter_org: str | None = Field(None, max_length=100)
-    reporter_name: str = Field(min_length=1, max_length=50)
+    # 신고 기관명과 둘 중 하나는 필수(11/23). 기관이 신고하면 성명을 모를 수 있다
+    reporter_name: str | None = Field(None, max_length=50)
     reporter_phone: str = Field(min_length=1, max_length=20)
     initial_perimeter: InitialPerimeterIn | None = None
     # 기관별 접수 기록(11/23). 없으면 빈 목록
     intake_records: list[IntakeRecordIn] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _org_or_name(self) -> "IncidentCreateIn":
+        """신고 기관명 · 신고자 성명 중 하나는 있어야 한다(공백만 있으면 없는 것)."""
+        if not (self.reporter_org or "").strip() and not (self.reporter_name or "").strip():
+            raise ValueError("신고 기관명과 신고자 성명 중 하나는 필요합니다.")
+        return self
 
 
 class IncidentEndIn(In):

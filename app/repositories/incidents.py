@@ -60,7 +60,7 @@ def create_incident(
     reported_at: datetime,
     reported_by: int,
     started_at: datetime | None = None,
-    reporter_name: str = "미상",
+    reporter_name: str | None = "미상",
     reporter_phone: str = "미상",
     report_text: str | None = None,
     reporter_org: str | None = None,

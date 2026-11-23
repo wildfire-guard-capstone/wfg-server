@@ -48,3 +48,20 @@ def test_too_many_intake_records_are_rejected():
 
 def test_incident_out_always_carries_intake_records():
     assert IncidentOut.model_fields["intake_records"].is_required()
+
+
+# 신고자(11/23): 신고 기관명 · 신고자 성명 중 하나는 필수, 성명은 비워도 된다
+def test_org_alone_is_enough():
+    body = {**BODY, "reporter_name": None, "reporter_org": "의성군 산림과"}
+    assert IncidentCreateIn(**body).reporter_name is None
+
+
+def test_name_alone_is_enough():
+    assert IncidentCreateIn(**BODY).reporter_org is None
+
+
+@pytest.mark.parametrize("org,name", [(None, None), ("  ", None), (None, " "), ("", "")])
+def test_neither_org_nor_name_is_rejected(org, name):
+    body = {**BODY, "reporter_org": org, "reporter_name": name}
+    with pytest.raises(ValidationError, match="신고 기관명과 신고자 성명 중 하나"):
+        IncidentCreateIn(**body)

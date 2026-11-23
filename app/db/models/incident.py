@@ -41,7 +41,8 @@ class Incident(Base):
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     report_text: Mapped[str | None] = mapped_column(Text)
     reporter_org: Mapped[str | None] = mapped_column(String(100))
-    reporter_name: Mapped[str] = mapped_column(String(50))
+    # 신고 기관명(reporter_org)과 둘 중 하나는 있다(INC-02에서 검사, 11/23)
+    reporter_name: Mapped[str | None] = mapped_column(String(50))
     reporter_phone: Mapped[str] = mapped_column(String(20))
     status: Mapped[IncidentStatus] = mapped_column(
         pg_enum(IncidentStatus, "incident_status"),

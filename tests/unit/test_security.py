@@ -30,10 +30,10 @@ def test_temporary_password_is_random():
 
 def test_token_roundtrip_and_expiry():
     token, expires = create_access_token(7, "COMMANDER")
-    assert expires == 1800
+    assert expires == 86400  # 24시간
     claims = decode_access_token(token)
     assert claims["sub"] == "7" and claims["role"] == "COMMANDER"
-    old, _ = create_access_token(7, "COMMANDER", now=datetime.now(UTC) - timedelta(hours=2))
+    old, _ = create_access_token(7, "COMMANDER", now=datetime.now(UTC) - timedelta(hours=25))
     with pytest.raises(jwt.ExpiredSignatureError):
         decode_access_token(old)
 

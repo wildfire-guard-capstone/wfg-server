@@ -76,7 +76,9 @@ class Settings(BaseSettings):
 
     # 로그인 토큰(JWT HS256). 비워 두면 서버를 켤 때마다 임시 키를 만든다(재시작하면 다시 로그인)
     jwt_secret: str = ""
-    jwt_expires_s: int = 1800
+    # 로그인 유지 24시간(11/23 시연 QA: 30분이면 시연 · 녹화 중에 로그아웃됨).
+    # 환경 변수 JWT_EXPIRES_S로 바꿀 수 있다
+    jwt_expires_s: int = 86400
 
     @model_validator(mode="after")
     def _build_database_url(self) -> "Settings":

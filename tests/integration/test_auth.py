@@ -16,7 +16,7 @@ def test_login_me_logout(client, make_user, db):
     r = post_login(client, "T_CMD")  # 아이디는 대소문자 무시
     assert r.status_code == 200
     data = r.json()["data"]
-    assert data["token_type"] == "bearer" and data["expires_in"] == 1800
+    assert data["token_type"] == "bearer" and data["expires_in"] == 86400
     assert data["user"]["login_id"] == "t_cmd" and data["user"]["role"] == "COMMANDER"
     headers = {"Authorization": f"Bearer {data['access_token']}"}
     me = client.get(f"{URL}/me", headers=headers).json()["data"]

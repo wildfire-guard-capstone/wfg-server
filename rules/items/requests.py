@@ -15,6 +15,8 @@ from typing import Any
 from rules.items.names import label_of
 
 HEAD = ["관련 기관", "세부 대상(기관명)", "대상", "시각", "항목"]
+# 줄(dict)의 키 — HEAD와 같은 순서. 화면 응답(PROP-02 · 03)이 이 순서로 칸을 펼친다
+ROW_KEYS = ("group", "agency", "target", "when", "item")
 HELI_GROUP = {"산림청 헬기": "산림 헬기", "소방 헬기": "소방 헬기", "지자체 임차헬기": "임차 헬기"}
 CENTRAL_ROOM = "중앙재난안전상황실"  # 재난방송 송출 요청 곳(기관 이름은 표 틀에 둔다, 11/7)
 

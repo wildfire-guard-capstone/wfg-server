@@ -19,6 +19,10 @@
   제안을 만들지 않고 시각은 입력의 HH:MM으로(「5시간 뒤」로 바꿔 쓰지 않음, 규칙 2 · 4). 행정리: 엔진이 닿는 행정리를
   「○○리(○○1리)」로 넘기므로(main #58 RE-R3 D2) 그 꼴 그대로 쓰고 입력에 없는 행정리 이름 · 인구를 만들지 않음(규칙 1).
   C3 규칙층 구획의 지휘권자 줄에 RE-1(main #55)의 넘어가는 시간대를 함께 적음.
+- 11/23 다룰 주제(C3만): 규칙 엔진이 켠 주제(rules/sections의 action 블록 topic)를 C3 규칙층 구획에 [다룰 주제]로
+  다시 넘기고, 제안마다 topic 칸(주제 이름 enum)을 둔다. 주제마다 제안 하나, 주제 밖 제안은 쓰지 않는다.
+  11/19 재설계는 주제를 빼(D2) 무엇을 쓸지를 검색 발췌가 정하게 됐고, 제안이 매뉴얼 일반 문장 나열이 됐다
+  (QA 산불 #24 S1: 제안 8개). 지시문(SYSTEM)은 세 조건 같은 글 그대로 두고 C3 구획에만 넣는다(C1 · C2는 그대로).
 - 출력 형식은 vLLM json_schema로 묶는다: order(고정값) · situation · status · judgment(빈 글 가능) · proposals.
 """
 
@@ -201,6 +205,25 @@ RULE_HEAD = (
 )
 
 
+TOPIC_HEAD = (
+    "[다룰 주제 — 규칙층이 이번 판정으로 켠 주제입니다. 제안은 주제마다 하나씩 쓰고 topic 칸에 그 주제 이름을 적습니다. "
+    "여기 없는 주제의 제안은 쓰지 않습니다(이 구획이 있으면 5번의 「빠짐없이」 대신 이 목록을 따릅니다). "
+    "주제의 소제목과 쓸 판정 값을 보고 그 주제에 맞는 조치를 근거 발췌에서 찾습니다. "
+    "한 주제에 시한이 다른 대상이 있으면 한 제안 안에서 대상마다 시한을 붙입니다(9번)]"
+)
+
+
+def topic_names(topics: list[dict] | None) -> list[str]:
+    """다룰 주제 이름(순서 유지, 빈 이름 · 겹친 이름 뺌)."""
+    return list(dict.fromkeys(t.get("topic") for t in topics or [] if t.get("topic")))
+
+
+def topic_line(tp: dict) -> str:
+    """주제 한 줄: 「- 현재 기준 단계 (소제목 1. 대응단계 판단·격상 검토 · 쓸 판정 값 now, change)」(11/18 꼴)."""
+    use = ", ".join(tp.get("use") or []) or "—"
+    return f"- {tp['topic']} (소제목 {tp.get('section') or '없음'} · 쓸 판정 값 {use})"
+
+
 def rule_parts(
     common: dict,
     judgment: dict,
@@ -208,8 +231,9 @@ def rule_parts(
     value_sentences: list[str] | None = None,
     calc: list[str] | None = None,
     kinds: list[str] | None = None,
+    topics: list[dict] | None = None,
 ) -> list[str]:
-    """C3 규칙층 구획: 판정 · 판정 값 문장 · 판단 계산 값 · 판정 자료(재설계 표 7)."""
+    """C3 규칙층 구획: 판정 · 다룰 주제 · 판정 값 문장 · 판단 계산 값 · 판정 자료(재설계 표 7, 주제는 11/23)."""
     head = [RULE_HEAD]
     if common.get("current_stage"):
         head.append(f"지금 단계(판정 기준): {common['current_stage']}")
@@ -236,6 +260,8 @@ def rule_parts(
     judged = {k: judgment.get(k) for k in ("finding", "facts", "withheld", "do_not_state")}
     head.append("판정: " + json.dumps(judged, ensure_ascii=False))
     parts = ["\n".join(head)]
+    if topics:
+        parts.append(TOPIC_HEAD + "\n" + "\n".join(topic_line(tp) for tp in topics))
     if value_sentences:
         parts.append(
             "[판정 값 문장 — 코드가 판정 값으로 쓴 문장입니다. 상황 · 상태 · 판단에 이 값을 옮길 때 값과 표현을 바꾸지 마십시오]\n"
@@ -270,9 +296,11 @@ def messages(
     condition: str = "C3",
     raw_table: str = "",
     kinds: list[str] | None = None,
+    topics: list[dict] | None = None,
 ) -> list[dict[str, str]]:
     """조건별 사용자 입력(재설계 표 7).
-    value_sentences = 판정 값 문장(situate.py), calc = 판단 계산 값(calc.py), kinds = 판정된 대상 종류 — 모두 C3만.
+    value_sentences = 판정 값 문장(situate.py), calc = 판단 계산 값(calc.py), kinds = 판정된 대상 종류,
+    topics = 다룰 주제(judgment.judgment_of의 topics, 11/23) — 모두 C3만.
     raw_table = 원자료 표 글(C1 · C2만)."""
     sys_text = system(condition)
     iid = judgment["id"]
@@ -288,7 +316,7 @@ def messages(
         "[다른 항목 — 이 항목에 쓰지 않음]\n" + others,
     ]
     if condition == "C3":
-        parts += rule_parts(common, judgment, situation_line, value_sentences, calc, kinds)
+        parts += rule_parts(common, judgment, situation_line, value_sentences, calc, kinds, topics)
     if condition != "C1":
         parts.append("[근거 발췌]\n" + evidence_text(chunks))
     parts.append(LAST[condition])
@@ -298,13 +326,24 @@ def messages(
     ]
 
 
-def schema(evidence_ids: list[str], with_evidence: bool = True) -> dict[str, Any]:
-    """제안 목록 json_schema: 제안 1 ~ MAX_PROPOSALS개(주제로 묶지 않음, 지시문은 개수를 정하지 않음). with_evidence = False(C1)면 evidence · quote 칸이 없다."""
-    item_props: dict[str, Any] = {
+def schema(
+    evidence_ids: list[str], with_evidence: bool = True, topics: list[str] | None = None
+) -> dict[str, Any]:
+    """제안 목록 json_schema. with_evidence = False(C1)면 evidence · quote 칸이 없다.
+    topics(다룰 주제 이름, C3 · 11/23)가 있으면 제안마다 topic 칸(그 이름 enum)을 맨 앞에 두고 제안 수 = 주제 수.
+    없으면 제안 1 ~ MAX_PROPOSALS개(11/19 재설계 그대로)."""
+    names = list(dict.fromkeys(t for t in topics or [] if t))
+    item_props: dict[str, Any] = {}
+    required: list[str] = []
+    if names:
+        item_props["topic"] = {"type": "string", "enum": names}
+        required.append("topic")
+    item_props |= {
         "category": {"type": "string", "enum": CATEGORIES},
         "text": {"type": "string"},
     }
-    required = ["category", "text"]
+    required += ["category", "text"]
+    n_min, n_max = (len(names), len(names)) if names else (1, MAX_PROPOSALS)
     if with_evidence:
         item_props |= {
             "quote": {"type": "string"},
@@ -328,8 +367,8 @@ def schema(evidence_ids: list[str], with_evidence: bool = True) -> dict[str, Any
             "judgment": {"type": "string"},
             "proposals": {
                 "type": "array",
-                "minItems": 1,
-                "maxItems": MAX_PROPOSALS,
+                "minItems": n_min,
+                "maxItems": n_max,
                 "items": {
                     "type": "object",
                     "properties": item_props,

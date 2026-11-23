@@ -5,7 +5,7 @@ import json
 import pytest
 from rules_example import full_inputs
 
-from agent.judgment import data_blocks
+from agent.judgment import data_blocks, topics_of
 from agent.prompt import CATEGORIES
 from app.propose import get_writer
 from app.propose.fake import TEST_CHUNK, FakeWriter
@@ -49,10 +49,10 @@ def test_one_result_per_engine_item_in_order(engine, written):
     json.dumps(list(written.values()), ensure_ascii=False)  # jsonb로 저장할 수 있다
 
 
-def test_four_steps_then_engine_lists(written):
+def test_four_steps_then_engine_lists(engine, written):
     """11/17 배치: 상황 · 상태 · 판단(fact) → 제안(paragraph).
-    11/19 재설계(D2): 제안을 주제로 묶지 않으므로 규칙 엔진 목록은 제안에 붙지 않고
-    그 아래 섹션에 남는다."""
+    규칙 엔진 목록은 제안에 붙지 않고 그 아래 섹션에 남는다(11/19).
+    11/23: 제안 문단에는 다룰 주제(topic)가 엔진 주제 순서대로 붙는다."""
     e2 = written["E2"]
     assert [b["type"] for b in blocks(e2, "fact", "paragraph", "list")] == [
         "fact",
@@ -64,7 +64,10 @@ def test_four_steps_then_engine_lists(written):
         "list",
     ]
     assert e2["sections"][0]["title"] == "" and len(e2["sections"]) >= 2
-    assert all("details" not in p and "topic" not in p for p in blocks(e2, "paragraph"))
+    assert all("details" not in p for p in blocks(e2, "paragraph"))
+    e2_engine = next(it for it in engine["items"] if it["id"] == "E2")
+    engine_topics = [t["topic"] for t in topics_of(e2_engine) if t["topic"]]
+    assert [p["topic"] for p in blocks(e2, "paragraph")] == engine_topics
     assert [b["step"] for b in blocks(e2, "fact")] == ["situation", "status", "judgment"]
     first, _second = blocks(e2, "paragraph")
     assert first["text"] == "[테스트] 위험구역 마을 대피 제안 문장입니다 [테스트 문서]."

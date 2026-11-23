@@ -19,7 +19,10 @@
   C1 = 원자료 표만(검색 없음), C2 = 원자료 표 + 검색 상위 k개, C3(제품) = 규칙층 판정 + 같은 검색(질의에 판정 값을 더함).
   원자료 표 글은 common["raw_table"]으로 받는다(demo/uiseong/raw_table.py가 만든다). 판단 계산 값(calc.py) ·
   판정 값 문장(situate.py) · 상황 한 줄(situation.summary)은 규칙층이 만든 것이라 C3에만 들어간다.
-- 화면 배치: 첫 섹션 = 상황 · 상태 · 판단 문단(fact 블록) → 제안 문단(paragraph 블록, LLM이 쓴 순서).
+- 11/23 다룰 주제(C3만): 규칙 엔진이 켠 주제를 프롬프트에 넘기고(prompt.TOPIC_HEAD) 제안마다 topic 칸을 받는다.
+  빠진 주제 · 겹친 주제는 다시 쓰게만 하고(SOFT, 제안은 빼지 않음), 끝까지 빠지면 항목 상태를 partial로 둔다.
+  주제가 없는 항목(예: E6)은 예전처럼 주제 없이 쓴다.
+- 화면 배치: 첫 섹션 = 상황 · 상태 · 판단 문단(fact 블록) → 제안 문단(paragraph 블록, 주제가 있으면 주제 순서, 없으면 LLM이 쓴 순서).
   C3는 그 아래 규칙 엔진 섹션의 목록 · 표 · ※(판정 자료)를 소제목과 함께 둔다(채점 제외, P5).
 - 기록(logs)에 항목마다 질의 · 근거 · 보낸 메시지 전문 · 받은 답 원문 · 검사 결과가 남는다.
 - 보낸 메시지가 직전 회차와 글자까지 같은 항목은 직전 제안을 다시 쓴다(11/7).
@@ -27,6 +30,7 @@
 
 import hashlib
 import json
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -39,6 +43,7 @@ FAILED_TEXT = (
 )
 ATTEMPTS = 3  # 처음 + 다시 쓰기 2회(세 조건 같음)
 FACT_KEY = -2  # 검사 결과에서 상황 · 상태 · 판단 문제의 자리
+TOPIC_KEY = -3  # 검사 결과에서 다룰 주제가 빠지거나 겹친 문제의 자리(11/23)
 # 다시 쓴 제안이 앞 시도의 같은 자리 제안보다 자료 값(이름 · 시각 · 수)을 이만큼 넘게 잃으면 한 번 더 쓰게 한다(C3, 값 대조의 일부)
 # (11/18 eval1118 회차 4 S3: 응원 기지 8곳 이름을 쓴 제안이 「19:20」 하나로 걸리자 다시 쓴 글이 「응원 기지에 대해」로 바뀜)
 LOST_MIN, LOST_SHARE = 3, 0.5
@@ -63,6 +68,20 @@ def lost_values(
     return out
 
 
+def topic_errors(props: list[dict[str, Any]], topics: list[str]) -> list[str]:
+    """다룰 주제(C3, 11/23)가 빠졌거나 두 번 이상 쓰였으면 다시 쓰기 지시. 제안은 빼지 않는다(SOFT)."""
+    count = Counter(p.get("topic") for p in props)
+    return [
+        check.SOFT + f"다룰 주제 「{t}」의 제안이 없습니다. 그 주제의 제안을 하나 쓰십시오"
+        for t in topics
+        if not count[t]
+    ] + [
+        check.SOFT + f"다룰 주제 「{t}」의 제안이 {count[t]}개입니다. 주제마다 하나로 합치십시오"
+        for t in topics
+        if count[t] > 1
+    ]
+
+
 def input_key(msgs: list[dict[str, str]]) -> str:
     """보낸 메시지(지시문 + 입력) 전문의 해시. 같으면 직전 회차 제안을 다시 쓴다."""
     raw = json.dumps(msgs, ensure_ascii=False, sort_keys=True)
@@ -84,7 +103,8 @@ def with_citation(text: str, chunks: list[dict[str, Any]], see: str | None = Non
 def _para(p: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """제안 하나 → paragraph 블록. 여러 블록이 이어져 네 번째 문단(제안)이 된다."""
     chunks = [by_id[e] for e in p.get("evidence") or [] if e in by_id]
-    return {
+    topic = {"topic": p["topic"]} if p.get("topic") else {}  # 다룰 주제(C3, 11/23)
+    return topic | {
         "type": "paragraph",
         "category": p["category"],
         "text": with_citation(p["text"], chunks),
@@ -117,10 +137,14 @@ def assemble(
 ) -> dict[str, Any]:
     """네 단계 (+ C3 판정 자료) → 화면용 항목.
 
-    첫 섹션(제목 없음) = 상황 · 상태 · 판단 fact 블록 → 제안 paragraph 블록(LLM이 쓴 순서).
+    첫 섹션(제목 없음) = 상황 · 상태 · 판단 fact 블록 → 제안 paragraph 블록(주제가 있으면 다룰 주제 순서, 없으면 LLM이 쓴 순서).
     with_rules(C3)면 규칙 엔진 섹션의 목록 · 표 · ※(판정 자료)를 그 소제목(없으면 「판정 자료」)으로 그 아래에 둔다.
     C1 · C2는 규칙층을 쓰지 않으므로 판정 자료 · finding · withheld를 넣지 않는다."""
-    paras = [_para(p, by_id) for p in proposals]
+    order = {t: i for i, t in enumerate(prompt.topic_names(judgment.topics_of(item)))}
+    ranked = sorted(
+        enumerate(proposals), key=lambda ip: (order.get(ip[1].get("topic"), len(order)), ip[0])
+    )
+    paras = [_para(p, by_id) for _, p in ranked]
     rest_sections = []
     if with_rules:
         for s in item.get("sections", []):
@@ -200,10 +224,10 @@ class Agent:
     def with_evidence(self) -> bool:
         return self.condition != "C1"
 
-    def _call(self, msgs, ids, attempt, tag):
+    def _call(self, msgs, ids, attempt, tag, topics=None):
         return self.llm.chat(
             msgs,
-            schema=prompt.schema(ids, self.with_evidence),
+            schema=prompt.schema(ids, self.with_evidence, topics),
             thinking=self.thinking,
             temperature=0.2
             if attempt == 1
@@ -222,6 +246,7 @@ class Agent:
         """→ (보낼 메시지, 근거 청크, 기록 조각). 검색은 여기서 한다(C2 · C3)."""
         judg = judgment.judgment_of(item)
         rule_topics = [t["topic"] for t in judg["topics"] if t["topic"]]
+        topics = [t for t in judg["topics"] if t["topic"]] if self.with_rules else []  # 11/23: C3만
         flags = common.get("situation")
         kinds = judgment.kinds(judg) if self.with_rules else []
         sit_line = situation.summary(flags) if (flags and self.with_rules) else ""
@@ -247,9 +272,11 @@ class Agent:
             condition=self.condition,
             raw_table=common.get("raw_table", ""),
             kinds=kinds,
+            topics=topics,
         )
         part = {
             "judg": judg,
+            "topics": prompt.topic_names(topics),
             "sits": sits,
             "calc": calc_lines,
             "kinds": kinds,
@@ -269,10 +296,12 @@ class Agent:
         """pairs = check.pair_table(모든 항목): 대상 · 시각 짝 검사(C3만)."""
         msgs, chunks, part = self.prepare(common, item, calc_lines)
         judg = part["judg"]
+        topic_list = part["topics"]  # 다룰 주제(C3, 11/23) — C1 · C2 · 주제 없는 항목은 빈 목록
         key = input_key(msgs)
         log: dict[str, Any] = {
             "id": item["id"],
             "condition": self.condition,
+            "topics": topic_list,
             "input_key": key,
             "attempts": [],
             "calc": part["calc"],
@@ -316,7 +345,7 @@ class Agent:
         best: dict[str, Any] | None = None
         for attempt in range(1, ATTEMPTS + 1):
             try:
-                raw = self._call(msgs, ids, attempt, f"{item['id']}#{attempt}")
+                raw = self._call(msgs, ids, attempt, f"{item['id']}#{attempt}", topic_list)
             except Exception as e:  # 시간 초과 · 연결 끊김: 그 시도만 실패
                 log["attempts"].append(
                     {"raw": "", "errors": {"-": [f"LLM 호출 실패: {type(e).__name__}: {e}"]}}
@@ -347,7 +376,9 @@ class Agent:
                 fact_errs, removed = [], []
             facts_text = " ".join(facts.values())
             for p in props:
-                p.pop("topic", None)
+                # 주제가 없는 조건 · 항목이거나 목록 밖 이름이면 topic 칸을 뺀다
+                if p.get("topic") not in topic_list:
+                    p.pop("topic", None)
                 p["text"] = check.strip_subject(check.tidy(p.get("text") or ""), reader)
                 # 제안 글에 넣은 근거 설명(「근거는 SM-p092-s01의 …」)은 지운다(표기 정리, 세 조건 공통)
                 p["text"], cites = check.drop_cite_sentences(p["text"])
@@ -402,6 +433,9 @@ class Agent:
                     history[str(i)] = history.get(str(i), set()) | check.data_values(
                         p.get("text") or "", allowed, names
                     )
+            # 빠지거나 겹친 다룰 주제(C3): 다시 쓰게만 한다
+            if topic_list and (topic_errs := topic_errors(props, topic_list)):
+                bad[TOPIC_KEY] = topic_errs
             # 사실부 문제는 문장을 뺀 것(hard)이 있을 때만 다시 쓰게 한다(C3). SOFT만 있으면 기록만 한다
             if check.hard(fact_errs):
                 bad[FACT_KEY] = fact_errs
@@ -409,11 +443,13 @@ class Agent:
                 log.setdefault("facts_soft", []).append(fact_errs)
             # 문체 문제(check.SOFT)는 다시 쓰게만 하고 제안 · 문장을 빼지 않는다
             good = [p for i, p in enumerate(props) if not check.hard(bad.get(i, []))]
-            # 고르는 순서: 상황이 있는가 → 통과한 제안 수 → 자료 값 언급 수(C3) → 상황 · 상태 · 판단에서 뺀 문장이 적은가
+            # 고르는 순서: 상황이 있는가 → 다룰 주제를 몇 개 채웠나(C3) → 통과한 제안 수 → 자료 값 언급 수(C3)
+            # → 상황 · 상태 · 판단에서 뺀 문장이 적은가
             real = [r for r in removed if not r.get("filler")]  # 군말을 뺀 것은 문제로 치지 않는다
             shown = " ".join([*facts.values(), *(p.get("text") or "" for p in good)])
             mentions = len(check.data_values(shown, allowed, names)) if self.with_rules else 0
-            score = (bool(facts["situation"]), len(good), mentions, -len(real))
+            covered = len({p.get("topic") for p in good} & set(topic_list))
+            score = (bool(facts["situation"]), covered, len(good), mentions, -len(real))
             log["attempts"].append(
                 {
                     "raw": raw[-6000:],
@@ -458,12 +494,17 @@ class Agent:
             best["removed"] if best else []
         )  # 끝까지 값이 틀려 뺀 사실부 문장(C3)
         log["final_messages"] = msgs[len(log["messages"]) :]  # 다시 쓰기 지시(있으면)
+        missing = [t for t in topic_list if not any(p.get("topic") == t for p in good)]
+        if missing:  # 끝까지 제안이 없는 다룰 주제(C3, 11/23)
+            log["topics_missing"] = missing
         state = (
             "failed"
             if not good
             else (
                 "partial"
-                if log["dropped"] or any(not r.get("filler") for r in log["facts_removed"])
+                if log["dropped"]
+                or missing
+                or any(not r.get("filler") for r in log["facts_removed"])
                 else "ok"
             )
         )

@@ -18,11 +18,14 @@ from typing import Any, Protocol
 
 from app.db.models.enums import ItemCategory
 from rules.items import e1, e2, e3, e4, e5, e6, s1, s2, s3, s4, s5, s6
+from rules.items.requests import ROW_KEYS
 
 ITEM_NAMES = {m.ID: m.NAME for m in (s1, s2, s3, s4, s5, s6, e1, e2, e3, e4, e5, e6)}
 CODES = list(ITEM_NAMES)  # S1 → S6, E1 → E6
 CHANGED = ("CHANGED", "NEW", "REMOVED")  # 「바뀐 항목」으로 세는 것
-TABLE_KEYS = ("group", "agency", "ask", "item", "basis")  # rules.items.requests.HEAD 순서
+# 요청 표(S6 · E6) 줄을 칸으로 펼치는 순서 = 표 머리(HEAD) 순서. 11/19 표가 바뀐 뒤 옛 키
+# (ask · basis)가 남아 칸이 null · 어긋나 화면이 제안서 전체를 거부했다(QA 11/23)
+TABLE_KEYS = ROW_KEYS
 # 「직전 버전 대비」 표기(S1 판정 · 상황 문장, E5 판정): 값이 아니라 비교 기준이 옮겨 간 것
 # → 비교할 때만 지운다
 RELATIVE = re.compile(

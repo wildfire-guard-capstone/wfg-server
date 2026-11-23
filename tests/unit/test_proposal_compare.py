@@ -4,7 +4,15 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.db.models.enums import ItemCategory
-from app.services.proposal_compare import change_of, changed_count, changes, item_diff, rows_of
+from app.services.proposal_compare import (
+    change_of,
+    changed_count,
+    changes,
+    item_diff,
+    rows_of,
+    table_row,
+)
+from rules.items.requests import HEAD, ROW_KEYS, _row
 
 
 @dataclass(frozen=True)
@@ -129,13 +137,20 @@ def test_item_diff_new_item_and_failed_note():
 
 
 def test_table_rows_in_head_order():
-    table = {
-        "type": "table",
-        "rows": [
-            {"group": "군", "agency": "제50사단", "ask": "헬기", "item": "진화", "basis": "p.79"}
-        ],
-    }
-    assert rows_of([{"blocks": [table]}]) == ["군 · 제50사단 · 헬기 · 진화 · p.79"]
+    # 요청 표 줄은 rules.items.requests._row가 만든 키(group · agency · target · when · item)
+    row = _row("산림 헬기", "울진산림항공관리소", "진화헬기(발화지 반경 100 km 안)", "지금", "S3")
+    table = {"type": "table", "head": HEAD, "rows": [row]}
+    assert rows_of([{"blocks": [table]}]) == [
+        "산림 헬기 · 울진산림항공관리소 · 진화헬기(발화지 반경 100 km 안) · 지금 · S3"
+    ]
+
+
+def test_table_row_fills_every_head_column():
+    """QA 11/23: 옛 키(ask · basis)로 펼쳐 칸이 null · 어긋나면 화면이 제안서 전체를 거부한다."""
+    row = _row("소방", "의성소방서", "괴산리 주택", "5시간 안", "S2")
+    assert set(row) == set(ROW_KEYS) and len(ROW_KEYS) == len(HEAD)
+    assert table_row(row) == ["소방", "의성소방서", "괴산리 주택", "5시간 안", "S2"]
+    assert all(isinstance(v, str) for v in table_row(row))
 
 
 def test_detail_rows_count_as_engine_side():

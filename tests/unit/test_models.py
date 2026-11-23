@@ -43,6 +43,12 @@ def test_intake_records_under_incidents():
     assert "channel VARCHAR(30)," in sql or "channel VARCHAR(30)\n" in sql
 
 
+def test_reporter_name_may_be_empty():
+    # 11/23: 기관이 신고하면 성명을 모를 수 있다(기관명 · 성명 중 하나는 INC-02가 검사)
+    assert "reporter_name VARCHAR(50)," in ddl("incidents")
+    assert "reporter_name VARCHAR(50) NOT NULL" not in ddl("incidents")
+
+
 def test_geometries_use_utm_k():
     assert "geometry(MULTIPOLYGON,5179)" in ddl("prediction_slices")
     assert "geometry(POINT,5179)" in ddl("incidents")

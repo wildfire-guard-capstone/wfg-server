@@ -104,6 +104,12 @@ def save(items: list[dict], logs: list[dict], folder: Path) -> None:
                 "facts_soft",
                 "values_lost",  # 11/18: 다시 쓴 제안이 이름 · 값을 많이 잃어 한 번 더 쓰게 한 기록
                 "reused_from",
+                # 11/24 소제목 형식(--layout parts): 소제목 · 관련 항목 · 끝까지 뺀 판단 근거 문장 · show false인데 쓴 소제목
+                "layout",
+                "parts",
+                "related",
+                "basis_removed",
+                "hidden_filled",
             )
         }
         llm_doc["state"] = by_id.get(iid, {}).get("state")

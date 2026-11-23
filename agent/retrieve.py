@@ -39,6 +39,54 @@ def search(
     return out, log
 
 
+K_PART = 4  # 소제목 하나의 검색 근거 수(11/24 BLUF, 제품 C3)
+K_MAX = 10  # 소제목이 여럿인 항목의 근거 수 상한(같은 청크는 한 번)
+
+
+def search_parts(
+    evidence: Evidence,
+    name: str,
+    parts: list[Any],
+    extra: list[str] | None = None,
+    k_part: int = K_PART,
+    k_max: int = K_MAX,
+    k_single: int = K,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """소제목별 검색(11/24 BLUF). parts = agent.parts.Part 목록.
+    질의 = 항목 이름 + 소제목 이름 + 다루는 것 + 판정 값 종류(extra) + 소제목과 이어진 요청 기관(query_words).
+    소제목이 없는 항목은 질의 하나로 k_single개(지금과 같음). 소제목이 여럿이면 소제목마다 k_part개, 같은 청크는 먼저 찾은
+    소제목에 한 번만, 합계 k_max개까지(소제목 차례대로 번갈아 채운다). 청크에 part(찾은 소제목)를 붙인다."""
+    single = len(parts) == 1 and getattr(parts[0], "untitled", False)
+    queries = []
+    for p in parts:
+        words = [w for w in [p.scope, *(extra or []), *p.query_words] if w]
+        q = query(name, "" if single else p.title, words)
+        queries.append((p, q))
+    found: dict[str, dict[str, Any]] = {}
+    lists: list[list[dict[str, Any]]] = []
+    logs = []
+    for p, q in queries:
+        k = k_single if single else k_part
+        hits = evidence.search(q, k=k) if q else []
+        lists.append(
+            [
+                h | {"origin": "검색", "query": q, "part": "" if single else p.title}
+                for h in hits[:k]
+            ]
+        )
+        logs += [(h["chunk_id"], round(h.get("score") or 0.0, 4), q) for h in hits[:k]]
+    limit = k_single if single else k_max
+    for rank in range(max((len(x) for x in lists), default=0)):
+        for hs in lists:
+            if rank < len(hs) and hs[rank]["chunk_id"] not in found and len(found) < limit:
+                found[hs[rank]["chunk_id"]] = hs[rank] | {"rank": rank + 1}
+    out = list(found.values())
+    for c in out:
+        c["label"] = cite.label(c)
+    log = {"queries": [q for _, q in queries], "k": limit, "k_part": k_part, "found": logs}
+    return out, log
+
+
 PAGE_ID = re.compile(r"^SM-p\d{3}$")
 
 

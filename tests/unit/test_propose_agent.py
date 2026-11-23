@@ -41,6 +41,36 @@ class EchoLLM:
 
     def chat(self, messages, schema=None, **kw):
         self.calls.append(kw.get("tag"))
+        if "parts" in schema["properties"]:  # 11/24 소제목 형식(제품): 소제목마다 같은 제안 하나
+            parts = schema["properties"]["parts"]["properties"]
+            first = next(iter(parts.values()))["properties"]["proposals"]["items"]["properties"]
+            ev = first["evidence"]["items"]["enum"][0]
+            out = {}
+            for title, spec in parts.items():
+                po = {
+                    "basis": [{"text": "판정 값: 신월리.", "evidence": [], "quote": ""}],
+                    "reason": "신월리에 불이 닿았으므로",
+                    "proposals": [
+                        {
+                            "category": "즉시",
+                            "text": f"{title} 주민을 대피시키십시오.",
+                            "evidence": [ev],
+                            "quote": "위험구역 주민은 바로 대피",
+                        }
+                    ],
+                }
+                if "show" in spec["properties"]:
+                    po = {"show": True} | po
+                if "show_detail" in spec["properties"]:
+                    po["show_detail"] = False
+                out[title] = po
+            body = {
+                "order": "상황 → 상태 → 파악 → 소제목",
+                "situation": "",
+                "status": "",
+                "judgment": "",
+            }
+            return json.dumps(body | {"parts": out}, ensure_ascii=False)
         props = schema["properties"]["proposals"]["items"]["properties"]
         assert "topic" not in props
         proposal = {

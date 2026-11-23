@@ -77,6 +77,12 @@ def main() -> None:
         "--k-naive", type=int, default=5, help="C2 · C3 검색 청크 수(11/19: 두 조건 같음, D1)"
     )
     ap.add_argument(
+        "--layout",
+        default="flat",
+        choices=["flat", "parts"],
+        help="제안 형식: flat = 11/19 평가 때 꼴(평가 재현, 기본) · parts = 11/24 소제목 형식(BLUF, 제품 C3 전용)",
+    )
+    ap.add_argument(
         "--centers-only",
         action="store_true",
         help="원자료 표에서 마을 경계를 빼고 중심 좌표만(입력 한도 대안, D5)",
@@ -112,6 +118,7 @@ def main() -> None:
             thinking=a.thinking,
             condition=a.condition,
             k_naive=a.k_naive,
+            parts=a.layout == "parts",
         )
     t_all = time.time()
     print(f"시나리오: {sc.title} · 회차 {[r.at for r in sc.rounds]}", flush=True)

@@ -56,6 +56,18 @@ def facts(sections: Sections) -> list[dict[str, Any]]:
     return [b for s in sections for b in s.get("blocks", []) if b.get("type") == "fact"]
 
 
+def llm_texts(sections: Sections) -> list[str]:
+    """11/24 소제목 형식의 핵심 판단 근거(reason) · 판단 근거(basis) 문장."""
+    out = []
+    for s in sections:
+        for b in s.get("blocks", []):
+            if b.get("type") == "reason":
+                out.append(b.get("text", ""))
+            elif b.get("type") == "basis":
+                out += [x.get("text", "") for x in b.get("sentences", [])]
+    return out
+
+
 def table_row(row: dict[str, Any]) -> list[Any]:
     return [row.get(k) for k in TABLE_KEYS]
 
@@ -68,13 +80,22 @@ def rows_of(sections: Sections) -> list[str]:
         blocks = [
             d
             for b in s.get("blocks", [])
-            for d in [b, *(b.get("details") or [] if b.get("type") == "paragraph" else [])]
+            for d in [
+                b,
+                *(b.get("details") or [] if b.get("type") == "paragraph" else []),
+                *(
+                    b.get("blocks") or [] if b.get("type") == "detail" else []
+                ),  # 11/24 소제목의 자세히 보기
+            ]
         ]
         for b in blocks:
             if b.get("type") == "list":
                 out += [r["text"].replace("**", "") for r in b["rows"]]
             elif b.get("type") == "table":
-                out += [" · ".join(str(v) for v in table_row(r) if v) for r in b["rows"]]
+                out += [
+                    " · ".join(str(v) for v in (table_row(r) if isinstance(r, dict) else r) if v)
+                    for r in b["rows"]
+                ]
             elif b.get("type") == "note":
                 out.append(b["text"])
     return out
@@ -114,7 +135,9 @@ def change_of(before: Item | None, after: Item | None) -> str | None:
     if _engine_side(before) != _engine_side(after):
         return "CHANGED"
     bodies = [
-        [p.get("body") for p in paragraphs(i.sections)] + [f.get("text") for f in facts(i.sections)]
+        [p.get("body") for p in paragraphs(i.sections)]
+        + [f.get("text") for f in facts(i.sections)]
+        + llm_texts(i.sections)  # 11/24 핵심 판단 근거 · 판단 근거도 LLM 글(표현만 바뀐 것)
         for i in (before, after)
     ]
     return "WORDING_ONLY" if bodies[0] != bodies[1] else "SAME"

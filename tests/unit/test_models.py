@@ -13,10 +13,10 @@ def ddl(table: str) -> str:
     return str(CreateTable(Base.metadata.tables[table]).compile(dialect=DIALECT))
 
 
-def test_all_18_tables_registered():
+def test_all_19_tables_registered():
     assert set(Base.metadata.tables) == {
         "users", "event_logs",
-        "incidents", "fire_perimeters",
+        "incidents", "fire_perimeters", "intake_records",
         "predictions", "prediction_slices",
         "proposals", "proposal_items",
         "situation_corrections", "qa_messages",
@@ -32,6 +32,21 @@ def test_admin_villages_under_villages():
     assert "FOREIGN KEY(village_id) REFERENCES villages (id)" in sql
     assert "UNIQUE (village_id, name)" in sql
     assert "geom geometry(MULTIPOLYGON,5179)," in sql and "hall_point geometry(POINT,5179)," in sql
+
+
+def test_intake_records_under_incidents():
+    # 기관별 접수 기록(11/23): 산불 하나에 여러 줄. 경로는 비워 둘 수 있다.
+    sql = ddl("intake_records")
+    assert "FOREIGN KEY(incident_id) REFERENCES incidents (id)" in sql
+    assert "org_name VARCHAR(100) NOT NULL" in sql
+    assert "received_at TIMESTAMP WITH TIME ZONE NOT NULL" in sql
+    assert "channel VARCHAR(30)," in sql or "channel VARCHAR(30)\n" in sql
+
+
+def test_reporter_name_may_be_empty():
+    # 11/23: 기관이 신고하면 성명을 모를 수 있다(기관명 · 성명 중 하나는 INC-02가 검사)
+    assert "reporter_name VARCHAR(50)," in ddl("incidents")
+    assert "reporter_name VARCHAR(50) NOT NULL" not in ddl("incidents")
 
 
 def test_geometries_use_utm_k():

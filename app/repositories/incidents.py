@@ -10,7 +10,15 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.time import KST
-from app.db.models import AdminArea, FirePerimeter, Incident, Prediction, Proposal, User
+from app.db.models import (
+    AdminArea,
+    FirePerimeter,
+    Incident,
+    IntakeRecord,
+    Prediction,
+    Proposal,
+    User,
+)
 from app.db.models._types import SRID
 from app.db.models.enums import IncidentStatus, UserRole
 
@@ -52,15 +60,19 @@ def create_incident(
     reported_at: datetime,
     reported_by: int,
     started_at: datetime | None = None,
-    reporter_name: str = "미상",
+    reporter_name: str | None = "미상",
     reporter_phone: str = "미상",
     report_text: str | None = None,
     reporter_org: str | None = None,
     situation: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     request_hash: str | None = None,
+    intake_records: list[tuple[str, datetime, str | None]] = (),
 ) -> int:
-    """산불 1행 + 화선 v0(발화점)을 함께 넣는다(DB 설계 2.2). 커밋은 부르는 쪽이 한다."""
+    """산불 1행 + 화선 v0(발화점) + 기관별 접수 기록을 함께 넣는다(DB 설계 2.2).
+
+    ``intake_records``는 (접수 기관, 접수 시각, 접수 경로) 줄들. 커밋은 부르는 쪽이 한다.
+    """
     point = from_shape(ignition, srid=SRID)
     incident = Incident(
         ignition_point=point,
@@ -88,8 +100,23 @@ def create_incident(
             reported_by=reported_by,
         )
     )
+    session.add_all(
+        IntakeRecord(incident_id=incident.id, org_name=org, received_at=at, channel=channel)
+        for org, at, channel in intake_records
+    )
     session.flush()
     return incident.id
+
+
+def list_intake_records(session: Session, incident_id: int) -> list[IntakeRecord]:
+    """기관별 접수 기록, 접수 시각 순(같으면 입력 순)."""
+    return list(
+        session.scalars(
+            select(IntakeRecord)
+            .where(IntakeRecord.incident_id == incident_id)
+            .order_by(IntakeRecord.received_at, IntakeRecord.id)
+        )
+    )
 
 
 def reported_with_key(session: Session, reported_by: int, key: str) -> Incident | None:

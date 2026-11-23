@@ -41,7 +41,8 @@ class Incident(Base):
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     report_text: Mapped[str | None] = mapped_column(Text)
     reporter_org: Mapped[str | None] = mapped_column(String(100))
-    reporter_name: Mapped[str] = mapped_column(String(50))
+    # 신고 기관명(reporter_org)과 둘 중 하나는 있다(INC-02에서 검사, 11/23)
+    reporter_name: Mapped[str | None] = mapped_column(String(50))
     reporter_phone: Mapped[str] = mapped_column(String(20))
     status: Mapped[IncidentStatus] = mapped_column(
         pg_enum(IncidentStatus, "incident_status"),
@@ -60,6 +61,23 @@ class Incident(Base):
     # 보고 요청 번호(Idempotency-Key)와 그 요청 본문의 해시. 번호 없이 보고하면 둘 다 null
     idempotency_key: Mapped[str | None] = mapped_column(String(100))
     request_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class IntakeRecord(Base):
+    """기관별 접수 기록 1줄 — 상황 보고자가 최초 보고 때 함께 낸다(요구사항 IntakeRecord, QA 11/23).
+
+    산불 하나에 여러 줄. 신고자 정보(``incidents.reporter_*``)와 다르다: 같은 산불을 어느 기관이
+    언제 어떤 경로로 접수했는지 적는다.
+    """
+
+    __tablename__ = "intake_records"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    org_name: Mapped[str] = mapped_column(String(100))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # 접수 경로(119 신고 · 상황 전파 등). 모르면 비워 둔다
+    channel: Mapped[str | None] = mapped_column(String(30))
 
 
 class FirePerimeter(Base):

@@ -25,6 +25,7 @@ from app.schemas.incident import (
     IncidentEndIn,
     IncidentOut,
     IncidentSummaryOut,
+    IntakeRecordOut,
     PerimeterCorrectionIn,
     PerimeterOut,
     PerimeterReportIn,
@@ -94,6 +95,12 @@ def incident_out(db: Session, incident: Incident) -> IncidentOut:
         current_perimeter_id=perimeter.id,
         current_perimeter_version=perimeter.version_no,
         running_operation_id=op.id if (op := operations.running(incident.id)) else None,
+        intake_records=[
+            IntakeRecordOut(
+                id=r.id, org_name=r.org_name, received_at=r.received_at, channel=r.channel
+            )
+            for r in incidents.list_intake_records(db, incident.id)
+        ],
         **refs,
     )
 
@@ -202,6 +209,7 @@ def report_incident(
             reported_by=user.id,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            intake_records=[(r.org_name, r.received_at, r.channel) for r in body.intake_records],
         )
     except IntegrityError:  # 같은 번호가 거의 동시에 두 번 → 먼저 저장된 것을 돌려줌
         db.rollback()

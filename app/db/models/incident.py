@@ -62,6 +62,23 @@ class Incident(Base):
     request_hash: Mapped[str | None] = mapped_column(String(64))
 
 
+class IntakeRecord(Base):
+    """기관별 접수 기록 1줄 — 상황 보고자가 최초 보고 때 함께 낸다(요구사항 IntakeRecord, QA 11/23).
+
+    산불 하나에 여러 줄. 신고자 정보(``incidents.reporter_*``)와 다르다: 같은 산불을 어느 기관이
+    언제 어떤 경로로 접수했는지 적는다.
+    """
+
+    __tablename__ = "intake_records"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    org_name: Mapped[str] = mapped_column(String(100))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # 접수 경로(119 신고 · 상황 전파 등). 모르면 비워 둔다
+    channel: Mapped[str | None] = mapped_column(String(30))
+
+
 class FirePerimeter(Base):
     """실측 화선 1건. v0 = 발화점(Point), v1 이상 = 연소 범위(MultiPolygon)."""
 

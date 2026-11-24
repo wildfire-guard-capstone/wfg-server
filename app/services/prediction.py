@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from geoalchemy2.shape import to_shape
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agent.clients import LLM, Evidence
@@ -15,13 +16,14 @@ from agent.prompt import head_of
 from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.db.models import Incident, Prediction
-from app.db.models.enums import IncidentStatus
+from app.db.models.enums import IncidentStatus, ProposalTrigger
 from app.db.session import SessionLocal
 from app.predict import PredictionRequest, Predictor, get_predictor
 from app.propose import ProposalWriter, get_writer
+from app.propose.base import LlmInput
 from app.repositories import base_data, event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
-from app.repositories.proposals import save_proposal
+from app.repositories.proposals import STAGE_OF, save_proposal
 from app.services import operations
 from app.services.engine import run_engine
 from app.services.risk import compute_risk
@@ -37,7 +39,6 @@ from app.weather.elmfire_input import (
 )
 
 log = logging.getLogger(__name__)
-PROPOSAL_STAGES = ("RULES", "PROPOSAL_GENERATION")
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
@@ -211,12 +212,39 @@ def reader_of(db: Session, incident_id: int) -> str:
 
 
 def _check_still_current(db: Session, incident_id: int, perimeter_id: int) -> None:
-    """저장 직전 재검사: 그사이 종료되거나 화선이 바뀌었으면 옛 결과를 최신으로 저장하지 않는다."""
+    """예측 저장 직전 재검사: 그사이 종료되거나 화선이 바뀌었으면 옛 예측을 저장하지 않는다."""
     incident = db.get(Incident, incident_id)
+    db.refresh(incident)
     if incident.status is IncidentStatus.ENDED:
         raise ApiError(409, "INCIDENT_ENDED", "계산하는 동안 산불이 종료되었습니다.")
     if incidents.current_perimeter(db, incident_id).id != perimeter_id:
         raise ApiError(409, "STALE_PERIMETER", "계산하는 동안 화선이 바뀌었습니다.")
+
+
+def _judge(db: Session, incident_id: int, prediction_id: int) -> tuple[LlmInput | None, int | None]:
+    """규칙 엔진을 돌려 산불 대응단계를 정한다(예측과 같이 저장 — 제안서를 기다리지 않고 보이게).
+    (엔진 결과, 그때 본 최신 정정 id). 엔진이 실패하면 결과는 None: 예측은 그대로 저장하고,
+    제안서 작업이 엔진을 다시 돌려 그 실패를 알린다."""
+    seen = _correction_id(db, incident_id)  # 상황을 읽기 전 — 그 뒤 들어온 정정을 놓치지 않게
+    try:
+        with db.begin_nested():
+            llm_input = run_engine(
+                db,
+                incident_id=incident_id,
+                reader=reader_of(db, incident_id),
+                prediction_id=prediction_id,
+            )
+            stage = llm_input["bundles"]["stage"]["now"]["stage"]
+            db.get(Incident, incident_id).current_stage = STAGE_OF[stage]
+        return llm_input, seen
+    except Exception:  # noqa: BLE001
+        log.exception("규칙 엔진 실패(예측은 저장) — 예측 %s", prediction_id)
+        return None, seen
+
+
+def _correction_id(db: Session, incident_id: int) -> int | None:
+    last = incidents.latest_correction(db, incident_id)
+    return last[0] if last else None
 
 
 def _risk_check(db: Session, prediction_id: int) -> None:
@@ -235,8 +263,6 @@ def _error_of(exc: Exception, op: operations.Operation) -> dict[str, str]:
     if op.stage == "SPREAD" and isinstance(exc, ValueError):  # 예측 결과 검사(8개 · 면 · 누적)
         return {"code": "PREDICTION_INVALID", "message": str(exc)}
     log.exception("예측 작업 실패 (%s, %s 단계)", op.id, op.stage)
-    if op.stage in PROPOSAL_STAGES:
-        return {"code": "PROPOSAL_FAILED", "message": "제안서를 만드는 중 오류가 발생했습니다."}
     return {"code": "INTERNAL_ERROR", "message": "예측 중 오류가 발생했습니다."}
 
 
@@ -248,22 +274,22 @@ def run_prediction_operation(
     elmfire_weather: ElmfireWeatherInput | None = None,
     mode: str | None = None,
 ) -> None:
-    """PRED-01 작업: 예측(SPREAD) → 위험도(RISK) → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION)
-    → 저장 직전 재검사 · 제안서 저장 · 커밋(COMMIT). 기상(weather · ELMFIRE면 elmfire_weather)은
-    예측 요청 때 받아 넘긴다(못 받으면 요청이 503 WEATHER_UNAVAILABLE — 명세 v0.4 그대로,
-    작업은 시작하지 않음). mode(LIVE · DEMO_ELMFIRE · 없음 = 서버 기본)로 예측을 고르고,
-    성공하면 result에 쓴 모드 · 예측 이름을 남긴다.
+    """PRED-01 작업 = 두 묶음.
 
-    예측과 제안서를 한 트랜잭션으로 저장한다. 어디서든 실패하면 둘 다 남기지 않고(직전 예측 ·
-    제안서가 그대로 최신) PREDICTION_FAILED만 기록한다.
-    근거 검색은 작성기 안에서 하므로 EVIDENCE 단계는 따로 두지 않는다.
+    1. 예측(SPREAD) → 위험도(RISK) → 규칙 엔진의 대응단계(RULES) → 재검사 · 저장(COMMIT).
+       여기서 예측 작업은 성공으로 끝나고 화면은 지도 · 위험도 · 단계를 바로 보인다
+    2. 제안서 만들기(run_proposal_operation) — 새 작업(result.proposal_operation_id). 실패해도
+       예측은 남고, 그 예측으로 다시 만든다(PROP-05)
+
+    기상(weather · ELMFIRE면 elmfire_weather)은 예측 요청 때 받아 넘긴다(못 받으면 요청이 503
+    WEATHER_UNAVAILABLE — 작업은 시작하지 않음). mode(LIVE · DEMO_ELMFIRE · 없음 = 서버 기본)로
+    예측을 고르고, 성공하면 result에 쓴 모드 · 예측 이름을 남긴다.
+    1에서 실패하면 예측을 남기지 않고(직전 예측 · 제안서가 최신) PREDICTION_FAILED만 기록한다.
     """
     operations.update(op, status="RUNNING", stage="SPREAD")
-    predictor_name = None
     with session_factory() as db:
         try:
             predictor = predictor_from_settings(mode)
-            predictor_name = predictor.name
             pid = run_prediction(
                 db,
                 incident_id=op.incident_id,
@@ -276,19 +302,9 @@ def run_prediction_operation(
             operations.update(op, stage="RISK")
             _risk_check(db, pid)
             operations.update(op, stage="RULES")
-            llm_input = run_engine(
-                db,
-                incident_id=op.incident_id,
-                reader=reader_of(db, op.incident_id),
-                prediction_id=pid,
-            )
-            operations.update(op, stage="PROPOSAL_GENERATION")
-            written = writer_from_settings().write(llm_input)
+            llm_input, seen = _judge(db, op.incident_id, pid)
             operations.update(op, stage="COMMIT")
             _check_still_current(db, op.incident_id, perimeter_id)
-            proposal_id = save_proposal(
-                db, prediction_id=pid, llm_input=llm_input, written=written, user_id=op.user_id
-            )
             db.commit()
         except Exception as exc:  # noqa: BLE001 — 어떤 실패든 작업 실패로 알린다
             db.rollback()
@@ -303,13 +319,112 @@ def run_prediction_operation(
             db.commit()
             operations.update(op, status="FAILED", error=error)
             return
+    follow = operations.hand_over(
+        op,
+        "PROPOSAL_REGENERATION",
+        {
+            "prediction_id": str(pid),
+            "mode": mode,  # 요청한 모드, null = 서버 기본 설정
+            "predictor": predictor.name,  # 실제로 쓴 예측(synthetic · file · elmfire)
+        },
+    )
+    run_proposal_operation(
+        follow,
+        prediction_id=pid,
+        session_factory=session_factory,
+        llm_input=llm_input,
+        seen_correction_id=seen,
+    )
+
+
+def run_proposal_operation(
+    op: operations.Operation,
+    *,
+    prediction_id: int,
+    session_factory: SessionFactory,
+    correction_id: int | None = None,
+    llm_input: LlmInput | None = None,
+    seen_correction_id: int | None = None,
+) -> None:
+    """제안서 만들기: 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION) → 저장(COMMIT).
+
+    예측 뒤(correction_id 없음, 예측 때 돌린 엔진 결과 llm_input을 그대로 씀)와 상황 정정 뒤
+    (correction_id, 같은 예측 + 지금 상황)가 같이 쓴다. 저장 직전에 종료 · 새 예측이 있으면 저장하지
+    않고, 정정 뒤라면 더 새로운 정정이 있어도 저장하지 않는다. 그사이 새 화선이 보고된 것은 막지
+    않는다 — 제안서는 제 예측(화선 버전)에 딸리고, 화면은 「재예측 필요」를 보인다.
+    실패하면 PROPOSAL_FAILED만 남기고 예측 · 정정은 그대로다.
+    """
+    operations.update(op, status="RUNNING", stage="RULES")
+    with session_factory() as db:
+        try:
+            # 트랜잭션을 지금 연다 → 제안서 created_at = 만들기 시작한 때. 만드는 동안 들어온 정정은
+            # 그보다 늦으므로 proposal_stale이 되어 다시 만들 수 있다(끝난 때로 찍히면 놓친다)
+            db.execute(select(func.now()))
+            # 예측 때 엔진을 돌린 뒤 정정이 들어왔으면 그 상황으로 엔진을 다시 돌린다
+            if llm_input is None or _correction_id(db, op.incident_id) != seen_correction_id:
+                llm_input = run_engine(
+                    db,
+                    incident_id=op.incident_id,
+                    reader=reader_of(db, op.incident_id),
+                    prediction_id=prediction_id,
+                )
+            operations.update(op, stage="PROPOSAL_GENERATION")
+            written = writer_from_settings().write(llm_input)
+            operations.update(op, stage="COMMIT")
+            incident = db.get(Incident, op.incident_id)
+            db.refresh(incident)
+            if incident.status is IncidentStatus.ENDED:
+                raise ApiError(409, "INCIDENT_ENDED", "계산하는 동안 산불이 종료되었습니다.")
+            latest = incidents.latest_prediction(db, op.incident_id)
+            if latest is None or latest[0] != prediction_id:
+                raise ApiError(409, "STALE_PREDICTION", "계산하는 동안 새 예측이 생겼습니다.")
+            last = incidents.latest_correction(db, op.incident_id)
+            if correction_id is not None and last is not None and last[0] != correction_id:
+                raise ApiError(409, "STALE_SITUATION", "계산하는 동안 다른 정정이 들어왔습니다.")
+            after_correction = correction_id is not None
+            proposal_id = save_proposal(
+                db,
+                prediction_id=prediction_id,
+                llm_input=llm_input,
+                written=written,
+                user_id=op.user_id,
+                trigger=ProposalTrigger.CORRECTION
+                if after_correction
+                else ProposalTrigger.PREDICTION,
+                correction_id=correction_id,
+            )
+            db.commit()
+        except Exception as exc:  # noqa: BLE001 — 어떤 실패든 작업 실패로 알린다
+            db.rollback()
+            if isinstance(exc, ApiError):
+                error = {"code": exc.code, "message": exc.message}
+            else:
+                log.exception("제안서 만들기 실패 (%s, %s 단계)", op.id, op.stage)
+                error = {
+                    "code": "PROPOSAL_FAILED",
+                    "message": "제안서를 만드는 중 오류가 발생했습니다.",
+                }
+            event_logs.add(
+                db,
+                "PROPOSAL_FAILED",
+                user_id=op.user_id,
+                incident_id=op.incident_id,
+                details={
+                    "operation_id": op.id,
+                    "prediction_id": prediction_id,
+                    "correction_id": correction_id,
+                    **error,
+                },
+            )
+            db.commit()
+            operations.update(op, status="FAILED", error=error)
+            return
     operations.update(
         op,
         status="SUCCEEDED",
         result={
-            "prediction_id": str(pid),
             "proposal_id": str(proposal_id),
-            "mode": mode,  # 요청한 모드, null = 서버 기본 설정
-            "predictor": predictor_name,  # 실제로 쓴 예측(synthetic · file · elmfire)
+            "prediction_id": str(prediction_id),
+            "correction_id": str(correction_id) if correction_id is not None else None,
         },
     )

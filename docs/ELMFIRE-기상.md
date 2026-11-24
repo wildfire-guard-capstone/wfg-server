@@ -99,7 +99,8 @@ PRED-01(app.routers.predictions)
 - 결과의 `weather`(= `predictions.weather`)는 ELMFIRE 격자와 같은 계산에서 꺼낸 발화점 칸 값이라,
   규칙 엔진 · 위험도 · 제안서 · 프론트가 확산 계산과 같은 바람을 본다. 평균풍속 `wind_speed`는
   판정 · 화면용, 시간 안 가장 센 1분 풍속 `wind_max_1min`은 ELMFIRE 입력 기록(DB에만, PRED-04
-  응답에서 뺀다). 기상청 「최대순간풍속」과는 다른 값이다.
+  응답에서 뺀다). 기상청 「최대순간풍속」과는 다른 값이다. 1시간 연료 수분 `fuel_moisture_1h`(m1, %)도
+  같은 방식으로 DB에만 남기고, 위험도 수분함량이 이 값을 쓴다.
 - 서버에 붙일 때: `PREDICTOR=elmfire`, `PREDICTOR_DECK=<덱 폴더>`, `ELMFIRE_BIN`,
   `PREDICTOR_WEATHER_FIELD`(stations · deck), (선택) `PREDICTOR_WORK_DIR`. 시연(deck)은
   `WEATHER=asos`와 같이 쓴다. ELMFIRE · rasterio · scipy가 있는 곳(worker 이미지 · GPU 서버)에서 돈다.

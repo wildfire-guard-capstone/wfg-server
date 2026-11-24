@@ -108,6 +108,7 @@ class DeckWeather:
                 "wind_dir": round(float(grids["wd"][h, row, col]), 1),
                 "wind_speed": round(float(mean[h]), 2),
                 "wind_max_1min": round(float(grids["ws"][h, row, col]) * MS_PER_MPH, 2),
+                "fuel_moisture_1h": round(float(grids["m1"][h, row, col]), 2),
                 "temp": float(sh["temp"]),
                 "humidity": float(sh["humidity"]),
                 "precip": float(sh["precip"]),

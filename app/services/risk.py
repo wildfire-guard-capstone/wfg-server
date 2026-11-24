@@ -19,7 +19,8 @@
   읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
 - 기압 · 지면온도 · 7일 누적 강수량: 예측할 때 받아 둔 지상관측(predictions.weather.surface, ASOS).
   기압 · 지면온도는 예보가 없어 화선 관측 시각의 정시 값 하나로 0 ~ 5시간을 대신한다(위험도-정리)
-- 연료 수분함량: 아직 잇지 않았다
+- 연료 수분함량: 예측(ELMFIRE)이 쓴 1시간 연료 수분 m1(발화점 칸, hours[].fuel_moisture_1h).
+  저장되지 않은 예측은 저장된 기온 · 습도 · 강수로 계산(risk.weather.dead_fuel_moisture)
 못 구한 변수는 등급 null + 이유로 보이고, 그 묶음 안 남은 변수의 가중치로 다시 나눈다
 (status PARTIAL).
 변수 등급은 면적 · 시각 평균이라 소수가 될 수 있다(risk/README.md 사안 3).
@@ -54,7 +55,7 @@ from risk import compute as calc
 from risk import grid as grid_mod
 from risk.criteria import HOUSE_RADIUS_M, STATIC_KEYS
 from risk.grid import StaticGrid
-from risk.weather import HOURS, RAIN_HOURS
+from risk.weather import HOURS, RAIN_HOURS, dead_fuel_moisture
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +133,6 @@ NO_SURFACE = "예측할 때 받아 둔 지상관측(ASOS)이 없음"
 SURFACE_KEYS = ("pressure", "ground_temp", "rain_7d")
 MISSING_REASON = {
     **dict.fromkeys(SURFACE_KEYS, NO_SURFACE),
-    "moisture": "연료 수분함량 자료를 받는 곳이 아직 없음",
     "vulnerable": "P5와 겹친 리에 연령별 추정 인구가 없음",
     "station_dist": "가까운 시군에 소방 시설 자료가 없음",
     "houses_1km": "P5 + 1 km 안 주택 점 자료가 없음",
@@ -166,10 +166,25 @@ def forecast_inputs(weather: dict[str, Any]) -> dict[str, dict[int, float | None
     return out
 
 
+def moisture_inputs(weather: dict[str, Any]) -> tuple[dict[int, float], bool]:
+    """(0 ~ 5시간의 1시간 연료 수분 %, ELMFIRE가 쓴 값인가). 빈 시각이 있으면 ({}, False)."""
+    hours = (weather.get("hours") or [])[: len(HOURS)]
+    if len(hours) < len(HOURS):
+        return {}, False
+    used = [h.get("fuel_moisture_1h") for h in hours]
+    if all(v is not None for v in used):
+        return dict(zip(HOURS, map(float, used), strict=True)), True
+    keys = ("temp", "humidity", "precip")
+    if any(h.get(k) is None for h in hours for k in keys):
+        return {}, False
+    series = ([float(h[k]) for h in hours] for k in keys)
+    return dict(zip(HOURS, dead_fuel_moisture(*series), strict=True)), False
+
+
 def weather_inputs(weather: dict[str, Any]) -> tuple[dict[str, dict], float | None]:
-    """예측 기상 → (risk 입력 6개, 7일 누적 강수량). 지상관측은 값 하나를 0 ~ 5시간에 쓴다."""
+    """예측 기상 → (risk 입력 7개, 7일 누적 강수량). 지상관측은 값 하나를 0 ~ 5시간에 쓴다."""
     seen = weather.get(SURFACE) or {}
-    out: dict[str, dict] = forecast_inputs(weather)
+    out: dict[str, dict] = forecast_inputs(weather) | {"moisture": moisture_inputs(weather)[0]}
     for k in ("pressure", "ground_temp"):
         out[k] = dict.fromkeys(HOURS, float(seen[k])) if seen.get(k) is not None else {}
     rain = seen.get("rain_7d")
@@ -262,6 +277,11 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
     wsrc = (prediction.weather or {}).get("source") or "미상"
     sources = {k: f"예측 기상({wsrc})" for k in FROM_FORECAST}
     weather, rain_7d = weather_inputs(prediction.weather or {})
+    sources["moisture"] = (
+        "ELMFIRE 입력 1시간 연료 수분(발화점 칸)"
+        if moisture_inputs(prediction.weather or {})[1]
+        else f"예측 기상({wsrc})의 기온 · 습도 · 강수로 계산"
+    )
     if seen := (prediction.weather or {}).get(SURFACE):
         sources |= dict.fromkeys(SURFACE_KEYS, f"기상청 ASOS {seen.get('station')} 관측")
     sources["vulnerable"] = "리별 65세 이상 + 0 ~ 14세 추정(villages) × 리 안 주택 비율"
@@ -290,7 +310,7 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
 def _missing_reason(key: str, grid_reason: str | None) -> str:
     if key in STATIC_KEYS:
         return grid_reason or OUT_OF_GRID
-    if key in FROM_FORECAST:
+    if key in FROM_FORECAST or key == "moisture":
         return GAP_IN_FORECAST
     return MISSING_REASON.get(key, "자료 없음")
 
@@ -317,7 +337,7 @@ def to_grades(
         if f.grade is None:
             out.append(FactorGrade(code, None, None, _missing_reason(key, grid_reason), None, None))
             continue
-        timed = key in FROM_FORECAST
+        timed = key in FROM_FORECAST or key == "moisture"
         reason = FIXED_WEATHER if timed and weather_source == "FIXED" else None
         out.append(
             FactorGrade(

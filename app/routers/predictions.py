@@ -178,7 +178,7 @@ def get_slices(
 def get_weather(
     incident_id: IncidentId, prediction_id: PredictionId, request: Request, user: Analyst, db: Db
 ):
-    """PRED-04. 그 예측에 넣은 기상 그대로(새로 받지 않음). 저장 전용 칸(wind_max_1min)만 뺀다.
+    """PRED-04. 그 예측에 넣은 기상 그대로(새로 받지 않음). 저장 전용 칸(STORED_ONLY)만 뺀다.
 
     가짜 · 파일 예측은 기온 · 습도 · 위치가 없어 명세 Weather와 다를 수 있다(04 수정 필요 5번).
     """

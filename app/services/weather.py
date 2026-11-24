@@ -17,7 +17,7 @@ from app.db.models import Incident, WeatherHour
 from app.db.models.enums import IncidentStatus
 from app.repositories import incidents, predictions, weather
 from app.repositories.engine_inputs import site_of
-from app.weather import WeatherProvider, WeatherUnavailable, get_weather
+from app.weather import WeatherProvider, WeatherUnavailable, asos, get_weather
 from app.weather.kma import KmaForecast, latest_observed_hour
 from rules.core.direction import compass16
 
@@ -26,12 +26,14 @@ REFRESH_DELAY = timedelta(hours=1, minutes=40)  # 다음 정시 자료가 나오
 # 예측 기상(predictions.weather)에 저장만 하고 PRED-04 응답에서는 빼는 시간별 칸.
 # wind_max_1min = 시간 안 가장 센 1분 풍속(ELMFIRE 입력 기록) — 화면 · 판정에는 평균 wind_speed만
 STORED_ONLY = ("wind_max_1min",)
+# 예측 기상에 저장만 하는 묶음: 위험도용 지상관측(기압 · 지면온도 · 7일 강수, 예측 입력 아님)
+SURFACE = "surface"
 
 
 def prediction_weather_out(w: dict[str, Any]) -> dict[str, Any]:
-    """PRED-04 응답: 저장된 예측 기상에서 저장 전용 칸(STORED_ONLY)을 뺀 명세 Weather 모양."""
+    """PRED-04 응답: 저장된 예측 기상에서 저장 전용 칸(STORED_ONLY · SURFACE)을 뺀 명세 Weather."""
     hours = [{k: v for k, v in h.items() if k not in STORED_ONLY} for h in w.get("hours") or []]
-    return {**w, "hours": hours}
+    return {**{k: v for k, v in w.items() if k != SURFACE}, "hours": hours}
 
 
 def provider_from_settings() -> WeatherProvider:
@@ -54,6 +56,23 @@ def asos_provider_from_settings() -> WeatherProvider:
     """
     s = get_settings()
     return get_weather("asos", auth_key=s.kma_api_key, station=s.weather_station)
+
+
+def surface_from_settings(base_at: datetime) -> dict[str, Any] | None:
+    """위험도용 지상관측(화선 관측 시각의 정시). 키가 없거나 못 받으면 None — 예측은 그대로 하고
+    위험도에서 그 변수만 뺀다."""
+    s = get_settings()
+    if not s.kma_api_key:
+        return None
+    try:
+        return asos.surface(s.kma_api_key, base_at, s.weather_station)
+    except WeatherUnavailable as e:  # 오류 글에 키가 없다
+        log.warning("위험도용 지상관측을 받지 못함(%s): %s", base_at, e)
+    except Exception as e:  # noqa: BLE001 — 위험도 변수 3개 때문에 예측을 멈추지 않는다
+        log.warning(
+            "위험도용 지상관측을 받지 못함(%s): %s", base_at, type(e).__name__
+        )  # 주소(키) 빼고
+    return None
 
 
 def observer_from_settings() -> KmaForecast | None:

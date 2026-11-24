@@ -27,6 +27,7 @@ from app.repositories.proposals import STAGE_OF, save_proposal
 from app.services import operations
 from app.services.engine import run_engine
 from app.services.risk import compute_risk
+from app.services.weather import SURFACE, surface_from_settings
 from app.weather import Weather, WeatherProvider, WeatherRequest
 from app.weather.base import check_weather
 from app.weather.elmfire_input import (
@@ -132,6 +133,9 @@ def run_prediction(
     site = site_of(to_shape(incident.ignition_point))
     request = PredictionRequest(start, base_at, site, weather, elmfire_weather)
     result = predictor.predict(request)  # 2
+    # 위험도용 지상관측(기압 · 지면온도 · 7일 강수)을 같이 남긴다(고정 시험값이면 받지 않음)
+    if result.weather.get("source") != "FIXED" and (surface := surface_from_settings(base_at)):
+        result = replace(result, weather={**result.weather, SURFACE: surface})
     if mode:
         result = replace(result, meta={**result.meta, "mode": mode})
     return predictions.save_prediction(  # 3

@@ -17,7 +17,7 @@ ACTIVE = ("QUEUED", "RUNNING")
 @dataclass
 class Operation:
     id: str
-    kind: str  # PREDICTION
+    kind: str  # PREDICTION · PROPOSAL_REGENERATION(제안서 만들기 — 예측 뒤 · 정정 뒤 · 다시 생성)
     incident_id: int
     user_id: int
     status: str = "QUEUED"  # QUEUED · RUNNING · SUCCEEDED · FAILED
@@ -42,6 +42,19 @@ def start(kind: str, incident_id: int, user_id: int) -> Operation | None:
         for old in sorted(done, key=lambda o: o.created_at)[: max(0, len(done) - KEEP)]:
             del _ops[old.id]
         return op
+
+
+def hand_over(op: Operation, kind: str, result: dict[str, Any]) -> Operation:
+    """작업을 성공으로 끝내면서 같은 산불의 다음 작업을 바로 연다(예측 → 제안서 만들기).
+
+    한 번에 하므로 그사이에 다른 작업이 끼지 못한다. 앞 작업의 result에 다음 작업 id를 남긴다.
+    """
+    with _lock:
+        follow = Operation(f"op-{uuid.uuid4().hex[:12]}", kind, op.incident_id, op.user_id)
+        _ops[follow.id] = follow
+        op.status = "SUCCEEDED"
+        op.result = {**result, "proposal_operation_id": follow.id}
+        return follow
 
 
 def get(op_id: str) -> Operation | None:

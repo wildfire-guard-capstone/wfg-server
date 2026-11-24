@@ -23,7 +23,11 @@ def predict(client, inc, headers):
     op = r.json()["data"]
     op = client.get(f"{URL}/{inc['id']}/operations/{op['id']}", headers=headers).json()["data"]
     assert op["status"] == "SUCCEEDED", op
-    return op["result"]
+    prop = client.get(
+        f"{URL}/{inc['id']}/operations/{op['result']['proposal_operation_id']}", headers=headers
+    ).json()["data"]
+    assert prop["status"] == "SUCCEEDED", prop
+    return op["result"] | {"proposal_id": prop["result"]["proposal_id"]}
 
 
 def ask(client, inc, headers, text, **extra):

@@ -93,7 +93,7 @@ def save_proposal(
     trigger: ProposalTrigger = ProposalTrigger.PREDICTION,
     correction_id: int | None = None,
 ) -> int:
-    """제안서 하나를 넣고 id를 돌려준다. 커밋은 부르는 쪽이 한다(예측과 한 트랜잭션).
+    """제안서 하나를 넣고 id를 돌려준다. 커밋은 부르는 쪽이 한다(예측은 먼저 따로 저장됨).
 
     상황 정정 버전(F-30)은 trigger = CORRECTION · correction_id로 같은 예측에 순번만 올린다.
 

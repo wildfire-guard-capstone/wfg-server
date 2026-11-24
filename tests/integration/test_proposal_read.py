@@ -3,7 +3,7 @@
 from app.services import operations
 from app.services.proposal_compare import CODES
 from tests.integration.conftest import square
-from tests.integration.test_predictions import run
+from tests.integration.test_predictions import proposal_op, run
 
 URL = "/api/v1/incidents"
 
@@ -12,13 +12,20 @@ def blocks(item):
     return [b for s in item["sections"] for b in s["blocks"]]
 
 
+def make(client, inc, headers) -> str:
+    """예측 → 제안서까지 만들고 제안서 id."""
+    op = proposal_op(client, inc, headers, run(client, inc, headers))
+    assert op["status"] == "SUCCEEDED", op
+    return op["result"]["proposal_id"]
+
+
 def test_proposal_versions_view_and_diff(client, login, reported, anpyeong):
     cmd, rep = login("t_cmd_p", "COMMANDER"), login("t_rep_p", "REPORTER")
     inc = f"{URL}/{reported['id']}"
     assert client.get(f"{inc}/proposals/latest", headers=cmd).json()["data"] is None
 
-    first = run(client, reported, cmd)["result"]["proposal_id"]  # v0.1
-    second = run(client, reported, cmd)["result"]["proposal_id"]  # v0.2 같은 화선
+    first = make(client, reported, cmd)  # v0.1
+    second = make(client, reported, cmd)  # v0.2 같은 화선
     new = {
         "geometry": square(*anpyeong),
         "observed_at": "2025-03-22T13:00:00+09:00",
@@ -27,7 +34,7 @@ def test_proposal_versions_view_and_diff(client, login, reported, anpyeong):
     r = client.post(f"{inc}/perimeters", json=new, headers=rep)
     assert r.status_code == 201, r.text
     detail = client.get(inc, headers=cmd).json()["data"]
-    third = run(client, detail, cmd)["result"]["proposal_id"]  # v1.1 새 화선
+    third = make(client, detail, cmd)  # v1.1 새 화선
 
     # PROP-01
     page = client.get(f"{inc}/proposals", headers=cmd).json()["data"]

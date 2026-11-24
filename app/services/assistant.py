@@ -26,14 +26,13 @@ from app.core.config import get_settings
 from app.core.security import ALGORITHM, purpose_key
 from app.core.time import KST
 from app.db.models import Incident, Proposal, SituationCorrection, User
-from app.db.models.enums import IncidentStatus, ProposalTrigger
+from app.db.models.enums import IncidentStatus
 from app.repositories import assistant as repo
 from app.repositories import event_logs, incidents
 from app.repositories.engine_inputs import incident_info
-from app.repositories.proposals import items_of, previous_proposal, save_proposal
+from app.repositories.proposals import items_of, previous_proposal
 from app.services import operations, proposal_compare
-from app.services.engine import run_engine
-from app.services.prediction import reader_of, writer_from_settings
+from app.services.prediction import reader_of
 from assistant import Assistant, Context
 from assistant.context import DEPLOYED_LABELS, slot_value
 from assistant.correction import CorrectionError, over_capacity
@@ -415,87 +414,25 @@ def correction_out(row: SituationCorrection) -> dict[str, Any]:
 # ── 제안서 다시 만들기(정정 뒤 · PROP-05) ───────────────────────────────
 
 
-def run_regeneration_operation(
-    op: operations.Operation,
-    *,
-    prediction_id: int,
-    correction_id: int,
-    session_factory: SessionFactory,
-) -> None:
-    """같은 예측 + 지금 상황 → 규칙 엔진(RULES) → 제안 작성(PROPOSAL_GENERATION) → 저장(COMMIT).
-
-    저장 직전에 종료 · 새 예측 · 더 새로운 정정이 있으면 저장하지 않는다(옛 상황으로 만든 제안서를
-    최신으로 보이지 않게). 실패하면 PROPOSAL_FAILED만 남기고, 정정은 그대로다.
-    """
-    operations.update(op, status="RUNNING", stage="RULES")
-    with session_factory() as db:
-        try:
-            llm_input = run_engine(
-                db,
-                incident_id=op.incident_id,
-                reader=reader_of(db, op.incident_id),
-                prediction_id=prediction_id,
-            )
-            operations.update(op, stage="PROPOSAL_GENERATION")
-            written = writer_from_settings().write(llm_input)
-            operations.update(op, stage="COMMIT")
-            incident = db.get(Incident, op.incident_id)
-            if incident.status is IncidentStatus.ENDED:
-                raise ApiError(409, "INCIDENT_ENDED", "계산하는 동안 산불이 종료되었습니다.")
-            latest = incidents.latest_prediction(db, op.incident_id)
-            if latest is None or latest[0] != prediction_id:
-                raise ApiError(409, "STALE_PREDICTION", "계산하는 동안 새 예측이 생겼습니다.")
-            last = incidents.latest_correction(db, op.incident_id)
-            if last is not None and last[0] != correction_id:
-                raise ApiError(409, "STALE_SITUATION", "계산하는 동안 다른 정정이 들어왔습니다.")
-            proposal_id = save_proposal(
-                db,
-                prediction_id=prediction_id,
-                llm_input=llm_input,
-                written=written,
-                user_id=op.user_id,
-                trigger=ProposalTrigger.CORRECTION,
-                correction_id=correction_id,
-            )
-            db.commit()
-        except Exception as exc:  # noqa: BLE001 — 어떤 실패든 작업 실패로 알린다
-            db.rollback()
-            if isinstance(exc, ApiError):
-                error = {"code": exc.code, "message": exc.message}
-            else:
-                log.exception("제안서 다시 만들기 실패 (%s, %s 단계)", op.id, op.stage)
-                error = {
-                    "code": "PROPOSAL_FAILED",
-                    "message": "제안서를 만드는 중 오류가 발생했습니다.",
-                }
-            event_logs.add(
-                db,
-                "PROPOSAL_FAILED",
-                user_id=op.user_id,
-                incident_id=op.incident_id,
-                details={"operation_id": op.id, "correction_id": correction_id, **error},
-            )
-            db.commit()
-            operations.update(op, status="FAILED", error=error)
-            return
-    operations.update(
-        op,
-        status="SUCCEEDED",
-        result={
-            "proposal_id": str(proposal_id),
-            "prediction_id": str(prediction_id),
-            "correction_id": str(correction_id),
-        },
-    )
+def proposal_missing(db: Session, incident_id: int, prediction_id: int) -> bool:
+    """최신 예측의 제안서가 아직 없는가(만들다 실패 · 서버가 다시 켜져 끊김)."""
+    proposal = incidents.latest_proposal(db, incident_id)
+    return proposal is None or proposal.prediction_id != prediction_id
 
 
 def start_regeneration(
     db: Session, user: User, incident_id: int
 ) -> tuple[operations.Operation | None, int | None, int | None]:
-    """(작업, 예측 id, 정정 id). 예측이 없으면 작업 없음(다음 예측 때 반영), 다른 작업이 돌면 None."""
+    """(작업, 예측 id, 정정 id). 예측이 없으면 작업 없음(다음 예측 때 반영), 다른 작업이 돌면 None.
+    예측의 제안서가 아직 없으면 정정 id 없이(그 예측의 첫 제안서, 계기 = 예측) 만든다."""
     latest = incidents.latest_prediction(db, incident_id)
-    last = incidents.latest_correction(db, incident_id)
-    if latest is None or last is None:
+    if latest is None:
         return None, None, None
+    missing = proposal_missing(db, incident_id, latest[0])
+    last = incidents.latest_correction(db, incident_id)
+    if last is None and not missing:
+        return None, None, None
+    if missing and incidents.current_perimeter(db, incident_id).version_no > latest[1]:
+        return None, None, None  # 새 화선이 왔으면 옛 예측의 첫 제안서는 만들지 않는다(예측부터)
     op = operations.start("PROPOSAL_REGENERATION", incident_id, user.id)
-    return op, latest[0], last[0]
+    return op, latest[0], None if missing else last[0]

@@ -19,10 +19,16 @@ def run(client, inc, headers):
     return client.get(f"{URL}/{inc['id']}/operations/{op['id']}", headers=headers).json()["data"]
 
 
+def proposal_op(client, inc, headers, op):
+    """예측 작업이 넘겨준 제안서 작업."""
+    op_id = op["result"]["proposal_operation_id"]
+    return client.get(f"{URL}/{inc['id']}/operations/{op_id}", headers=headers).json()["data"]
+
+
 def test_predict_then_read_prediction_slices_weather(client, login, reported):
     cmd, view = login("t_cmd", "COMMANDER"), login("t_view", "VIEWER")
     op = run(client, reported, cmd)
-    assert op["status"] == "SUCCEEDED" and op["result"]["proposal_id"]
+    assert op["status"] == "SUCCEEDED" and op["result"]["proposal_operation_id"]
     pid = op["result"]["prediction_id"]
     base = f"{URL}/{reported['id']}/predictions/{pid}"
 
@@ -227,11 +233,14 @@ def test_mode_demo_elmfire_runs_elmfire_and_records_mode(client, login, reported
 
 
 def test_predict_also_saves_proposal_and_stage(client, login, reported, db):
-    """예측 → 규칙 엔진 → 가짜 작성기 → 제안서 저장까지 한 작업으로. 산불 대응단계 = 엔진 판정."""
+    """예측 작업이 끝나면 제안서 작업으로 넘어가 저장까지. 산불 대응단계 = 엔진 판정."""
     cmd = login("t_cmd5", "COMMANDER")
     op = run(client, reported, cmd)
     assert op["status"] == "SUCCEEDED", op
-    pid, proposal_id = int(op["result"]["prediction_id"]), int(op["result"]["proposal_id"])
+    prop = proposal_op(client, reported, cmd, op)
+    assert prop["status"] == "SUCCEEDED" and prop["kind"] == "PROPOSAL_REGENERATION", prop
+    assert prop["result"]["correction_id"] is None
+    pid, proposal_id = int(op["result"]["prediction_id"]), int(prop["result"]["proposal_id"])
     row = db.execute(
         text(
             "SELECT prediction_id, perimeter_version, seq, judged_stage FROM proposals"
@@ -255,25 +264,165 @@ def test_predict_also_saves_proposal_and_stage(client, login, reported, db):
     assert created == 1
 
 
-def test_failed_proposal_keeps_neither_prediction_nor_proposal(
+class BrokenWriter:
+    name = "broken"
+
+    def write(self, llm_input):
+        raise RuntimeError("GPU 서버에 연결할 수 없음")
+
+
+def count(db, sql, inc):
+    return db.scalar(text(sql), {"i": int(inc["id"])})
+
+
+def test_failed_proposal_keeps_prediction_and_stage(client, login, reported, db, monkeypatch):
+    """제안서 생성이 실패해도 예측 · 대응단계는 남고, PROP-05로 다시 만든다."""
+    cmd = login("t_cmd6", "COMMANDER")
+    with monkeypatch.context() as m:
+        m.setattr("app.services.prediction.writer_from_settings", lambda: BrokenWriter())
+        op = run(client, reported, cmd)
+    assert op["status"] == "SUCCEEDED", op
+    prop = proposal_op(client, reported, cmd, op)
+    assert prop["status"] == "FAILED" and prop["error"]["code"] == "PROPOSAL_FAILED"
+    pid = op["result"]["prediction_id"]
+    assert count(db, "SELECT count(*) FROM predictions WHERE incident_id = :i", reported) == 1
+    assert count(db, "SELECT count(*) FROM proposals WHERE incident_id = :i", reported) == 0
+    failed = "SELECT count(*) FROM event_logs WHERE incident_id = :i AND action = 'PROPOSAL_FAILED'"
+    assert count(db, failed, reported) == 1
+    detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+    assert detail["latest_prediction_id"] == pid and detail["latest_proposal_id"] is None
+    assert detail["running_operation_id"] is None
+
+    url = f"{URL}/{reported['id']}/proposal-regenerations"
+    body = {"expected_prediction_id": pid, "situation_revision": detail["situation_revision"]}
+    r = client.post(url, json=body, headers=cmd)
+    assert r.status_code == 202, r.text
+    again = r.json()["data"]["id"]
+    done = client.get(f"{URL}/{reported['id']}/operations/{again}", headers=cmd).json()["data"]
+    assert done["status"] == "SUCCEEDED", done
+    row = db.execute(
+        text("SELECT trigger::text, correction_id, seq, judged_stage FROM proposals WHERE id = :p"),
+        {"p": int(done["result"]["proposal_id"])},
+    ).one()
+    assert (row.trigger, row.correction_id, row.seq) == ("PREDICTION", None, 1)
+    assert detail["current_stage"] == row.judged_stage  # 단계는 예측 때 이미 정해졌다
+    assert client.post(url, json=body, headers=cmd).json()["error"]["code"] == (
+        "REGENERATION_NOT_NEEDED"
+    )
+
+
+def test_regeneration_needs_reprediction_after_new_perimeter(
     client, login, reported, db, monkeypatch
 ):
-    class Broken:
-        name = "broken"
+    """제안서가 없는데 새 화선이 왔으면 다시 만들지 않고 예측부터."""
+    cmd = login("t_cmd9", "COMMANDER")
+    with monkeypatch.context() as m:
+        m.setattr("app.services.prediction.writer_from_settings", lambda: BrokenWriter())
+        op = run(client, reported, cmd)
+    add_perimeter(db, reported)
+    detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+    assert detail["needs_reprediction"] is True
+    r = client.post(
+        f"{URL}/{reported['id']}/proposal-regenerations",
+        json={
+            "expected_prediction_id": op["result"]["prediction_id"],
+            "situation_revision": detail["situation_revision"],
+        },
+        headers=cmd,
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "STALE_PERIMETER"
+
+
+def test_correction_does_not_write_a_proposal_for_an_outdated_prediction(
+    client, login, reported, db, monkeypatch
+):
+    """제안서가 없고 새 화선이 온 뒤의 정정 → 옛 예측의 제안서를 만들지 않는다(예측부터)."""
+    from sqlalchemy import select
+
+    from app.db.models import User
+    from app.services.assistant import start_regeneration
+
+    cmd = login("t_cmd13", "COMMANDER")
+    with monkeypatch.context() as m:
+        m.setattr("app.services.prediction.writer_from_settings", lambda: BrokenWriter())
+        run(client, reported, cmd)
+    user = db.scalar(select(User).where(User.login_id == "t_cmd13"))
+    add_perimeter(db, reported)
+    assert start_regeneration(db, user, int(reported["id"])) == (None, None, None)
+    assert not operations.is_running(int(reported["id"]))
+
+
+def add_perimeter(db, inc):
+    """다음 버전 화선(발화점 둘레 100 m)을 바로 넣는다."""
+    db.execute(
+        text(
+            "INSERT INTO fire_perimeters (incident_id, version_no, geom, observed_at, reported_by)"
+            " SELECT i.id, 1, ST_Multi(ST_Buffer(i.ignition_point, 100)),"
+            " i.reported_at + interval '1 hour', i.reported_by FROM incidents i WHERE i.id = :i"
+        ),
+        {"i": int(inc["id"])},
+    )
+    db.commit()
+
+
+def test_prediction_is_visible_while_proposal_runs(client, login, reported, db, monkeypatch):
+    """제안서를 쓰는 동안 예측 · 단계는 이미 저장돼 있다. 그사이 새 화선이 와도 제안서는 남는다."""
+    from app.propose import get_writer
+    from app.services import operations as ops
+
+    seen = {}
+
+    class Watching:
+        name = "fake"
 
         def write(self, llm_input):
-            raise RuntimeError("GPU 서버에 연결할 수 없음")
+            detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+            running = ops.running(int(reported["id"]))
+            seen.update(detail=detail, kind=running.kind, stage=running.stage)
+            add_perimeter(db, reported)
+            return get_writer("fake").write(llm_input)
 
-    monkeypatch.setattr("app.services.prediction.writer_from_settings", lambda: Broken())
-    cmd = login("t_cmd6", "COMMANDER")
+    cmd = login("t_cmd10", "COMMANDER")
+    monkeypatch.setattr("app.services.prediction.writer_from_settings", lambda: Watching())
     op = run(client, reported, cmd)
-    assert op["status"] == "FAILED" and op["error"]["code"] == "PROPOSAL_FAILED"
-    params = {"i": int(reported["id"])}
-    for table in ("predictions", "proposals"):
-        sql = f"SELECT count(*) FROM {table} WHERE incident_id = :i"
-        assert db.scalar(text(sql), params) == 0, table
+    assert (seen["kind"], seen["stage"]) == ("PROPOSAL_REGENERATION", "PROPOSAL_GENERATION")
+    assert seen["detail"]["latest_prediction_id"] == op["result"]["prediction_id"]
+    assert seen["detail"]["latest_proposal_id"] is None
+    assert seen["detail"]["running_operation_id"] == op["result"]["proposal_operation_id"]
+    prop = proposal_op(client, reported, cmd, op)
+    assert prop["status"] == "SUCCEEDED", prop
     detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
-    assert detail["current_stage"] == "INITIAL" and detail["latest_prediction_id"] is None
+    assert detail["latest_proposal_id"] == prop["result"]["proposal_id"]
+    assert detail["needs_reprediction"] is True  # 화면은 「재예측 필요」
+
+
+def test_correction_after_judging_reruns_engine(client, login, reported, db, monkeypatch):
+    """예측 때 엔진이 본 뒤 들어온 정정은 제안서 작업이 엔진을 다시 돌려 반영한다."""
+    import app.services.prediction as svc
+
+    calls, seen = [], iter([None, 7])  # 판정 때는 정정 없음 → 제안서를 시작할 때는 정정 7
+    real = svc.run_engine
+    monkeypatch.setattr(svc, "_correction_id", lambda *a: next(seen))
+    monkeypatch.setattr(svc, "run_engine", lambda *a, **k: calls.append(1) or real(*a, **k))
+    cmd = login("t_cmd12", "COMMANDER")
+    op = run(client, reported, cmd)
+    assert proposal_op(client, reported, cmd, op)["status"] == "SUCCEEDED"
+    assert len(calls) == 2
+
+
+def test_engine_failure_keeps_prediction(client, login, reported, db, monkeypatch):
+    """규칙 엔진이 실패해도 예측은 저장되고, 제안서 작업이 실패로 알린다."""
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("엔진 오류")
+
+    monkeypatch.setattr("app.services.prediction.run_engine", broken)
+    cmd = login("t_cmd11", "COMMANDER")
+    op = run(client, reported, cmd)
+    assert op["status"] == "SUCCEEDED", op
+    assert proposal_op(client, reported, cmd, op)["error"]["code"] == "PROPOSAL_FAILED"
+    detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
+    assert detail["latest_prediction_id"] and detail["current_stage"] == "INITIAL"
 
 
 def test_risk(client, login, reported):

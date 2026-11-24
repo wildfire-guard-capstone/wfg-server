@@ -18,6 +18,7 @@ from app.schemas.assistant import AssistantMessageIn, CorrectionConfirmIn, Regen
 from app.schemas.prediction import OperationOut
 from app.services import assistant as svc
 from app.services import operations
+from app.services.prediction import run_proposal_operation
 
 router = APIRouter(prefix="/incidents/{incident_id}", tags=["AI 어시스턴트 · 상황 정정"])
 Commander = require_roles("COMMANDER")
@@ -65,7 +66,7 @@ def _start(
     op, prediction_id, correction_id = svc.start_regeneration(db, user, incident_id)
     if op is not None:
         background.add_task(
-            svc.run_regeneration_operation,
+            run_proposal_operation,
             op,
             prediction_id=prediction_id,
             correction_id=correction_id,
@@ -137,7 +138,9 @@ def regenerate(
     session_factory: SessionFactory,
     idempotency_key: Annotated[str | None, Header()] = None,
 ):
-    """PROP-05. 새 예측 없이 최신 예측 + 지금 상황으로 제안서를 다시 만든다(정정 뒤 생성 실패 재시도)."""
+    """PROP-05. 새 예측 없이 최신 예측 + 지금 상황으로 제안서를 다시 만든다.
+    정정이 아직 반영되지 않았거나(정정 뒤 생성 실패 재시도), 최신 예측의 제안서가 없을 때(예측 뒤
+    생성 실패 재시도). 제안서가 없는데 새 화선이 보고됐으면 다시 만들지 않는다 — 예측부터 다시 한다."""
     incident = load_incident(db, user, incident_id)
     if incident.status is IncidentStatus.ENDED:
         raise ApiError(409, "INCIDENT_ENDED", "종료된 산불은 제안서를 새로 만들지 않습니다.")
@@ -150,7 +153,13 @@ def regenerate(
         raise ApiError(409, "STALE_SITUATION", "상황이 바뀌었습니다. 새로 고친 뒤 다시 하세요.")
     proposal = incidents.latest_proposal(db, incident_id)
     correction = incidents.latest_correction(db, incident_id)
-    if correction is None or (proposal is not None and correction[1] <= proposal.created_at):
+    missing = svc.proposal_missing(db, incident_id, latest[0])
+    if missing and incidents.current_perimeter(db, incident_id).version_no > latest[1]:
+        raise ApiError(
+            409, "STALE_PERIMETER", "새 화선이 보고되었습니다. 확산 예측을 다시 실행하세요."
+        )
+    stale = correction is not None and (proposal is None or correction[1] > proposal.created_at)
+    if not (missing or stale):
         raise ApiError(
             409, "REGENERATION_NOT_NEEDED", "제안서가 이미 최신 상황을 반영하고 있습니다."
         )

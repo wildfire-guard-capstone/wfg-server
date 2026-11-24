@@ -17,7 +17,9 @@
 - 소방서와의 거리: 예측 기준 화선에서 가장 가까운 소방 시설(facilities 소방, 인접 시군 포함)
 - 지형 7 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
   읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
-- 기압 · 지면온도 · 7일 누적 강수량 · 연료 수분함량: 아직 받는 곳이 없다
+- 기압 · 지면온도 · 7일 누적 강수량: 예측할 때 받아 둔 지상관측(predictions.weather.surface, ASOS).
+  기압 · 지면온도는 예보가 없어 화선 관측 시각의 정시 값 하나로 0 ~ 5시간을 대신한다(위험도-정리)
+- 연료 수분함량: 아직 잇지 않았다
 못 구한 변수는 등급 null + 이유로 보이고, 그 묶음 안 남은 변수의 가중치로 다시 나눈다
 (status PARTIAL).
 변수 등급은 면적 · 시각 평균이라 소수가 될 수 있다(risk/README.md 사안 3).
@@ -47,6 +49,7 @@ from app.core.config import get_settings
 from app.db.models import FirePerimeter, Prediction, PredictionSlice
 from app.db.models._types import SRID
 from app.repositories import base_data
+from app.services.weather import SURFACE
 from risk import compute as calc
 from risk import grid as grid_mod
 from risk.criteria import HOUSE_RADIUS_M, STATIC_KEYS
@@ -125,10 +128,10 @@ FROM_FORECAST = {"temp": "temp", "humidity": "humidity", "wind": "wind_speed", "
 NO_GRID = "지형 · 연료 지역 격자 없음(설정 RISK_GRID_DIR)"
 OUT_OF_GRID = "P5가 지역 격자 밖이거나 그 칸에 값이 없음"
 FIXED_WEATHER = "기상 원천이 고정 시험값(설정 WEATHER=fixed)"
+NO_SURFACE = "예측할 때 받아 둔 지상관측(ASOS)이 없음"
+SURFACE_KEYS = ("pressure", "ground_temp", "rain_7d")
 MISSING_REASON = {
-    "pressure": "기압을 받는 곳이 아직 없음(예측 기상에 없음)",
-    "ground_temp": "지면온도를 받는 곳이 아직 없음(예측 기상에 없음)",
-    "rain_7d": "지난 7일 강수 관측을 아직 받지 않음",
+    **dict.fromkeys(SURFACE_KEYS, NO_SURFACE),
     "moisture": "연료 수분함량 자료를 받는 곳이 아직 없음",
     "vulnerable": "P5와 겹친 리에 연령별 추정 인구가 없음",
     "station_dist": "가까운 시군에 소방 시설 자료가 없음",
@@ -161,6 +164,16 @@ def forecast_inputs(weather: dict[str, Any]) -> dict[str, dict[int, float | None
     out = {k: {h: at(h, name) for h in HOURS} for k, name in FROM_FORECAST.items() if k != "precip"}
     out["precip"] = {h: at(h, "precip") for h in RAIN_HOURS}
     return out
+
+
+def weather_inputs(weather: dict[str, Any]) -> tuple[dict[str, dict], float | None]:
+    """예측 기상 → (risk 입력 6개, 7일 누적 강수량). 지상관측은 값 하나를 0 ~ 5시간에 쓴다."""
+    seen = weather.get(SURFACE) or {}
+    out: dict[str, dict] = forecast_inputs(weather)
+    for k in ("pressure", "ground_temp"):
+        out[k] = dict.fromkeys(HOURS, float(seen[k])) if seen.get(k) is not None else {}
+    rain = seen.get("rain_7d")
+    return out, float(rain) if rain is not None else None
 
 
 def static_grid(
@@ -248,6 +261,9 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
     nearest = min(stations, key=lambda s: perimeter.distance(s.geom), default=None)
     wsrc = (prediction.weather or {}).get("source") or "미상"
     sources = {k: f"예측 기상({wsrc})" for k in FROM_FORECAST}
+    weather, rain_7d = weather_inputs(prediction.weather or {})
+    if seen := (prediction.weather or {}).get(SURFACE):
+        sources |= dict.fromkeys(SURFACE_KEYS, f"기상청 ASOS {seen.get('station')} 관측")
     sources["vulnerable"] = "리별 65세 이상 + 0 ~ 14세 추정(villages) × 리 안 주택 비율"
     sources["houses"] = "주택 점(map_features)"
     if nearest is not None:
@@ -258,8 +274,8 @@ def build_inputs(session: Session, prediction: Prediction) -> tuple[calc.RiskInp
         p5=p5,
         perimeter=perimeter,
         static=static,
-        weather=forecast_inputs(prediction.weather or {}),
-        rain_7d=None,
+        weather=weather,
+        rain_7d=rain_7d,
         zones=with_houses(zones, houses_xy),
         stations=[s.geom for s in stations],
         sources=sources,
@@ -310,7 +326,7 @@ def to_grades(
                 round(float(f.grade), 2),
                 reason,
                 f.source or None,
-                base_at if timed else None,
+                base_at if timed or key in SURFACE_KEYS else None,
             )
         )
     return out

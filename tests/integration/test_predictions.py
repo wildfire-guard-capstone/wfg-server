@@ -194,6 +194,8 @@ def test_mode_demo_elmfire_runs_elmfire_and_records_mode(client, login, reported
             return PredictionResult(slices, req.elmfire_weather.weather, "elmfire", {"wall_s": 1})
 
     asos = SimpleNamespace(name="asos")
+    seen = {"station": "278", "pressure": 1010.0, "ground_temp": 20.0, "rain_7d": 0.0}
+    monkeypatch.setattr("app.services.prediction.surface_from_settings", lambda at: seen)
     monkeypatch.setattr("app.routers.predictions.elmfire_source_from_settings", source)
     monkeypatch.setattr("app.routers.predictions.build_elmfire_weather", build)
     monkeypatch.setattr("app.routers.predictions.asos_provider_from_settings", lambda: asos)
@@ -214,7 +216,11 @@ def test_mode_demo_elmfire_runs_elmfire_and_records_mode(client, login, reported
     assert calls == {"source": "deck", "server": asos}  # 시연 1 = 덱 기상 + 지상관측
     pid = op["result"]["prediction_id"]
     w = client.get(f"{URL}/{reported['id']}/predictions/{pid}/weather", headers=cmd).json()["data"]
-    assert w["source"] == "AWS_OBS"
+    assert w["source"] == "AWS_OBS" and "surface" not in w  # 위험도용 지상관측은 저장만
+    risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]
+    by = {f["code"]: f for f in risk["factors"]}
+    for code in ("pressure", "ground_temperature", "precipitation_7d"):
+        assert by[code]["included"], code
     details = db.scalar(
         text(
             "SELECT details FROM event_logs WHERE action = 'PREDICTION_CREATED'"

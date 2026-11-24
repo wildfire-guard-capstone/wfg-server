@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.weather.base import KST, Weather, WeatherRequest, WeatherUnavailable, hour, hour_slots
 
@@ -36,6 +36,49 @@ def parse(text: str) -> dict[datetime, dict[str, float]]:
         vals = {k: float(cols[i]) for k, i in COLS.items()}
         out[at] = {k: (None if v <= -9 else v) for k, v in vals.items()}
     return out
+
+
+# 위험도에만 쓰는 관측(예측 입력 아님): 해면기압 PS · 지면온도 TS · 강수 RN의 열
+SURFACE_COLS = {"pressure": 8, "rn": 15, "ground_temp": 36}
+RAIN_HOURS = 168  # 7일 누적 강수량 = 0시까지 지난 168시간
+MIN_ROWS = 160  # 168시간 중 이만큼은 와야 합한다(관측이 끊긴 날을 「비 없음」으로 보지 않게)
+
+
+def surface(
+    auth_key: str,
+    base_at: datetime,
+    station: str = "278",
+    get_text: Callable[[str], str] = _get_text,
+) -> dict[str, float | str | None]:
+    """0시(base_at을 내린 정시)의 해면기압 · 지면온도와 지난 7일 강수 합 — 호출 한 번.
+
+    강수는 11 ~ 3월에 3시간 강수라 그대로 더하면 된다(4 ~ 10월은 1시간). 값 없는 시각은 0으로 본다
+    (비가 없어도 결측으로 온다). 0시 값이 결측이면 None. 줄이 너무 적으면 WeatherUnavailable.
+    """
+    t0 = base_at.astimezone(KST).replace(minute=0, second=0, microsecond=0)
+    start = t0 - timedelta(hours=RAIN_HOURS - 1)
+    url = f"{URL}?tm1={start:%Y%m%d%H%M}&tm2={t0:%Y%m%d%H%M}&stn={station}&help=0"
+    rows: dict[datetime, list[str]] = {}
+    for line in get_text(f"{url}&authKey={auth_key}").splitlines():
+        cols = line.split()
+        if cols and cols[0].isdigit() and len(cols) > SURFACE_COLS["ground_temp"]:
+            rows[datetime.strptime(cols[0], "%Y%m%d%H%M").replace(tzinfo=KST)] = cols
+    rows = {t: c for t, c in rows.items() if start <= t <= t0}
+    if len(rows) < MIN_ROWS:
+        raise WeatherUnavailable(f"지점 {station} 지상관측이 {len(rows)}시간뿐입니다({RAIN_HOURS})")
+
+    def value(t: datetime, key: str, missing: float) -> float | None:
+        v = float(rows[t][SURFACE_COLS[key]]) if t in rows else missing
+        return None if v <= missing else v
+
+    rain = sum(value(t, "rn", -0.1) or 0.0 for t in rows)
+    return {
+        "station": station,
+        "at": t0.isoformat(),
+        "pressure": value(t0, "pressure", 0.0),  # 결측 -9
+        "ground_temp": value(t0, "ground_temp", -90.0),  # 결측 -99(영하 9도는 값)
+        "rain_7d": round(rain, 1),
+    }
 
 
 @dataclass(frozen=True)

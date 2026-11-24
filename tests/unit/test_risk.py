@@ -40,11 +40,13 @@ def weather(over=None, n=9):
 
 
 def result(w, zones=(), stations=(), static=None, houses=None):
+    timed, rain = svc.weather_inputs(w)
     inp = calc.RiskInputs(
         p5=box(0, 0, 2000, 1000),
         perimeter=Point(100, 500),
         static=static,
-        weather=svc.forecast_inputs(w),
+        weather=timed,
+        rain_7d=rain,
         zones=zones,
         stations=stations,
         houses_xy=houses,
@@ -163,6 +165,33 @@ def test_with_houses_attaches_only_houses_inside_each_zone():
     assert len(z[0]) == 3 and len(z[0][2]) == 2
     assert z[1] == (box(100, 100, 110, 110), 3.0)  # 주택 없는 리는 면적 비율
     assert svc.with_houses([(box(0, 0, 1, 1), 1.0)], np.empty((0, 2))) == [(box(0, 0, 1, 1), 1.0)]
+
+
+def test_surface_observation_completes_the_weather_factors():
+    """지상관측 값 하나를 0 ~ 5시간에 쓴다. 수분함량은 아직 잇지 않았다."""
+    seen = {"station": "278", "pressure": 1019.0, "ground_temp": 10.2, "rain_7d": 3.1}
+    w = weather() | {"source": "KMA_STATIONS", "surface": seen}
+    timed, rain = svc.weather_inputs(w)
+    assert timed["pressure"] == dict.fromkeys(range(6), 1019.0) and rain == 3.1
+    gs = svc.to_grades(
+        result(w), base_at=BASE_AT, weather_source="KMA_STATIONS", grid_reason=svc.NO_GRID
+    )
+    by = {g.code: g for g in gs}
+    assert (by["pressure"].grade, by["ground_temperature"].grade) == (2.0, 1.0)
+    assert by["precipitation_7d"].grade == 4.0 and by["fuel_moisture"].grade is None
+    assert by["precipitation_7d"].raw_value == 3.1 and by["pressure"].value_at == BASE_AT
+    assert not any(by[c].grade is None for c, k in KEY_OF.items() if BY_KEY.get(k, None)
+                   and BY_KEY[k].axis == "W")  # fmt: skip
+
+    part = w | {"surface": seen | {"ground_temp": None}}
+    by = {
+        g.code: g
+        for g in svc.to_grades(
+            result(part), base_at=BASE_AT, weather_source="KMA_STATIONS", grid_reason=svc.NO_GRID
+        )
+    }
+    assert by["ground_temperature"].reason == svc.NO_SURFACE and by["pressure"].grade == 2.0
+    assert svc.weather_inputs({})[0]["pressure"] == {} and svc.weather_inputs({})[1] is None
 
 
 def test_a_gap_in_the_forecast_drops_that_variable():

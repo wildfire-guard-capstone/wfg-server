@@ -264,14 +264,22 @@ def test_latest_observed_hour_waits_40_minutes():
 
 
 def test_prediction_weather_out_hides_stored_only_fields():
-    """PRED-04: DB에는 wind_max_1min(ELMFIRE 입력 기록)까지 두고 응답에서는 뺀다."""
+    """PRED-04: DB에는 ELMFIRE 입력 기록(STORED_ONLY)까지 두고 응답에서는 뺀다."""
     from app.services.weather import prediction_weather_out
 
     stored = {
         "source": "KMA_STATIONS",
-        "hours": [{"at": "2026-11-11T14:00:00+09:00", "wind_speed": 3.2, "wind_max_1min": 5.3}],
+        "hours": [
+            {
+                "at": "2026-11-11T14:00:00+09:00",
+                "wind_speed": 3.2,
+                "wind_max_1min": 5.3,
+                "fuel_moisture_1h": 7.9,
+            }
+        ],
     }
     out = prediction_weather_out(stored)
     assert out["source"] == "KMA_STATIONS"
     assert out["hours"] == [{"at": "2026-11-11T14:00:00+09:00", "wind_speed": 3.2}]
     assert stored["hours"][0]["wind_max_1min"] == 5.3  # 저장값은 그대로
+    assert stored["hours"][0]["fuel_moisture_1h"] == 7.9

@@ -219,7 +219,7 @@ def test_mode_demo_elmfire_runs_elmfire_and_records_mode(client, login, reported
     assert w["source"] == "AWS_OBS" and "surface" not in w  # 위험도용 지상관측은 저장만
     risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]
     by = {f["code"]: f for f in risk["factors"]}
-    for code in ("pressure", "ground_temperature", "precipitation_7d"):
+    for code in ("pressure", "ground_temperature", "precipitation_7d", "fuel_moisture"):
         assert by[code]["included"], code
     details = db.scalar(
         text(
@@ -432,7 +432,7 @@ def test_engine_failure_keeps_prediction(client, login, reported, db, monkeypatc
 
 
 def test_risk(client, login, reported):
-    """격자 없이(RISK_GRID_DIR 비움): 기상 4개 · 취약계층 · 소방서 · 규모는 계산, 나머지는 이유."""
+    """격자 없이(RISK_GRID_DIR 비움): 기상 4 · 수분함량 · 취약계층 · 소방서 · 규모는 계산."""
     cmd = login("t_cmd4", "COMMANDER")
     pid = run(client, reported, cmd)["result"]["prediction_id"]
     risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]

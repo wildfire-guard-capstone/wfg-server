@@ -157,6 +157,7 @@ class StationField:
                     "wind_dir": round(float(grids["wd"][h, row, col]), 1),
                     "wind_speed": round(values["mean"], 2),
                     "wind_max_1min": round(float(grids["ws"][h, row, col]) / MPH_PER_MS, 2),
+                    "fuel_moisture_1h": round(float(grids["m1"][h, row, col]), 2),
                     "temp": round(values["ta"], 1),
                     "humidity": round(values["hm"], 1),
                     "precip": round(mix["rn"][h] or 0.0, 1),

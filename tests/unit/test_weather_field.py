@@ -182,6 +182,7 @@ def test_station_field_builds_grid_and_site_hours_skipping_failures():
     # 발화점 칸 값 = ELMFIRE 격자의 그 칸
     r, c = inp.meta["site_cell"]
     assert h1["wind_max_1min"] == pytest.approx(inp.grids["ws"][1, r, c] / MPH_PER_MS, abs=0.01)
+    assert h1["fuel_moisture_1h"] == pytest.approx(inp.grids["m1"][1, r, c], abs=0.01)
 
     with pytest.raises(WeatherUnavailable, match="관측소가 2곳"):
         StationField(observed, forecast, stations=stations, buffer_m=0, min_stations=3).build(

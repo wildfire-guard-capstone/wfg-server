@@ -286,6 +286,8 @@ def test_deck_weather_cuts_nine_bands_and_site_hours(fake_deck, tmp_path):
     assert h0["wind_max_1min"] == pytest.approx(12.0 * MS_PER_MPH, abs=0.01)  # 밴드 2 = 12 mph
     assert h0["wind_speed"] == pytest.approx(7.0 * MS_PER_MPH, abs=0.01)  # ws.tif 밴드 2 = 7 mph
     assert h8["wind_max_1min"] == pytest.approx(20.0 * MS_PER_MPH, abs=0.01)
+    r, c = inp.meta["site_cell"]
+    assert h8["fuel_moisture_1h"] == pytest.approx(float(inp.grids["m1"][8, r, c]), abs=0.01)
     assert h0["wind_dir"] == 270.0 and h0["temp"] == server["hours"][0]["temp"]
 
     # 이 입력으로 돌리면 덱 밴드 1(11:00) ~ 10이 ELMFIRE 밴드 1 ~ 10으로 들어가고 시작 시각도

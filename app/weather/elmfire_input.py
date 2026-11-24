@@ -14,7 +14,7 @@
 입력 = 격자(ELMFIRE) + 발화점 칸 9시간(저장 · 규칙 엔진 · 프론트) + 출처 정보(이벤트 로그).
 발화점 칸 값은 ELMFIRE 격자와 같은 계산에서 꺼낸다 — 판정에 쓰는 바람과 확산에 쓴 바람이 같은
 관측소 · 시각 · 비율에서 나온다. 평균풍속 wind_speed는 판정 · 화면, 시간 안 가장 센 1분 풍속
-wind_max_1min은 ELMFIRE 입력 기록(DB에만, PRED-04 응답에서 뺀다).
+wind_max_1min · fuel_moisture_1h(m1)는 ELMFIRE 입력 기록(DB에만, PRED-04 응답에서 뺀다).
 """
 
 import math

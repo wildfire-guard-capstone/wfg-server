@@ -14,7 +14,7 @@ from risk.grid import StaticGrid
 from risk.overlap import Grid
 
 BASE_AT = datetime.fromisoformat("2025-03-22T12:00:00+09:00")
-WEATHER_CODES = {"wind_speed", "humidity", "temperature", "precipitation"}
+WEATHER_CODES = {"wind_speed", "humidity", "temperature", "precipitation", "fuel_moisture"}
 
 
 def grades(value):
@@ -152,11 +152,11 @@ def test_without_grid_weather_people_station_scale_houses_are_real_and_the_rest_
 
     r = aggregate(gs)
     assert r["status"] == "PARTIAL" and 1 <= r["score"] <= 5
-    assert r["included_weight_sum"] == pytest.approx(0.26 + 0.07 + 0.15 + 0.05)
+    assert r["included_weight_sum"] == pytest.approx(0.26 + 0.06 + 0.07 + 0.15 + 0.05)
     assert r["score"] == pytest.approx(res.score, abs=0.01)  # risk.compute와 같은 값
     assert r["hazard"] == pytest.approx(res.hazard, abs=0.01)
     assert r["exposure"] == pytest.approx(res.exposure, abs=0.01)
-    assert r["axes"]["terrain"] is None and r["axes"]["fuel"] is None
+    assert r["axes"]["terrain"] is None and r["axes"]["fuel"] == 5.0  # 수분함량만
 
 
 def test_with_houses_attaches_only_houses_inside_each_zone():
@@ -168,7 +168,7 @@ def test_with_houses_attaches_only_houses_inside_each_zone():
 
 
 def test_surface_observation_completes_the_weather_factors():
-    """지상관측 값 하나를 0 ~ 5시간에 쓴다. 수분함량은 아직 잇지 않았다."""
+    """지상관측 값 하나를 0 ~ 5시간에 쓴다."""
     seen = {"station": "278", "pressure": 1019.0, "ground_temp": 10.2, "rain_7d": 3.1}
     w = weather() | {"source": "KMA_STATIONS", "surface": seen}
     timed, rain = svc.weather_inputs(w)
@@ -178,7 +178,7 @@ def test_surface_observation_completes_the_weather_factors():
     )
     by = {g.code: g for g in gs}
     assert (by["pressure"].grade, by["ground_temperature"].grade) == (2.0, 1.0)
-    assert by["precipitation_7d"].grade == 4.0 and by["fuel_moisture"].grade is None
+    assert by["precipitation_7d"].grade == 4.0 and by["fuel_moisture"].grade == 5.0
     assert by["precipitation_7d"].raw_value == 3.1 and by["pressure"].value_at == BASE_AT
     assert not any(by[c].grade is None for c, k in KEY_OF.items() if BY_KEY.get(k, None)
                    and BY_KEY[k].axis == "W")  # fmt: skip
@@ -192,6 +192,23 @@ def test_surface_observation_completes_the_weather_factors():
     }
     assert by["ground_temperature"].reason == svc.NO_SURFACE and by["pressure"].grade == 2.0
     assert svc.weather_inputs({})[0]["pressure"] == {} and svc.weather_inputs({})[1] is None
+
+
+def test_moisture_is_what_elmfire_used_or_is_worked_out_from_the_saved_weather():
+    used = weather({(i, "fuel_moisture_1h"): 12.0 + i for i in range(9)})
+    assert svc.moisture_inputs(used) == ({h: 12.0 + h for h in range(6)}, True)
+    part = weather({(i, "fuel_moisture_1h"): 12.0 for i in range(3)})  # 일부만 저장 → 섞지 않음
+    worked, from_elmfire = svc.moisture_inputs(part)
+    assert from_elmfire is False and sorted(worked) == list(range(6)) and worked[0] < 10
+    assert svc.moisture_inputs(weather({(2, "humidity"): None})) == ({}, False)
+    assert svc.moisture_inputs({}) == ({}, False)
+    gs = svc.to_grades(
+        result(used), base_at=BASE_AT, weather_source="KMA_STATIONS", grid_reason=svc.NO_GRID
+    )
+    moist = next(g for g in gs if g.code == "fuel_moisture")
+    # 12 ~ 15% = 4등급 네 시각, 16 · 17% = 3등급 두 시각
+    assert moist.grade == pytest.approx((4 * 4 + 3 * 2) / 6, abs=0.01)
+    assert moist.raw_value == pytest.approx(14.5) and moist.value_at == BASE_AT
 
 
 def test_a_gap_in_the_forecast_drops_that_variable():

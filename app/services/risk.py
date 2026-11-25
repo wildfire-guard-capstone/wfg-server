@@ -6,7 +6,7 @@
 명세 7.6(23개 한 번에 가중평균)에서 바뀐 점: 변수 2개 추가(규모 · 주택 수), 노출을 P5 + 1 km로,
 취약계층을 리 안 주택 비율로 나눔, 묶음별 평균 뒤 기하평균.
 risk-3(11/25): 지형위치지수 · 곡률 · 지형복잡도를 뺌(P5 평균이 늘 3 근처 · 경사도와 같은 정보,
-risk.criteria.DROPPED_KEYS) — 지형복잡도 가중치 0.03은 경사도_up에 합침(0.08 → 0.11). 변수 22개.
+risk.criteria.DROPPED_KEYS) — 지형복잡도 가중치 0.03은 경사도에 합침(0.08 → 0.11). 변수 22개.
 
 변수 등급은 `risk/` 패키지(risk.compute, 의성 데모 1b와 같은 계산)가 구하고, 여기서는 DB에서
 입력을 모아 넘긴 뒤 명세 모양(Risk · RiskFactor)으로 바꾼다.
@@ -67,10 +67,12 @@ log = logging.getLogger(__name__)
 METHOD_VERSION = "risk-3"
 P5 = 5
 
-# (코드, 원문 변수, 축, 가중치) — AI Hub CSV 20개(합 0.88, 경사도_up은 지형복잡도를 합친 0.11)
+# (코드, 원문 변수, 축, 가중치) — AI Hub CSV 20개(합 0.88, 경사도는 지형복잡도를 합친 0.11)
 # + 팀 추가 2개(규모 0.15 · 주택 0.05)
+# 경사도(slope_up): CSV 이름은 「경사도_up」이지만 불이 번지는 방향과 비교하지 않는 칸 경사다.
+# 확산 속도(오르막 효과)는 예측이 계산하고, 여기서는 지형이 얼마나 험한지(진화 난이도)를 본다
 FACTORS: list[tuple[str, str, str, float]] = [
-    ("slope_up", "경사도_up", "terrain", 0.11),
+    ("slope_up", "경사도", "terrain", 0.11),
     ("aspect", "사면방향", "terrain", 0.06),
     ("elevation", "고도", "terrain", 0.02),
     ("water_distance", "수계와의 거리", "terrain", 0.02),

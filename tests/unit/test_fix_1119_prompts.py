@@ -223,7 +223,7 @@ def test_village_tools_show_admin_and_edge_villages():
     facts = {f.label: f.value for f in box.run("village", "용기리").facts}
     assert any("대피 대상 아님" in v for v in facts.values())
     facts = {f.label: f.value for f in box.run("village", admin).facts}
-    assert any(admin in v and "이 행정리 몫의 추정값" in v for v in facts.values())
+    assert any(admin in v and "이 행정리를 합한 값" in v for v in facts.values())
 
 
 def test_road_question_goes_to_e4_not_alerts():

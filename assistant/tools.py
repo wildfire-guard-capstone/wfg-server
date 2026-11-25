@@ -673,7 +673,7 @@ class ToolBox:
                         Fact(
                             f"context.villages.{z['zone']}[{vid}].admin_villages",
                             f"{label} 가운데 대피 대상 행정리",
-                            " · ".join(admin_of(z)) + "(인구는 이 행정리 몫의 추정값)",
+                            " · ".join(admin_of(z)) + "(인구는 이 행정리를 합한 값)",
                         )
                     )
                 r.facts.append(

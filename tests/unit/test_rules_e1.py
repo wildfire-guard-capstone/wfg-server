@@ -33,17 +33,21 @@ def test_villages_grouped_by_zone_with_time_window():
         "위험구역 4곳: 이미 닿음 안평면 괴산리 · 신월리, 5시간 안 안평면 신안리, 의성읍 철파리"
         " / 잠재 위험구역 1곳: 옥산면 정자리"
     )
+    # 소제목 2개: 위험구역(이미 닿음 · 5시간 안) / 잠재 위험구역(5 ~ 8시간)
+    assert [s["title"] for s in sec["sections"]] == ["1. 위험구역", "2. 잠재 위험구역"]
     rows = sec["sections"][0]["blocks"][1]["rows"]
     assert rows[1]["text"] == "**위험구역(5시간 안)**: 안평면 신안리, 의성읍 철파리"
-    assert rows[2]["text"] == "**잠재 위험구역(5~8시간)**: 옥산면 정자리"
+    (row,) = sec["sections"][1]["blocks"][1]["rows"]
+    assert row["text"] == "**잠재 위험구역(5~8시간)**: 옥산면 정자리"
 
 
 def test_only_potential_zone_and_no_villages():
-    _, e1, _ = _run(villages=[VILLAGES[4]])
+    _, e1, sec = _run(villages=[VILLAGES[4]])
     assert (e1["status"], e1["finding"]) == (
         "potential_only",
         "위험구역 없음 / 잠재 위험구역 1곳: 옥산면 정자리",
     )
+    assert [s["title"] for s in sec["sections"]] == ["2. 잠재 위험구역"]
     assert _run(villages=[VILLAGES[5]])[1] is None
 
 

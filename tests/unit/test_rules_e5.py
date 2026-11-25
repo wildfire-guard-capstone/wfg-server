@@ -34,9 +34,9 @@ def test_first_proposal_all_new():
     )
     rows = sec["sections"][0]["blocks"][1]["rows"]
     assert rows[1]["text"] == "**Set 단계**: 옥산면 정자리"
-    assert [b["id"] for b in sec["sections"][0]["blocks"] if b["type"] == "action"] == [
-        "E5-a1",
-        "E5-a2",
+    assert [(s["title"], s["blocks"][0]["id"]) for s in sec["sections"]] == [
+        ("1. 재난문자·방송", "E5-a1"),
+        ("2. 전파 수단", "E5-a2"),
     ]
 
 

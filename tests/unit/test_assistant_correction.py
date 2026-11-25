@@ -271,6 +271,50 @@ def test_llm_parse_used_and_invented_counts_dropped():
     assert "신월리" in schema["properties"]["changes"]["items"]["properties"]["village"]["enum"]
 
 
+def test_summed_count_from_llm_is_not_reported_as_unread():
+    """11/25 시연 QA: LLM이 「산림청 3대, 지자체 2대」를 5대로 합쳐 버려도 규칙이 다 읽었으면 못 읽었다고 하지 않는다."""
+    llm = FakeLLM(
+        {
+            "changes": [
+                change("crew", count=40, group="special_crew", text="진화대 40명"),
+                change("helicopter", count=5, text="산림청 헬기 3대, 지자체 헬기 2대"),
+            ],
+            "not_allowed": [],
+        }
+    )
+    trace = {}
+    out = preview(
+        make_context(),
+        "산림청 헬기 3대, 지자체 헬기 2대, 진화대 40명 투입했어",
+        llm,
+        trace,
+    )
+    items = {c["item"] for c in out["changes"]}
+    assert {"helicopter.forest", "helicopter.local", "crew.special_crew"} <= items
+    assert out["ignored"] == [] and "no_count" in trace["correction_llm_dropped"]
+
+
+def test_summed_count_equal_to_another_number_is_not_added():
+    """합(3 + 2 = 5)이 문장의 다른 수(진화차 5대)와 같아도 산림청 헬기에 5대를 더하지 않는다."""
+    llm = FakeLLM(
+        {
+            "changes": [
+                change(
+                    "helicopter", count=5, group="forest", text="산림청 헬기 3대와 지자체 헬기 2대"
+                ),
+                change("vehicle", count=5, text="진화차 5대 투입"),
+            ],
+            "not_allowed": [],
+        }
+    )
+    ctx = make_context()
+    ctx.situation, ctx.capacity = {}, {}
+    out = preview(ctx, "산림청 헬기 3대와 지자체 헬기 2대, 진화차 5대 투입", llm)
+    after = {c["item"]: c["after"] for c in out["changes"]}
+    assert (after["helicopter.forest"], after["helicopter.local"]) == (3, 2)
+    assert after["helicopter.total"] == 5 and after["vehicle.total"] == 5
+
+
 def test_llm_choices_checked_against_input():
     """11-09 EXAONE 평가: 「군 헬기」 → 지자체, 「박곡리」(목록에 없음) → enum의 「도옥리」, 인력 빠뜨림,
     「2단계 발령」 → 그 밖. 입력 글과 규칙 해석으로 바로잡는다."""

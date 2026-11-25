@@ -197,6 +197,20 @@ def test_surface_observation_completes_the_weather_factors():
     assert by["ground_temperature"].reason == svc.NO_SURFACE and by["pressure"].grade == 2.0
     assert svc.weather_inputs({})[0]["pressure"] == {} and svc.weather_inputs({})[1] is None
 
+    # 0시 관측이 늦어 앞 시각을 썼으면 value_at도 그 시각(11/25)
+    early = BASE_AT - timedelta(hours=2)
+    by = {
+        g.code: g
+        for g in svc.to_grades(
+            result(w),
+            base_at=BASE_AT,
+            weather_source="KMA_STATIONS",
+            grid_reason=svc.NO_GRID,
+            surface_at=early,
+        )
+    }
+    assert by["pressure"].value_at == early and by["wind_speed"].value_at == BASE_AT
+
 
 def test_moisture_is_what_elmfire_used_or_is_worked_out_from_the_saved_weather():
     used = weather({(i, "fuel_moisture_1h"): 12.0 + i for i in range(9)})

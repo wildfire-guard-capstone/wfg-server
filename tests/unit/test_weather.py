@@ -161,15 +161,16 @@ SURFACE_ROW = (
 T0 = datetime(2026, 11, 24, 14, tzinfo=KST)
 
 
-def surface_text(hours=168, last=None, rain=None):
-    """0시까지 hours시간. last = 0시 줄의 값, rain = {몇 시간 전: mm}."""
+def surface_text(hours=168, last=None, rain=None, delay=0):
+    """0시까지 hours시간. last = 마지막 줄의 값, rain = {몇 시간 전: mm},
+    delay = 아직 안 올라온 시간 수."""
     out = ["#START7777"]
-    for back in range(hours - 1, -1, -1):
+    for back in range(hours - 1 + delay, delay - 1, -1):
         v = {"ps": 1019.0, "ts": 10.2, "rn": (rain or {}).get(back, -9.0)}
         out.append(
             SURFACE_ROW.format(
                 t=f"{T0 - timedelta(hours=back):%Y%m%d%H%M}",
-                **(v | (last or {} if not back else {})),
+                **(v | (last or {} if back == delay else {})),
             )
         )
     return "\n".join([*out, "#7777END"])
@@ -186,16 +187,27 @@ def test_surface_reads_pressure_ground_temp_and_seven_day_rain_in_one_call():
         "ground_temp": 10.2,
         "rain_7d": 3.1,
     }
-    assert len(urls) == 1 and "tm1=202611171500&tm2=202611241400&stn=278" in urls[0]
+    assert len(urls) == 1 and "tm1=202611171200&tm2=202611241400&stn=278" in urls[0]
 
 
 def test_surface_keeps_frost_drops_missing_and_refuses_a_broken_week():
     frost = surface("KEY", T0, get_text=lambda u: surface_text(last={"ts": -9.0}))
     assert frost["ground_temp"] == -9.0 and frost["rain_7d"] == 0.0  # 비 없음은 결측으로 온다
+    # 0시 값이 결측이면 바로 앞 관측
     gone = surface("KEY", T0, get_text=lambda u: surface_text(last={"ts": -99.0, "ps": -9.0}))
-    assert gone["ground_temp"] is None and gone["pressure"] is None
+    assert gone["ground_temp"] == 10.2 and gone["pressure"] == 1019.0
+    assert gone["at"] == (T0 - timedelta(hours=1)).isoformat()
     with pytest.raises(WeatherUnavailable, match="100시간뿐"):
         surface("KEY", T0, get_text=lambda u: surface_text(hours=100))
+
+
+def test_surface_uses_the_latest_hour_when_the_base_hour_is_not_published_yet():
+    """11/25: 화선 30분 뒤 예측 — 0시(14시) 줄이 아직 없으면 3시간 안의 가장 최근 관측."""
+    late = surface("KEY", T0 + timedelta(minutes=30), get_text=lambda u: surface_text(delay=2))
+    assert late["at"] == (T0 - timedelta(hours=2)).isoformat()
+    assert late["pressure"] == 1019.0 and late["ground_temp"] == 10.2
+    with pytest.raises(WeatherUnavailable, match="아직 안 올라옴"):
+        surface("KEY", T0, get_text=lambda u: surface_text(delay=4))
 
 
 def test_surface_failure_never_stops_the_prediction(monkeypatch, caplog):

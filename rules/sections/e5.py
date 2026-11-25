@@ -14,8 +14,8 @@ ANCHOR_IDS = {"p.76": "SM-p076", "p.78": "SM-p078"}
 def e5_sections(e5: dict[str, Any]) -> dict[str, Any]:
     """E5 입력으로 섹션을 만든다.
 
-    1. a1 재난문자 · 자막방송 — 늘 넣음 + 단계별 목록(있는 단계만)
-    2. a2 함께 쓸 전파 수단 — Go 읍면이 있을 때
+    1. 「1. 재난문자·방송」: a1 재난문자 · 자막방송 — 늘 넣음 + 단계별 목록(있는 단계만)
+    2. 「2. 전파 수단」: a2 함께 쓸 전파 수단 — Go 읍면이 있을 때
     """
     areas = e5["facts"]["areas"]
     rows = [
@@ -34,19 +34,21 @@ def e5_sections(e5: dict[str, Any]) -> dict[str, Any]:
         },
         {"type": "list", "style": "bullet", "writer": "조립기", "rows": rows},
     ]  # 1
+    sections = [{"title": "1. 재난문자·방송", "blocks": blocks}]
     if any(a["stage"] == "go" for a in areas):  # 2
-        blocks.append(
-            {
-                "type": "action",
-                "id": "E5-a2",
-                "topic": "함께 쓸 전파 수단",
-                "use": ["areas"],
-                "anchors": ["p.76"],
-            }
-        )
-    anchors = [a for b in blocks if b["type"] == "action" for a in b["anchors"]]
+        action = {
+            "type": "action",
+            "id": "E5-a2",
+            "topic": "함께 쓸 전파 수단",
+            "use": ["areas"],
+            "anchors": ["p.76"],
+        }
+        sections.append({"title": "2. 전파 수단", "blocks": [action]})
+    anchors = [
+        a for s in sections for b in s["blocks"] if b["type"] == "action" for a in b["anchors"]
+    ]
     return {
-        "sections": [{"title": "", "blocks": blocks}],
+        "sections": sections,
         "do_not_state": [w["field"] for w in e5["withheld"]],
         "anchor_basis": list(dict.fromkeys(ANCHOR_IDS[a] for a in anchors)),
     }

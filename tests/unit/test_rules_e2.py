@@ -41,11 +41,11 @@ def test_example_1250_sun_night_and_alert():
     assert "신월리는 12:40 대피 문자가 나갔지만 대피 완료 보고가 없습니다." in rows[0]["text"]
     assert rows[1]["text"] == "12:50 ~ 13:50 닿을 수 있음: **신안리** 181명"
     assert "128명. 신월리는 12:40" in rows[0]["text"]
-    (jeongja_row,) = sec["sections"][0]["blocks"][3]["rows"]
+    (jeongja_row,) = sec["sections"][1]["blocks"][1]["rows"]
     assert jeongja_row["text"] == "19:50 ~ 20:50 닿을 수 있음(밤): **정자리** 114명"
-    assert [b["id"] for b in sec["sections"][0]["blocks"] if b["type"] == "action"] == [
-        "E2-a1",
-        "E2-a2",
+    assert [(s["title"], s["blocks"][0]["id"]) for s in sec["sections"]] == [
+        ("1. 즉시 대피", "E2-a1"),
+        ("2. 사전대피", "E2-a2"),
     ]
 
 

@@ -56,37 +56,38 @@ def _action(n: int, topic: str, use: list[str], anchors: list[str]) -> dict[str,
     return {"type": "action", "id": f"E2-a{n}", "topic": topic, "use": use, "anchors": anchors}
 
 
+def _section(title: str, action: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    listed = {"type": "list", "style": "bullet", "writer": "조립기", "rows": _rows(rows)}
+    return {"title": title, "blocks": [action, listed]}
+
+
 def e2_sections(e2: dict[str, Any]) -> dict[str, Any]:
     """E2 입력으로 섹션을 만든다.
 
-    1. 위험구역 마을이 있으면 a1 「위험구역 마을 대피」 + 시각 구간별 목록
-    2. 잠재 위험구역 마을이 있으면 a2 「잠재 위험구역 사전대피」 + 목록
+    1. 위험구역 마을이 있으면 「1. 즉시 대피」: a1 「위험구역 마을 대피」 + 시각 구간별 목록
+    2. 잠재 위험구역 마을이 있으면 「2. 사전대피」: a2 「잠재 위험구역 사전대피」 + 목록
     3. 언급 금지 · 문단 근거 ID
     """
     f = e2["facts"]
-    blocks: list[dict[str, Any]] = []
+    sections: list[dict[str, Any]] = []
     if f["immediate"]:  # 1
-        blocks.append(
-            _action(
-                1,
-                "위험구역 마을 대피",
-                ["immediate", "immediate_total", "jurisdiction"],
-                ["p.75", "p.76", "p.79"],
-            )
+        action = _action(
+            1,
+            "위험구역 마을 대피",
+            ["immediate", "immediate_total", "jurisdiction"],
+            ["p.75", "p.76", "p.79"],
         )
-        blocks.append(
-            {"type": "list", "style": "bullet", "writer": "조립기", "rows": _rows(f["immediate"])}
-        )
+        sections.append(_section("1. 즉시 대피", action, f["immediate"]))
     if f["pre_evac"]:  # 2
-        blocks.append(
-            _action(2, "잠재 위험구역 사전대피", ["pre_evac", "sunset", "now_is_night"], ["p.75"])
+        action = _action(
+            2, "잠재 위험구역 사전대피", ["pre_evac", "sunset", "now_is_night"], ["p.75"]
         )
-        blocks.append(
-            {"type": "list", "style": "bullet", "writer": "조립기", "rows": _rows(f["pre_evac"])}
-        )
-    anchors = [a for b in blocks if b["type"] == "action" for a in b["anchors"]]
+        sections.append(_section("2. 사전대피", action, f["pre_evac"]))
+    anchors = [
+        a for s in sections for b in s["blocks"] if b["type"] == "action" for a in b["anchors"]
+    ]
     return {
-        "sections": [{"title": "", "blocks": blocks}],
+        "sections": sections,
         "do_not_state": [w["field"] for w in e2["withheld"]],  # 3
         "anchor_basis": list(dict.fromkeys(ANCHOR_IDS[a] for a in anchors)),
     }

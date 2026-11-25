@@ -76,6 +76,26 @@ def test_titles_follow_specs_and_engine_sections(engine):
             assert [p.title for p in ps] == [parts.UNTITLED]
 
 
+def test_evacuation_items_split_details_by_subheading(engine):
+    # 11/25: E1 · E2 · E5도 소제목 구조. 자세히 보기 목록이 소제목마다 자기 것만 있다
+    by_id = {it["id"]: it for it in engine["items"]}
+    got = {
+        c: {
+            p.title: [r["text"].split(":")[0] for b in p.detail for r in b["rows"] if "text" in r]
+            for p in parts.parts_of(by_id[c], by_id, engine["common"], "")
+        }
+        for c in ("E1", "E2", "E5")
+    }
+    assert list(got["E1"]) == ["위험구역", "잠재 위험구역"]
+    assert got["E1"]["위험구역"] == ["**위험구역(이미 닿음)**", "**위험구역(5시간 안)**"]
+    assert got["E1"]["잠재 위험구역"] == ["**잠재 위험구역(5~8시간)**"]
+    assert list(got["E2"]) == ["즉시 대피", "사전대피"]
+    assert all(got["E2"].values())
+    assert list(got["E5"]) == ["재난문자·방송", "전파 수단"]
+    assert got["E5"]["재난문자·방송"][:2] == ["**Go 단계**", "**Set 단계**"]
+    assert got["E5"]["전파 수단"] == []
+
+
 def test_code_hides_subheading_when_engine_made_no_section():
     e3 = {
         "id": "E3",

@@ -60,6 +60,15 @@ SPECS: dict[str, list[Spec]] = {
         Spec("진화인력 안전", None, "진화 인력이 처한 위험(확산 방향 · 바람)"),
         Spec("투입 관리", None, "투입 인력의 편성과 인솔"),
     ],
+    # 11/25: 대피 카드도 소제목 구조로. 이름은 5시간 안 / 5 ~ 8시간(E3과 같음), E5는 엔진 주제 그대로
+    "E1": [
+        Spec("위험구역", 1, "위험구역(이미 닿음 · 5시간 안)으로 정할 마을"),
+        Spec("잠재 위험구역", 2, "잠재 위험구역(5 ~ 8시간)으로 정할 마을"),
+    ],
+    "E2": [
+        Spec("즉시 대피", 1, "위험구역(5시간 안) 마을 주민의 대피 대상 · 순서 · 시점"),
+        Spec("사전대피", 2, "잠재 위험구역(5 ~ 8시간) 마을 주민의 사전대피 대상 · 순서 · 시점"),
+    ],
     "E3": [
         Spec("즉시 대피·이송", 1, "위험구역(5시간 안) 취약시설 거주자의 대피"),
         Spec("사전대피·이송 준비", 2, "잠재 위험구역(5 ~ 8시간) 취약시설 거주자의 대피 준비"),
@@ -68,6 +77,10 @@ SPECS: dict[str, list[Spec]] = {
     "E4": [
         Spec("대피소 지정", 1, "마을별 대피소 지정과 수용"),
         Spec("관련 통제", 2, "산불이 닿는 도로의 통제"),
+    ],
+    "E5": [
+        Spec("재난문자·방송", 1, "재난문자와 방송으로 알리는 지역과 단계(Go · Set)"),
+        Spec("전파 수단", 2, "재난문자 · 방송과 함께 쓰는 전파 수단"),
     ],
 }
 
@@ -376,8 +389,9 @@ def _detail(
     if iid in REQUEST_ITEMS:
         return request_table(req[iid])
     if iid == "E5":
-        return section_data(item) + alert_log(item)
-    return section_data(item)  # E1 · E2
+        return section_data(item, 1) + alert_log(item) if title == "재난문자·방송" else []
+    n = {"위험구역": 1, "잠재 위험구역": 2, "즉시 대피": 1, "사전대피": 2}.get(title)
+    return section_data(item, n)  # E1 · E2
 
 
 def _query_words(iid: str, title: str, by_id: dict[str, dict[str, Any]]) -> list[str]:

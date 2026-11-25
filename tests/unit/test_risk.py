@@ -61,7 +61,7 @@ def with_grade(gs, code, value):
 
 
 def test_weights_are_ai_hub_20_plus_scale_and_houses():
-    # risk-3(11/25): 지형위치지수 · 곡률 · 지형복잡도를 뺌, 지형복잡도 0.03은 경사도_up에 합침
+    # risk-3(11/25): 지형위치지수 · 곡률 · 지형복잡도를 뺌, 지형복잡도 0.03은 경사도에 합침
     assert len(FACTORS) == 22
     codes = {f[0] for f in FACTORS}
     assert not codes & {"curvature", "terrain_complexity", "topographic_position"}
@@ -243,7 +243,7 @@ def test_reasons_are_grouped():
     gs = svc.to_grades(res, base_at=BASE_AT, weather_source="FIXED", grid_reason=svc.NO_GRID)
     reasons = svc.unavailable_reasons(gs)
     grid = next(r for r in reasons if r.startswith(svc.NO_GRID))
-    assert "경사도_up" in grid and "수관피복률" in grid
+    assert "경사도" in grid and "수관피복률" in grid
     assert any(r.startswith(svc.FIXED_WEATHER) and "풍속" in r for r in reasons)
     assert len(reasons) == len({r.split(":")[0] for r in reasons})
 

@@ -117,7 +117,7 @@ CSV_VARIABLES: tuple[Variable, ...] = (
     ),
     Variable(
         "slope",
-        "경사도_up",
+        "경사도",  # CSV 이름 「경사도_up」 — 방향을 보지 않는 경사(11/25)
         "T",
         0.08,
         "°",
@@ -265,7 +265,7 @@ def _merged_weight(v: Variable) -> float:
     return round(v.weight + extra, 6)
 
 
-# 위험도에 쓰는 20개(가중치 = CSV 값, 경사도_up만 지형복잡도 0.03을 합친 0.11)
+# 위험도에 쓰는 20개(가중치 = CSV 값, 경사도만 지형복잡도 0.03을 합친 0.11)
 VARIABLES: tuple[Variable, ...] = tuple(
     replace(v, weight=_merged_weight(v)) for v in CSV_VARIABLES if v.key not in DROPPED_KEYS
 )

@@ -8,6 +8,7 @@
 from typing import Any
 
 from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
+from rules.items.names import label_of
 
 ID, NAME = "E5", "재난문자·방송 전파"
 CHANGED = ("new", "up")
@@ -16,7 +17,7 @@ CHANGED = ("new", "up")
 def e5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     """E5 입력을 만든다. 읍면이 없으면 None.
 
-    1. 읍면 줄을 옮긴다(`level` → `stage` 이름 바꾸기)
+    1. 읍면 줄을 옮긴다(`level` → `stage` 이름 바꾸기, 마을 이름에 대피 대상 행정리를 붙임)
     2. 상황: 처음 들어오거나 오른(new · up) 읍면이 있으면 changed, 아니면 unchanged
     3. finding 틀
     4. 관할 이름(송출 요청에 쓸 관할 시 · 도 등)을 옮긴다
@@ -24,12 +25,14 @@ def e5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     al = bundles["alerts"]
     if not al["areas"]:
         return None
+    v = bundles["villages"]
+    labels = {(r["emd"], r["name"]): label_of(r) for z in ("burning", "p5", "p8") for r in v[z]}
     areas = [  # 1
         {
             "sigungu": a["sigungu"],
             "emd": a["emd"],
             "stage": a["level"],
-            "villages": a["villages"],
+            "villages": [labels.get((a["emd"], n), n) for n in a["villages"]],
             "change": a["change"],
             "prev": a["prev"],
         }
@@ -54,9 +57,9 @@ def e5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def by_stage(areas: list[dict[str, Any]], stage: str) -> str:
-    """「안평면(괴산리·신월리) · 의성읍(철파리)」."""
-    return " · ".join(
-        f"{a['emd']}({'·'.join(a['villages'])})" for a in areas if a["stage"] == stage
+    """「안평면 괴산리(괴산1리) · 신월리, 의성읍 철파리」."""
+    return ", ".join(
+        f"{a['emd']} {' · '.join(a['villages'])}" for a in areas if a["stage"] == stage
     )
 
 

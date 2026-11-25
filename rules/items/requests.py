@@ -12,7 +12,7 @@
 
 from typing import Any
 
-from rules.items.names import label_of
+from rules.items.names import approaching, label_of
 
 HEAD = ["관련 기관", "세부 대상(기관명)", "대상", "시각", "항목"]
 # 줄(dict)의 키 — HEAD와 같은 순서. 화면 응답(PROP-02 · 03)이 이 순서로 칸을 펼친다
@@ -31,7 +31,11 @@ def _home(b: dict[str, Any]) -> dict[str, Any]:
 
 
 def _when(r: dict[str, Any]) -> str:
-    return "지금" if r["zone"] == "burning" else f"{r['from']} ~ {r['until']}"
+    if r["zone"] == "burning":
+        return "지금"
+    if approaching(r):
+        return f"{r['until']}에 불이 {r['approach_km']} km까지 접근"
+    return f"{r['from']} ~ {r['until']}"
 
 
 def _join(names) -> str:
@@ -107,7 +111,7 @@ def e_rows(b: dict[str, Any]) -> list[dict[str, str]]:
        「고속도로, 국도, 지방도 등 교통통제」)
     4. 치안(p.96): 위험구역 마을 → 관할 경찰서
     5. 재난방송(p.78) · 마을 조직(p.76): Go · Set 읍면. 마을 조직은 대피할 마을(주택 기준)의
-       이장 — 행정리가 닿으면 행정리 이름까지(「안평면 신월리 · 신안리(신안1리) 이장」, 11/19 R3)
+       이장 — 대피 대상 행정리 이름까지(「안평면 신월리 · 신안리(신안1리) 이장」, 11/19 R3)
     """
     rows = []
     vul, home = b["vulnerable"]["in_range"], _home(b)

@@ -29,11 +29,11 @@ def test_first_proposal_all_new():
     ]
     assert e5["status"] == "changed"
     assert e5["finding"] == (
-        "Go: 안평면(괴산리·신월리·신안리) · 의성읍(철파리) / Set: 옥산면(정자리)"
+        "Go: 안평면 괴산리 · 신월리 · 신안리, 의성읍 철파리 / Set: 옥산면 정자리"
         " / 바뀐 곳: 모두 새로 들어옴"
     )
     rows = sec["sections"][0]["blocks"][1]["rows"]
-    assert rows[1]["text"] == "**Set 단계**: 옥산면(정자리)"
+    assert rows[1]["text"] == "**Set 단계**: 옥산면 정자리"
     assert [b["id"] for b in sec["sections"][0]["blocks"] if b["type"] == "action"] == [
         "E5-a1",
         "E5-a2",

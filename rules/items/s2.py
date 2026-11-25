@@ -10,7 +10,7 @@ from typing import Any
 
 from rules.items.e1 import village_targets
 from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
-from rules.items.names import admin_names
+from rules.items.names import approach, label_of
 
 ID, NAME = "S2", "진화 우선지역·보호대상·시설 보호"
 COUNT_BASIS = "주용도 확인 건물 기준, 최소값"
@@ -20,12 +20,13 @@ UNKNOWN_FIXED = [{"field": "필요한 소방차 수와 배치 위치", "reason":
 def _life_village(r: dict[str, Any]) -> dict[str, Any]:
     f = r["field"]
     return {
-        "name": r["name"],
-        "admin_villages": admin_names(r),
+        "name": label_of(r),
+        "ri": r["name"],
         "emd": r["emd"],
         "zone": r["zone"],
         "from": r["from"],
         "by": r["until"],
+        **approach(r),
         "evac_order": f["evac_order"],
         "evacuated": f["evacuated"],
         "people": r["population"],

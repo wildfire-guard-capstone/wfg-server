@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from assistant import Assistant
+from assistant import Assistant, tools
 from assistant.answer import gather, merge, plan_rules
 from assistant.check import check_answer
 from assistant.context import DEPLOYED_LABELS, Context
@@ -87,7 +87,7 @@ def test_village_outside_range_and_shelters():
     r = box.run("village", "괴산리")
     assert any("안평초등학교" in f.value for f in r.facts)
     r = box.run("village", "도옥리")
-    assert any("8시간 예측 범위 밖" in f.value for f in r.facts)
+    assert any("대피 대상 아님" in f.value for f in r.facts)
     # 마을 목록에도 없는 이름: 예측 뒤에는 「위험 마을 목록에 없음」을 근거 있는 값으로(14:20 회차의 박곡리)
     out = box.run("village", "없는리")
     assert "목록에 없음" in out.facts[0].value
@@ -524,3 +524,17 @@ def test_gather_dedupes_and_puts_judged_chunks_first():
     ids = [c["chunk_id"] for c in src.chunks]
     assert ids.count("SM-p075-s02") == 1
     assert len({f.ref for _, f in src.facts}) == len(src.facts)
+
+
+def test_reach_says_distance_when_fire_only_approaches():
+    """11/25: 불이 닿지 않는 마을은 닿는 시각 대신 다가오는 거리로 말한다."""
+    near = {"zone": "p5", "from": None, "until": "19:00", "touched": False, "approach_km": 0.2}
+    assert tools.reach(near) == "불이 닿지 않고 19:00에 0.2 km까지 접근"
+    hit = {"zone": "p5", "from": "15:00", "until": "16:00", "touched": True}
+    assert tools.reach(hit) == "15:00~16:00"
+    row = {
+        "emd": "안평면",
+        "name": "박곡리",
+        "admin_villages": [{"name": "박곡1리"}, {"name": "박곡3리"}],
+    }
+    assert tools.vlabel(row) == "안평면 박곡리(박곡1리, 박곡3리)"

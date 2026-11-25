@@ -33,16 +33,16 @@ def test_example_1250_sun_night_and_alert():
     assert (jeongja["from"], jeongja["until"], jeongja["night"]) == ("19:50", "20:50", True)
     assert e2["status"] == "order_needed"
     assert e2["finding"] == (
-        "위험구역 4곳 797명 / 잠재 위험구역 1곳 114명: 정자리(밤에 닿음) · 일몰 18:38"
+        "위험구역 4곳 797명 / 잠재 위험구역 1곳 114명: 정자리 밤에 닿음 · 일몰 18:38"
     )
     # 목록은 사실만: 시각 구간 · 문자 발송 표시. 시한(「일몰 전」)은 쓰지 않음
     rows = sec["sections"][0]["blocks"][1]["rows"]
-    assert rows[0]["text"].startswith("지금(이미 닿음): **괴산리**(147명), **신월리**(128명)")
+    assert rows[0]["text"].startswith("지금(이미 닿음): **괴산리** 147명, **신월리** 128명")
     assert "신월리는 12:40 대피 문자가 나갔지만 대피 완료 보고가 없습니다." in rows[0]["text"]
-    assert rows[1]["text"] == "12:50 ~ 13:50 닿을 수 있음: **신안리**(181명)"
-    assert "(128명). 신월리는 12:40" in rows[0]["text"]
+    assert rows[1]["text"] == "12:50 ~ 13:50 닿을 수 있음: **신안리** 181명"
+    assert "128명. 신월리는 12:40" in rows[0]["text"]
     (jeongja_row,) = sec["sections"][0]["blocks"][3]["rows"]
-    assert jeongja_row["text"] == "19:50 ~ 20:50 닿을 수 있음(밤): **정자리**(114명)"
+    assert jeongja_row["text"] == "19:50 ~ 20:50 닿을 수 있음(밤): **정자리** 114명"
     assert [b["id"] for b in sec["sections"][0]["blocks"] if b["type"] == "action"] == [
         "E2-a1",
         "E2-a2",

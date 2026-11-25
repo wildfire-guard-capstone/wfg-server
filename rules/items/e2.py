@@ -4,15 +4,15 @@
 누구를(전 주민 / 고령자) 언제까지(「일몰 전」 등) 대피시킬지는 LLM이 p.75 · 76 · 79로 정한다
 (11/7 — 옛 R-08 대피 인원 · R-06 시한은 엔진에서 뺌). P8 안에 마을이 없으면 E2를 만들지 않는다.
 관할 경찰서 등 관할 이름은 `jurisdiction`으로 함께 넘긴다(11/19 평가 RE-R2).
-마을은 리 경계가 처음 닿는 P로 고른다(11/20 D1 — 경계 걸침도 대피 대상). 줄은 법정리이고 닿는
-행정리 이름을 붙인다(그 행정리 주민 전원이 대피 대상, 11/19 R3 D2).
+줄은 법정리 하나이고 이름에 대피 대상 행정리(불에 가까운 곳)를 붙인다 — 그 행정리 주민 전원이 대피
+대상이다(11/25). 불이 닿지 않는 마을은 닿는 구간 대신 다가오는 거리(`approach_km`)를 넘긴다.
 """
 
 from typing import Any
 
 from rules.items.e1 import village_targets
 from rules.items.jurisdiction import jurisdiction, jurisdiction_unknown
-from rules.items.names import admin_names, label_of
+from rules.items.names import approach, approaching, label_of
 
 ID, NAME = "E2", "대피 대상·순서·시점"
 
@@ -21,8 +21,7 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
     """마을 한 줄: 현장 입력을 펼쳐 옮긴다(옮겨 담기)."""
     f = r["field"]
     return {
-        "name": r["name"],
-        "admin_villages": admin_names(r),
+        "name": label_of(r),
         "emd": r["emd"],
         "zone": r["zone"],
         "people": r["population"],
@@ -31,6 +30,7 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
         "until": r["until"],
         "night": r["night"],
         "passed": r["passed"],
+        **approach(r),
         "evac_order": f["evac_order"],
         "evacuated": f["evacuated"],
         "pre_evac_done": f["pre_evac_done"],
@@ -81,13 +81,19 @@ def e2_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _finding(v: dict[str, Any], pre_evac: list[dict[str, Any]], sun: dict[str, Any]) -> str:
-    """「위험구역 7곳 1,523명 / 잠재 위험구역 1곳 114명: 정자리(밤에 닿음, 일몰 18:38)」."""
+    """「위험구역 7곳 1,523명 / 잠재 위험구역 1곳 114명: 정자리 밤에 닿음 · 일몰 18:38」."""
     t = v["totals"]
     parts = []
     if t["within_p5"]["count"]:
         parts.append(f"위험구역 {t['within_p5']['count']}곳 {t['within_p5']['population']:,}명")
     if pre_evac:
-        names = ", ".join(label_of(r) + ("(밤에 닿음)" if r["night"] else "") for r in pre_evac)
+        names = ", ".join(r["name"] + _night_mark(r) for r in pre_evac)
         parts.append(f"잠재 위험구역 {t['p8']['count']}곳 {t['p8']['population']:,}명: {names}")
     tail = f" · 일몰 {sun['sunset']['at']}" if any(r["night"] for r in pre_evac) else ""
     return " / ".join(parts) + tail
+
+
+def _night_mark(r: dict[str, Any]) -> str:
+    if not r["night"]:
+        return ""
+    return " 밤에 가까워짐" if approaching(r) else " 밤에 닿음"

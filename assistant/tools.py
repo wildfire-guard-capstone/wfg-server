@@ -25,6 +25,7 @@ from assistant.context import (
     paragraphs,
     slot_value,
 )
+from rules.items.names import village_label
 
 
 @dataclass(frozen=True)
@@ -89,15 +90,17 @@ def stage_name(s: str | None) -> str:
 
 ZONE = {
     "burning": "이미 닿음",
-    "p5": "5시간 안 도달(위험구역)",
-    "p8": "5~8시간 안 도달(잠재 위험구역)",
+    "p5": "위험구역(5시간 안)",
+    "p8": "잠재 위험구역(5~8시간)",
 }
 
 
 def reach(x: dict[str, Any]) -> str:
-    """도달 시각 표기: 지금(이미 닿음) · 15:50~16:50(밤)."""
+    """도달 시각 표기: 지금(이미 닿음) · 15:50~16:50(밤). 닿지 않고 다가오기만 하면 거리(11/25)."""
     if x.get("until") == "지금" or x.get("zone") == "burning":
         out = "지금(이미 닿음)"
+    elif x.get("touched") is False:
+        out = f"불이 닿지 않고 {x.get('until')}에 {num(x.get('approach_km'))} km까지 접근"
     elif x.get("from"):
         out = f"{x['from']}~{x.get('until')}"
     else:
@@ -123,15 +126,13 @@ def field_text(f: dict[str, Any]) -> str:
 
 
 def admin_of(v: dict[str, Any]) -> list[str]:
-    """마을 줄의 닿는 행정리 이름(main #58 RE-R3: 묶음 줄에 admin_villages). 없으면 빈 목록."""
+    """마을 줄의 대피 대상 행정리 이름(묶음 줄의 admin_villages, 11/25). 없으면 빈 목록."""
     return [a["name"] if isinstance(a, dict) else a for a in v.get("admin_villages") or []]
 
 
 def vlabel(v: dict[str, Any]) -> str:
-    """「안평면 신안리(신안1리)」 — 줄은 법정리, 닿는 행정리를 괄호로(rules.items.names.label_of와 같은 꼴, D2)."""
-    admin = admin_of(v)
-    name = f"{v['name']}({'·'.join(admin)})" if admin else v["name"]
-    return f"{v.get('emd', '')} {name}".strip()
+    """「안평면 신안리(신안1리)」 — 줄은 법정리, 대피 대상 행정리를 괄호로(제안서와 같은 꼴)."""
+    return f"{v.get('emd', '')} {village_label(v['name'], admin_of(v))}".strip()
 
 
 def plain(text: str) -> str:
@@ -553,9 +554,9 @@ class ToolBox:
             r.facts.append(
                 Fact(
                     "context.villages",
-                    "8시간 안에 닿는 마을",
+                    "대피 대상 마을",
                     "없음",
-                    "8시간 예측 범위 안에 닿는 마을은 없습니다.",
+                    "8시간 예측 범위에서 대피 대상 마을은 없습니다.",
                 )
             )
         for v in vs:
@@ -587,11 +588,11 @@ class ToolBox:
             key=lambda v: (order.get(v["zone"], 3), v.get("from") or v.get("until") or ""),
         )
         if vs:
-            names = " → ".join(f"{v.get('emd', '')} {v['name']}({reach(v)})" for v in waiting)
+            names = " → ".join(f"{vlabel(v)} {reach(v)}" for v in waiting)
             r.facts.append(
                 Fact(
                     "context.villages.waiting",
-                    "대피명령 · 대피 완료 보고가 아직 없는 마을(불이 닿는 순서)",
+                    "대피명령 · 대피 완료 보고가 아직 없는 마을(불이 가까워지는 순서)",
                     names or "없음(모든 마을에 대피명령 또는 대피 완료 보고가 있음)",
                 )
             )
@@ -667,25 +668,25 @@ class ToolBox:
                         ZONE.get(z["zone"], z["zone"]),
                     )
                 )
-                if admin_of(z):  # 닿는 행정리(줄 · 인구는 법정리, D2)
+                if admin_of(z):  # 대피 대상 행정리(인구는 집 수 비율로 나눈 추정, 11/25)
                     r.facts.append(
                         Fact(
                             f"context.villages.{z['zone']}[{vid}].admin_villages",
-                            f"{label} 가운데 불이 닿는 행정리",
-                            " · ".join(admin_of(z)) + "(인구는 법정리 전체 값)",
+                            f"{label} 가운데 대피 대상 행정리",
+                            " · ".join(admin_of(z)) + "(인구는 이 행정리 몫의 추정값)",
                         )
                     )
                 r.facts.append(
                     Fact(
                         f"context.villages.{z['zone']}[{vid}].reach",
-                        f"{label} 불이 닿는 예상 시각",
+                        f"{label} 불이 닿거나 가까워지는 예상 시각",
                         reach(z),
                     )
                 )
                 r.facts.append(
                     Fact(
                         f"context.villages.{z['zone']}[{vid}].population",
-                        f"{label} 인구",
+                        f"{label} 대피 대상 인구",
                         f"{num(z.get('population'))}명",
                     )
                 )
@@ -729,8 +730,8 @@ class ToolBox:
                     Fact(
                         f"villages[{vid}].zone",
                         f"{label} 도달 구분",
-                        "8시간 예측 범위 밖",
-                        f"{label}은(는) 8시간 예측 범위 밖이라 닿는 시각이 없습니다.",
+                        "이번 제안서의 대피 대상 아님",
+                        f"{label}은(는) 8시간 예측 범위 밖이거나 불에서 1 km 안에 마을이 없어 대피 대상이 아닙니다.",
                     )
                 )
             r.facts.append(
@@ -811,10 +812,10 @@ class ToolBox:
             r.facts.append(
                 Fact(
                     "context.vulnerable.in_range",
-                    "8시간 안 취약시설",
+                    "대피 대상 취약시설",
                     # 11-10 평가 5차: 값이 「없음」뿐이라 「취약시설은 정보가 없습니다」로 잘못 읽음
-                    "범위 안에 든 곳 없음(요양원 · 병원 · 학교 등 0곳)",
-                    "8시간 예측 범위 안에 취약시설은 없습니다.",
+                    "8시간 뒤 불에서 1 km 안에 든 곳 없음(요양원 · 병원 · 학교 등 0곳)",
+                    "8시간 뒤 불에서 1 km 안에 취약시설은 없습니다.",
                 )
             )
         pr = _b(ctx, "protected")

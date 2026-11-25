@@ -8,7 +8,7 @@ LLM에게 계산을 맡기면 틀리고, 검사(check.py)는 판정에 없는 �
     lines = for_item("E4", items_by_id)   # ["(가정) …", "지금 대피할 괴산리 · 신월리 275명 → …", …]
 
 - E4: 대피소(머물 곳 후보) 수용 비교 — 첫 후보를 여러 마을이 함께 쓰면 합계, 마을마다 첫 후보 · 두 후보 합계
-- E5: 마을 → 대피 장소 짝(첫 후보가 넉넉한 마을만). 첫 후보가 모자란 마을은 「아직 정할 수 없음」
+- E5: 마을 → 대피 장소 짝(첫 후보가 모자란 마을은 두 곳)
 - (11/19 없앰) E3 「거주자 이송을 맡을 기관」: 담당 지정은 규칙층이 아니라 제안 문단이 쓴다(재설계 D3)
 - E1: 구역별 마을 수(이미 불이 닿은 마을도 위험구역), S4: 투입 헬기 · 인력(S3 판정)
 규칙 엔진 E4 facts(shelters)를 읽는다. 구조가 바뀌면 여기와 tests/unit/test_agent_calc.py를 함께 고친다.
@@ -23,6 +23,10 @@ ASSUME = "(가정) 주민이 모두 대피소에 머문다고 보고, 첫 후보
 
 def _n(x: int) -> str:
     return f"{x:,}"
+
+
+def _who(village: str, people: int) -> str:
+    return f"{village} {_n(people)}명"
 
 
 def _join(names: list[str]) -> str:
@@ -85,7 +89,7 @@ def shelter_check(e4: dict[str, Any]) -> dict[str, Any]:
         v, p, hubs = r["village"], r["people"], _hubs(r)
         if not hubs:
             short.append(v)
-            lines.append(f"{josa(f'{v}({_n(p)}명)', '은', '는')} 머물 곳 후보가 없습니다.")
+            lines.append(f"{josa(_who(v, p), '은', '는')} 머물 곳 후보가 없습니다.")
             continue
         c1 = hubs[0]["capacity"]
         if p <= c1:
@@ -100,15 +104,15 @@ def shelter_check(e4: dict[str, Any]) -> dict[str, Any]:
             pair = f"{hubs[0]['name']}({_n(c1)}명) · {hubs[1]['name']}({_n(hubs[1]['capacity'])}명)"
             if p <= c12:
                 lines.append(
-                    f"{josa(f'{v}({_n(p)}명)', '은', '는')} 첫 후보만으로는 {_n(p - c1)}명이 모자라고, 두 후보 {josa(pair, '을', '를')} 합치면 {_n(c12)}명으로 들어갑니다."
+                    f"{josa(_who(v, p), '은', '는')} 첫 후보만으로는 {_n(p - c1)}명이 모자라고, 두 후보 {josa(pair, '을', '를')} 합치면 {_n(c12)}명으로 들어갑니다."
                 )
             else:
                 lines.append(
-                    f"{josa(f'{v}({_n(p)}명)', '은', '는')} 두 후보 {josa(pair, '을', '를')} 합쳐도 {_n(c12)}명이라 {_n(p - c12)}명이 모자랍니다."
+                    f"{josa(_who(v, p), '은', '는')} 두 후보 {josa(pair, '을', '를')} 합쳐도 {_n(c12)}명이라 {_n(p - c12)}명이 모자랍니다."
                 )
         else:
             lines.append(
-                f"{josa(f'{v}({_n(p)}명)', '은', '는')} 후보가 {hubs[0]['name']}({_n(c1)}명) 하나라 {_n(p - c1)}명이 모자랍니다."
+                f"{josa(_who(v, p), '은', '는')} 후보가 {hubs[0]['name']}({_n(c1)}명) 하나라 {_n(p - c1)}명이 모자랍니다."
             )
     if enough:
         lines.append(f"첫 후보 하나로 충분한 마을: {_join(enough)}.")
@@ -116,7 +120,7 @@ def shelter_check(e4: dict[str, Any]) -> dict[str, Any]:
     p8 = [r["village"] for r in rows if r.get("zone") == "p8"]
     if p8:
         lines.append(
-            f"잠재 위험구역(5 ~ 8시간) 마을은 {_join(p8)}뿐입니다. 나머지는 위험구역(이미 닿음 · 5시간 안)입니다."
+            f"잠재 위험구역(5 ~ 8시간) 마을은 {_join(p8)}뿐입니다. 나머지는 위험구역입니다."
         )
     pairs = {r["village"]: _hubs(r)[0]["name"] for r in rows if r["village"] in enough}
     return {"lines": ([ASSUME] + lines) if lines else [], "short": short, "pairs": pairs}
@@ -175,16 +179,17 @@ def shelter_table(e4: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def pairing_lines(e4: dict[str, Any]) -> list[str]:
-    """E5: 마을 → 대피 장소 짝(첫 후보가 넉넉한 마을만) + 장소를 아직 정할 수 없는 마을."""
-    chk = shelter_check(e4)
-    out = [f"{v} → {name}" for v, name in chk["pairs"].items()]
-    if chk["short"]:
-        out.append(
-            f"첫 후보 대피소가 모자라거나 없어 대피 장소를 아직 정할 수 없는 마을(E4): {_join(chk['short'])}"
-        )
-    return (
-        (["마을과 대피 장소의 짝(E4 판정의 첫 후보, 수용이 넉넉한 마을만):"] + out) if out else []
-    )
+    """E5: 마을 → 대피 장소 짝. 첫 후보가 넉넉하면 한 곳, 모자라면 두 곳(먼저 쓸 곳부터, 11/25).
+
+    전에는 첫 후보가 모자란 마을을 「장소를 아직 정할 수 없음」으로 넘겨서 E4는 대피소를 정하고
+    E5는 「정해지지 않았다」고 쓰는 모순이 생겼다(QA 4-8)."""
+    enough = shelter_check(e4)["pairs"]
+    out = []
+    for r in _rows(e4):
+        names = [h["name"] for h in _hubs(r)]
+        if names:
+            out.append(f"{r['village']} → {_join(names[: 1 if r['village'] in enough else 2])}")
+    return (["마을과 대피 장소의 짝(E4 후보, 먼저 쓸 곳부터):"] + out) if out else []
 
 
 def zone_lines(e1: dict[str, Any]) -> list[str]:
@@ -196,7 +201,7 @@ def zone_lines(e1: dict[str, Any]) -> list[str]:
     out = []
     if burning or p5:
         out.append(
-            f"위험구역(5시간 안, 이미 불이 닿은 마을 포함) {len(burning) + len(p5)}개 리: "
+            f"위험구역(5시간 안{', 이미 불이 닿은 마을 포함' if burning else ''}) {len(burning) + len(p5)}개 리: "
             + _join(burning + p5)
             + (f" (이미 닿음 {len(burning)}개 리: {_join(burning)})" if burning else "")
         )

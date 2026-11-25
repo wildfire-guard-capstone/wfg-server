@@ -15,7 +15,7 @@ from rules.items.jurisdiction import (
     jurisdiction,
     jurisdiction_unknown,
 )
-from rules.items.names import village_label
+from rules.items.names import approach, village_label
 
 ID, NAME = "E3", "취약시설 조치"
 
@@ -33,6 +33,7 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
         "until": r["until"],
         "night": r["night"],
         "passed": r["passed"],
+        **approach(r),
         "daytime_only": r["daytime_only"],
     }
 

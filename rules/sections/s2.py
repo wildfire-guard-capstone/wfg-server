@@ -6,30 +6,31 @@
 
 from typing import Any
 
-from rules.items.names import village_label
+from rules.items.names import approaching
 
 ANCHOR_IDS = {"p.77": "SM-p077", "p.79": "SM-p079", "p.95": "SM-p095"}
 NOTE_FIELDS = ("군사시설", "중요 산림자원")
 
 
 def _when(r: dict[str, Any]) -> str:
+    if approaching(r):
+        return f"{r['by']}에 불이 {r['approach_km']} km까지 접근"
     return "지금(이미 닿음)" if r["zone"] == "burning" else f"{r['from']} ~ {r['by']}"
 
 
 def _life_row(life: dict[str, Any]) -> str:
-    """① 인명: 시각 구간별 → 읍면별로 마을, 그 마을 취약시설은 「(○○ 주변)」(같은 값끼리 묶기)."""
+    """① 인명: 시각 구간별 → 읍면별로 마을, 그 마을 취약시설은 「○○ 주변」(같은 값끼리 묶기)."""
     by_village: dict[str, list[str]] = {}
     for f in life["vulnerable"]:
         by_village.setdefault(f["village"], []).append(f["name"])
     groups: dict[str, dict[str, list[str]]] = {}
     for r in life["villages"]:
-        name = village_label(r["name"], r["admin_villages"])
-        name += " (대피 완료)" if r["evacuated"] else ""
-        if r["name"] in by_village:
-            name += f"({'·'.join(by_village[r['name']])} 주변)"
+        name = r["name"] + (" (대피 완료)" if r["evacuated"] else "")
+        if r["ri"] in by_village:
+            name += f" {'·'.join(by_village[r['ri']])} 주변"
         groups.setdefault(_when(r), {}).setdefault(r["emd"], []).append(name)
     body = ", ".join(
-        f"{when} " + ", ".join(f"{emd} {'·'.join(names)}" for emd, names in emds.items())
+        f"{when} " + ", ".join(f"{emd} {' · '.join(names)}" for emd, names in emds.items())
         for when, emds in groups.items()
     )
     return f"① **인명**: {body}"

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.prompt import CATEGORIES, FACT_STEPS, STEP_NAMES
+from agent.situate import josa
 
 TIME = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)")
 NUM = re.compile(r"(?<![A-Za-z\d.])\d+(?:,\d{3})*(?:\.\d+)?")
@@ -67,12 +68,16 @@ FORBID = {
     "E4": [
         (re.compile(r"\d[\d,]*\s*명을?\s*(?:배정|수용하)"), "대피소별 배정 인원은 쓰지 마십시오"),
         (re.compile(r"대피\s*경로|이동\s*경로|경로를 따라"), "대피 경로는 쓰지 마십시오"),
+        (
+            re.compile(r"배정|분산|나누어\s?(?:수용|배치|보내)"),
+            "사람을 나누어 배정하지 말고, 마을마다 먼저 쓸 대피소와 모자랄 때 쓸 다음 대피소의 이름만 쓰십시오",
+        ),
     ],
     # 「○○리 주민은 ○○학교로」 같은 마을–대피 장소 짝(11/17 사용자 결정)은 문안이 아니다 — strip_pairs가 먼저 지운다
     "E5": [(re.compile(r"[「“\"][^」”\"]{12,}[」”\"]|문안"), "재난문자 문안은 쓰지 마십시오")],
 }
 # 마을 이름: 법정리(「신안리」) · 행정리(「신안1리」) · 법정리(닿는 행정리)(「신안리(신안1리)」, 11/19 R3)
-_VNAME = r"[가-힣]+\d{0,2}리(?:\([가-힣\d·\s]+\))?"
+_VNAME = r"[가-힣]+\d{0,2}리(?:\([가-힣\d·,\s]+\))?"
 _PAIR = rf"{_VNAME}(?:\s?·\s?{_VNAME})*\s?주민은\s?[^,」”\"]+?(?:으로|로)"
 PAIR_QUOTE = re.compile(rf"[「“\"]\s?{_PAIR}(?:\s?,\s?{_PAIR})*\s?[」”\"]")
 
@@ -493,6 +498,9 @@ def _short_names(name: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+_VILLAGE = re.compile(r"[가-힣\d]+리(?:\([^)]*\))?")
+
+
 def pair_table(items: list[dict[str, Any]], now_at: str = "") -> dict[str, Any]:
     """모든 항목의 판정 facts에서 대상 → 시각표를 만든다(항목끼리 같은 대상은 합친다).
     now_at = 기준 시각(HH:MM): 이미 닿은(「지금」) 대상의 시작으로 친다."""
@@ -521,10 +529,10 @@ def pair_table(items: list[dict[str, Any]], now_at: str = "") -> dict[str, Any]:
                 label, aliases = (f"{x['road']} {sec} 구간" if sec else x["road"]), [x["road"]]
             elif "송전선" in name:
                 key, label, aliases = ("power", name), name, ["송전선"]
-            elif name and (x.get("kind") or not name.endswith("리")):
+            elif name and (x.get("kind") or not _VILLAGE.fullmatch(name)):
                 key, label, aliases = ("facility", name), name, _short_names(name)
             elif name or isinstance(x.get("village"), str):
-                v = name or x["village"]
+                v = (name or x["village"]).partition("(")[0]  # 「괴산리(괴산1리)」 → 괴산리
                 key, label, aliases = ("village", v), v, [v]
             else:
                 key = None
@@ -641,6 +649,54 @@ def pair_errors(text: str, table: dict[str, Any] | None) -> list[str]:
                         f"{m.group(0)}은 「{labels}」의 {how} — 판정: {spans}. 시각은 판정에서 그 대상과 함께 적힌 짝대로 쓰십시오"
                     )
     return list(dict.fromkeys(errs))
+
+
+# ── 닿지 않고 가까워지기만 하는 마을 · 시설(11/25) ───────────────────────────
+_TOUCH = re.compile(r"닿(?!지)|도달\s?(?:가능|할|하|될|예상)")
+_FIRE_TOUCH = re.compile(r"불(?:이|의)?\s(?:이미\s)?(?:닿(?!지)|도달)")
+EVAC_ITEMS = (
+    "E1",
+    "E2",
+    "E4",
+    "E5",
+)  # 마을 대피 항목(모든 마을이 가까워지기만 하면 이름 없이 써도 틀림)
+
+
+def approach_table(by_id: dict[str, dict[str, Any]]) -> tuple[dict[str, str], bool]:
+    """E2 · E3 판정에서 불이 닿지 않는(touched 거짓) 마을(법정리) · 시설 → 「19:00에 0.2 km까지」.
+    둘째 값 = 대피 마을이 모두 그런가."""
+
+    def rows(iid: str) -> list[dict[str, Any]]:
+        f = (by_id.get(iid) or {}).get("facts") or {}
+        return [*(f.get("immediate") or []), *(f.get("pre_evac") or [])]
+
+    out = {
+        r["name"].partition("(")[0]: f"{r['until']}에 {r['approach_km']} km까지"
+        for r in rows("E2") + rows("E3")
+        if r.get("touched") is False
+    }
+    villages = rows("E2")
+    return out, bool(villages) and all(r.get("touched") is False for r in villages)
+
+
+def touch_errors(text: str, approaching: dict[str, str], all_villages: bool = False) -> list[str]:
+    """닿지 않는 마을 · 시설에 「불이 닿는다 · 도달한다」고 쓴 문장 — 다시 쓰게만 한다(SOFT).
+    all_villages = 대피 항목이고 대피 마을이 모두 가까워지기만 하나(이름을 안 쓴 문장도 본다)."""
+    for s in split_sentences(text or ""):
+        hit = [(n, at) for n, at in approaching.items() if n in s] if _TOUCH.search(s) else []
+        if hit:
+            name, at = hit[0]
+            return [
+                SOFT
+                + f"{josa(name, '은', '는')} 불이 닿지 않고 {at} 가까워집니다. 「닿는다 · 도달한다」 대신 「불이 {at} 가까워진다」는 뜻으로 쓰십시오"
+            ]
+        if all_villages and _FIRE_TOUCH.search(s):
+            each = ", ".join(f"{n} {at}" for n, at in approaching.items())
+            return [
+                SOFT
+                + f"대피 마을에는 불이 닿지 않고 가까워집니다({each}). 「닿는다 · 도달한다」 대신 이 값으로 쓰십시오"
+            ]
+    return []
 
 
 # ── 자료 값 언급(11/18: 다시 쓰기가 이름 · 값을 지운 시도를 고르지 않게) ──────────
@@ -1163,7 +1219,7 @@ def reason_errors(
 # 항목 범위 밖 할 일(11/24 bluf-r4 S2: 「…주민을 우선 대피시키고 … 거주자의 대피를 즉시 지원하십시오」) — 다시 쓰게만 한다(SOFT)
 SCOPE_SOFT = {
     "S2": (
-        re.compile(r"대피시키|대피를\s?(?:지원|완료|실시)|대피하도록"),
+        re.compile(r"대피시키|대피를\s?(?:지원|완료|실시)|대피하도록|대피\s?명령을"),
         "주민 · 거주자 대피는 E2 · E3이 다룹니다. 이 항목에는 진화 순서와 시설 주변 진화 배치만 쓰십시오",
     ),
 }

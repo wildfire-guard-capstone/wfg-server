@@ -30,7 +30,7 @@ def test_villages_grouped_by_zone_with_time_window():
     # E1: 판정 없이 고르기
     assert e1["status"] == "risk_zone"
     assert e1["finding"] == (
-        "위험구역 4곳: 안평면 괴산리(이미 닿음)·신월리(이미 닿음)·신안리, 의성읍 철파리"
+        "위험구역 4곳: 이미 닿음 안평면 괴산리 · 신월리, 5시간 안 안평면 신안리, 의성읍 철파리"
         " / 잠재 위험구역 1곳: 옥산면 정자리"
     )
     rows = sec["sections"][0]["blocks"][1]["rows"]

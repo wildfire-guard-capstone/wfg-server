@@ -50,18 +50,19 @@ def test_shelter_check_matches_document_example():
         in text
     )
     assert (
-        "용기리(2,623명)는 두 후보 의성군립도서관(62명) · 안계고등학교(726명)를 합쳐도 788명이라 1,835명이 모자랍니다."
+        "용기리 2,623명은 두 후보 의성군립도서관(62명) · 안계고등학교(726명)를 합쳐도 788명이라 1,835명이 모자랍니다."
         in text
     )
     assert "첫 후보 하나로 충분한 마을: 양곡리." in text
     assert "빈리" not in text
 
 
-def test_pairing_lines_only_for_villages_with_enough_room():
+def test_pairing_lines_give_one_place_or_two_when_first_is_short():
+    """11/25: E4가 정한 대피소를 E5도 그대로 쓴다(「대피 장소 미정」 모순, QA 4-8b)."""
     lines = calc.for_item("E5", {"E4": E4})
     assert "양곡리 → 의성국민체육센터" in lines
-    assert lines[-1].endswith("괴산리 · 신월리 · 용기리 · 신안리 · 석탑리 · 박곡리")
-    assert not any("괴산리 →" in ln for ln in lines)
+    assert "괴산리 → 안평초등학교 · 봉양중학교" in lines
+    assert len(lines) == 8 and "정할 수 없" not in "".join(lines)
 
 
 def test_e3_gets_no_transfer_agency_any_more():

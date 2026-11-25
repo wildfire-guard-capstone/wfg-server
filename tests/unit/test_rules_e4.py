@@ -50,7 +50,7 @@ def test_shelter_candidates_per_village():
     ]
     assert bundles["shelters"]["counts"]["in_p8"] == 2  # 경로당A · 학교A (모텔은 후보가 아님)
     rows = sec["sections"][0]["blocks"][1]["rows"]
-    assert rows[0]["text"].startswith("**괴산리**(지금(이미 닿음), 147명): 먼저 모일 곳 경로당B(")
+    assert rows[0]["text"].startswith("**괴산리** 147명 · 지금(이미 닿음): 먼저 모일 곳 경로당B(")
     assert "학교B(" in rows[0]["text"] and "수용 인원 모름" in rows[0]["text"]
 
 

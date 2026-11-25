@@ -6,11 +6,16 @@
 하나도 안 맞으면 5등급이다.
 
 CSV 25개 변수 중 경사도_down(0.03) · 도로 및 교통(접근성)(0.03)은 뺐다(10/6 결정 · 7주차-1차 회의).
-남은 23개의 CSV 가중치 합은 0.94이고, R은 값이 있는 변수의 가중치 합으로 나눈다
-(위험도-정리.md 「계산식」).
+남은 23개(`CSV_VARIABLES`, 가중치 합 0.94) 중 3개를 더 뺐다
+(11/25, `DROPPED_KEYS`):
+지형위치지수 · 곡률은 P5 면적 평균이 정의상 늘 3 근처라 R을 움직이지 못하고,
+지형복잡도는 P5 평균에서 경사도와 같은 정보다(순위상관 0.99) —
+가중치 0.03은 경사도에 합쳤다(0.08 → 0.11).
+쓰는 20개(`VARIABLES`)의 가중치 합은 0.88이고, R은 값이 있는 변수의 가중치 합으로 나눈다
+(위험도-정리.md 「계산식」). 지역 격자는 예전처럼 13개 띠를 모두 만든다(`GRID_KEYS`).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -35,7 +40,7 @@ class Variable:
     csv: str  # CSV 구간 글자(문서 · 화면용)
 
 
-VARIABLES: tuple[Variable, ...] = (
+CSV_VARIABLES: tuple[Variable, ...] = (
     # ── 기상(W) ── 매번 바뀌는 값
     Variable(
         "temp",
@@ -244,11 +249,34 @@ VARIABLES: tuple[Variable, ...] = (
     ),
 )
 
-BY_KEY: dict[str, Variable] = {v.key: v for v in VARIABLES}
-STATIC_KEYS = (
+# ── 11/25 뺀 변수(위험도-정리 「변수를 줄인 이유」) ──
+# 의성 시연 범위 88개 · P5 크기 블록 300개 실험.
+# 지형위치지수 · 곡률: 높은 칸 · 낮은 칸, 볼록 · 오목이 P5 안에서 상쇄돼 평균이 늘 3 근처
+# (블록 간 표준편차 0.01 · 0.06)
+# 지형복잡도: 210 m 안 고도 차라 경사가 급하면 같이 커짐 — P5 평균에서 경사도와 순위상관 0.99
+DROPPED_KEYS = ("curvature", "tpi", "complexity")
+# 뺀 변수의 가중치를 받는 변수(같은 정보라 지형 비중은 그대로)
+MERGED_INTO = {"complexity": "slope"}
+CSV_BY_KEY: dict[str, Variable] = {v.key: v for v in CSV_VARIABLES}
+
+
+def _merged_weight(v: Variable) -> float:
+    extra = sum(CSV_BY_KEY[k].weight for k, into in MERGED_INTO.items() if into == v.key)
+    return round(v.weight + extra, 6)
+
+
+# 위험도에 쓰는 20개(가중치 = CSV 값, 경사도_up만 지형복잡도 0.03을 합친 0.11)
+VARIABLES: tuple[Variable, ...] = tuple(
+    replace(v, weight=_merged_weight(v)) for v in CSV_VARIABLES if v.key not in DROPPED_KEYS
+)
+# 등급 매기기(grade)는 뺀 변수도 된다 — 지역 격자는 13개 띠를 그대로 만든다
+BY_KEY: dict[str, Variable] = {**CSV_BY_KEY, **{v.key: v for v in VARIABLES}}
+GRID_KEYS = (
     "elevation", "slope", "aspect", "curvature", "tpi", "water_dist", "complexity",
     "fuel_type", "fuel_load", "fuel_depth", "stand_age", "canopy_height", "canopy_cover",
 )  # fmt: skip
+# 위험도에 쓰는 지역 격자 변수 10개
+STATIC_KEYS = tuple(k for k in GRID_KEYS if k not in DROPPED_KEYS)
 WEATHER_KEYS = ("temp", "precip", "wind", "humidity", "pressure", "ground_temp", "rain_7d")
 AXES = {"W": "기상", "T": "지형", "F": "연료", "S": "규모", "I": "인프라", "E": "노출"}
 
@@ -293,7 +321,8 @@ def houses_grade(n: float) -> float:
     return float(min(5.0, max(1.0, 1.0 + np.log10(1.0 + max(n, 0.0)))))
 
 
-CSV_WEIGHT_SUM = round(sum(v.weight for v in VARIABLES), 6)  # 0.94
+# 0.88(뺀 3개 0.09 중 0.03은 경사도에 합침)
+CSV_WEIGHT_SUM = round(sum(v.weight for v in VARIABLES), 6)
 
 # 수종종류 등급(CSV 순서). 연료가 없는 칸(시가지 · 논밭 · 물 · 나지)은 1등급(README F-1)
 FUEL_TYPE_GRADE = {"활엽수림": 1, "혼효림": 2, "관목림": 3, "침엽수림": 4, "초지": 5, "비연소": 1}

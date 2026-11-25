@@ -21,7 +21,7 @@ import numpy as np
 
 from risk import fuel as fuel_mod
 from risk import terrain
-from risk.criteria import STATIC_KEYS, aspect_grade, grade
+from risk.criteria import GRID_KEYS, aspect_grade, grade
 from risk.overlap import Grid
 
 
@@ -66,7 +66,7 @@ def build_static_grid(
         "canopy_cover": cover,
     }
     grades = {}
-    for k in STATIC_KEYS:
+    for k in GRID_KEYS:
         if k == "aspect":
             grades[k] = aspect_grade(aspect, flat)
         elif k == "fuel_type":
@@ -95,28 +95,30 @@ def save(sg: StaticGrid, folder: Path) -> Path:
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     g = sg.grid
+    # 13개 띠를 모두 저장(뺀 변수도 계산 · 비교용으로 남김). 일부만 가진 격자(시험)는 있는 띠만
+    bands = [k for k in GRID_KEYS if k in sg.grades]
     prof = dict(
         driver="GTiff",
         height=g.h,
         width=g.w,
-        count=len(STATIC_KEYS),
+        count=len(bands),
         crs="EPSG:5179",
         transform=from_origin(g.x0, g.y0, g.cs, g.cs),
         compress="deflate",
     )
     with rasterio.open(folder / "grades.tif", "w", **prof, dtype="uint8", nodata=0) as o:
-        for i, k in enumerate(STATIC_KEYS, 1):
+        for i, k in enumerate(bands, 1):
             a = sg.grades[k]
             o.write(np.where(np.isnan(a), 0, np.round(a)).astype("uint8"), i)
             o.set_band_description(i, k)
     with rasterio.open(folder / "values.tif", "w", **prof, dtype="float32", nodata=np.nan) as o:
-        for i, k in enumerate(STATIC_KEYS, 1):
+        for i, k in enumerate(bands, 1):
             o.write(sg.values[k].astype("float32"), i)
             o.set_band_description(i, k)
     meta = {
         "crs": "EPSG:5179",
         "grid": {"x0": g.x0, "y0": g.y0, "cs": g.cs, "h": g.h, "w": g.w},
-        "bands": list(STATIC_KEYS),
+        "bands": bands,
         **sg.meta,
     }
     (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), "utf-8")

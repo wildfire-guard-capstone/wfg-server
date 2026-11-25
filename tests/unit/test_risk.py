@@ -60,16 +60,20 @@ def with_grade(gs, code, value):
     return [FactorGrade(g.code, None, value, None, None, None) if g.code == code else g for g in gs]
 
 
-def test_weights_are_ai_hub_23_plus_scale_and_houses():
-    assert len(FACTORS) == 25
-    assert sum(f[3] for f in FACTORS) == pytest.approx(1.14)
-    assert sum(f[3] for f in FACTORS if f[2] in svc.HAZARD_AXES) == pytest.approx(1.02)
+def test_weights_are_ai_hub_20_plus_scale_and_houses():
+    # risk-3(11/25): 지형위치지수 · 곡률 · 지형복잡도를 뺌, 지형복잡도 0.03은 경사도_up에 합침
+    assert len(FACTORS) == 22
+    codes = {f[0] for f in FACTORS}
+    assert not codes & {"curvature", "terrain_complexity", "topographic_position"}
+    assert dict((f[0], f[3]) for f in FACTORS)["slope_up"] == pytest.approx(0.11)
+    assert sum(f[3] for f in FACTORS) == pytest.approx(1.08)
+    assert sum(f[3] for f in FACTORS if f[2] in svc.HAZARD_AXES) == pytest.approx(0.96)
     assert sum(f[3] for f in FACTORS if f[2] in svc.EXPOSURE_AXES) == pytest.approx(0.12)
 
 
 def test_codes_map_to_risk_variables_with_the_same_weights():
     assert set(KEY_OF) == {f[0] for f in FACTORS}
-    assert len(set(KEY_OF.values())) == 25
+    assert len(set(KEY_OF.values())) == 22
     for code, _, _, weight in FACTORS:
         var = BY_KEY.get(KEY_OF[code]) or EXPOSURE_BY_KEY[KEY_OF[code]]
         assert var.weight == pytest.approx(weight), code
@@ -79,7 +83,7 @@ def test_all_same_grade_gives_that_score_and_contributions_add_up_per_group():
     r = aggregate(grades(4))
     assert r["status"] == "READY" and r["score"] == 4.0
     assert r["hazard"] == 4.0 and r["exposure"] == 4.0
-    assert r["included_weight_sum"] == pytest.approx(1.14)
+    assert r["included_weight_sum"] == pytest.approx(1.08)
     for axes, total in ((svc.HAZARD_AXES, r["hazard"]), (svc.EXPOSURE_AXES, r["exposure"])):
         part = sum(f["contribution"] for f in r["factors"] if f["axis"] in axes)
         assert part == pytest.approx(total, abs=1e-3)
@@ -106,10 +110,10 @@ def test_without_exposure_r_is_hazard():
 
 def test_missing_variables_leave_the_denominator():
     g = grades(5)
-    g[0] = FactorGrade("slope_up", None, None, "자료 없음", None, None)  # 가중치 0.08
+    g[0] = FactorGrade("slope_up", None, None, "자료 없음", None, None)  # 0.11
     r = aggregate(g)
     assert r["status"] == "PARTIAL" and r["score"] == 5.0  # 빠진 가중치로 나누지 않는다
-    assert r["included_weight_sum"] == pytest.approx(1.06)
+    assert r["included_weight_sum"] == pytest.approx(0.97)
     slope = next(f for f in r["factors"] if f["code"] == "slope_up")
     assert slope["included"] is False and slope["contribution"] is None
 

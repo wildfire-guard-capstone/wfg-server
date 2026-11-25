@@ -9,7 +9,16 @@ from shapely.geometry import Point, box
 from risk import fuel, terrain
 from risk import grid as grid_mod
 from risk.compute import RiskInputs, compute_risk
-from risk.criteria import CSV_WEIGHT_SUM, STATIC_KEYS, VARIABLES, aspect_grade, grade
+from risk.criteria import (
+    CSV_VARIABLES,
+    CSV_WEIGHT_SUM,
+    DROPPED_KEYS,
+    GRID_KEYS,
+    STATIC_KEYS,
+    VARIABLES,
+    aspect_grade,
+    grade,
+)
 from risk.grid import StaticGrid
 from risk.overlap import Grid, grid_weights, weighted_mean, zone_sum
 from risk.weather import GridField, dead_fuel_moisture, emc_simard, summarize
@@ -23,8 +32,9 @@ def g1(key, v):
 
 
 def test_weights_and_variable_count():
-    assert len(VARIABLES) == 23
-    assert CSV_WEIGHT_SUM == pytest.approx(0.94)
+    assert len(CSV_VARIABLES) == 23 and len(VARIABLES) == 20  # 11/25 지형 3개 뺌
+    assert CSV_WEIGHT_SUM == pytest.approx(0.88)
+    assert {v.key for v in VARIABLES}.isdisjoint(DROPPED_KEYS) and len(GRID_KEYS) == 13
 
 
 @pytest.mark.parametrize(
@@ -263,9 +273,9 @@ def test_compute_risk_weighted_mean_and_missing():
     assert res.score == pytest.approx(expect)
     assert sum(f.weight for f in res.factors) == pytest.approx(1.0)
     assert used["vulnerable"] == 3 and used["station_dist"] == 2
-    assert res.used_weight_csv == pytest.approx(0.94 - 0.06)
+    assert res.used_weight_csv == pytest.approx(0.88 - 0.06)
     d = res.to_dict()
-    assert d["score"] == round(res.score, 2) and len(d["factors"]) == 23
+    assert d["score"] == round(res.score, 2) and len(d["factors"]) == 20
 
 
 def test_compute_risk_without_static_grid():
@@ -278,7 +288,7 @@ def test_compute_risk_without_static_grid():
             combine="mean",
         )
     )
-    assert res.score is None and len(res.missing) == 23
+    assert res.score is None and len(res.missing) == 20
     # 규모(면적)는 지역 격자 없이도 값이 있다. 주택 좌표 · 구역 · 소방서가 없으면 X 없음 → R = H
     res = compute_risk(RiskInputs(p5=box(0, 0, 10, 10), perimeter=box(0, 0, 1, 1), static=None))
     assert res.hazard == pytest.approx(1.0) and res.exposure is None and res.score == res.hazard

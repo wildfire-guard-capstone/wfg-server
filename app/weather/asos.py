@@ -42,6 +42,7 @@ def parse(text: str) -> dict[datetime, dict[str, float]]:
 SURFACE_COLS = {"pressure": 8, "rn": 15, "ground_temp": 36}
 RAIN_HOURS = 168  # 7일 누적 강수량 = 0시까지 지난 168시간
 MIN_ROWS = 160  # 168시간 중 이만큼은 와야 합한다(관측이 끊긴 날을 「비 없음」으로 보지 않게)
+LATEST_LAG_H = 3  # 0시 관측이 아직 없으면 이 시간 안의 가장 최근 관측을 쓴다(11/25)
 
 
 def surface(
@@ -52,31 +53,50 @@ def surface(
 ) -> dict[str, float | str | None]:
     """0시(base_at을 내린 정시)의 해면기압 · 지면온도와 지난 7일 강수 합 — 호출 한 번.
 
-    강수는 11 ~ 3월에 3시간 강수라 그대로 더하면 된다(4 ~ 10월은 1시간). 값 없는 시각은 0으로 본다
-    (비가 없어도 결측으로 온다). 0시 값이 결측이면 None. 줄이 너무 적으면 WeatherUnavailable.
+    시간자료는 늦게 올라오기도 해서(11/25 실시간 예측: 화선 30분 뒤 예측에서 못 받음) 0시 줄이
+    아직 없거나 값이 결측이면 LATEST_LAG_H시간 안의 가장 최근 관측을 쓴다. `at`은 그 관측 시각이다.
+    7일 강수는 받은 마지막 시각까지 168시간 합. 강수는 11 ~ 3월에 3시간 강수라 그대로 더하면 된다
+    (4 ~ 10월은 1시간). 값 없는 시각은 0으로 본다(비가 없어도 결측으로 온다).
+    줄이 너무 적으면 WeatherUnavailable.
     """
     t0 = base_at.astimezone(KST).replace(minute=0, second=0, microsecond=0)
-    start = t0 - timedelta(hours=RAIN_HOURS - 1)
+    earliest = t0 - timedelta(hours=LATEST_LAG_H)
+    start = earliest - timedelta(hours=RAIN_HOURS - 1)
     url = f"{URL}?tm1={start:%Y%m%d%H%M}&tm2={t0:%Y%m%d%H%M}&stn={station}&help=0"
     rows: dict[datetime, list[str]] = {}
     for line in get_text(f"{url}&authKey={auth_key}").splitlines():
         cols = line.split()
         if cols and cols[0].isdigit() and len(cols) > SURFACE_COLS["ground_temp"]:
             rows[datetime.strptime(cols[0], "%Y%m%d%H%M").replace(tzinfo=KST)] = cols
-    rows = {t: c for t, c in rows.items() if start <= t <= t0}
-    if len(rows) < MIN_ROWS:
-        raise WeatherUnavailable(f"지점 {station} 지상관측이 {len(rows)}시간뿐입니다({RAIN_HOURS})")
+    recent = [t for t in rows if earliest <= t <= t0]
+    if not recent:
+        raise WeatherUnavailable(
+            f"지점 {station} 지상관측이 {earliest:%H}~{t0:%H}시에 없습니다(아직 안 올라옴)"
+        )
+    last = max(recent)
+    week = {t: c for t, c in rows.items() if last - timedelta(hours=RAIN_HOURS - 1) <= t <= last}
+    if len(week) < MIN_ROWS:
+        raise WeatherUnavailable(f"지점 {station} 지상관측이 {len(week)}시간뿐입니다({RAIN_HOURS})")
 
     def value(t: datetime, key: str, missing: float) -> float | None:
         v = float(rows[t][SURFACE_COLS[key]]) if t in rows else missing
         return None if v <= missing else v
 
-    rain = sum(value(t, "rn", -0.1) or 0.0 for t in rows)
+    def latest(key: str, missing: float) -> tuple[float | None, datetime | None]:
+        for t in sorted(recent, reverse=True):  # 0시부터 거꾸로, 값이 있는 첫 시각
+            if (v := value(t, key, missing)) is not None:
+                return v, t
+        return None, None
+
+    pressure, p_at = latest("pressure", 0.0)  # 결측 -9
+    ground, g_at = latest("ground_temp", -90.0)  # 결측 -99(영하 9도는 값)
+    used = [t for t in (p_at, g_at) if t is not None]
+    rain = sum(value(t, "rn", -0.1) or 0.0 for t in week)
     return {
         "station": station,
-        "at": t0.isoformat(),
-        "pressure": value(t0, "pressure", 0.0),  # 결측 -9
-        "ground_temp": value(t0, "ground_temp", -90.0),  # 결측 -99(영하 9도는 값)
+        "at": (min(used) if used else last).isoformat(),
+        "pressure": pressure,
+        "ground_temp": ground,
         "rain_7d": round(rain, 1),
     }
 

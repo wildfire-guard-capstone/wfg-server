@@ -20,7 +20,8 @@ risk.criteria.DROPPED_KEYS) — 지형복잡도 가중치 0.03은 경사도_up�
 - 지형 4 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
   읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
 - 기압 · 지면온도 · 7일 누적 강수량: 예측할 때 받아 둔 지상관측(predictions.weather.surface, ASOS).
-  기압 · 지면온도는 예보가 없어 화선 관측 시각의 정시 값 하나로 0 ~ 5시간을 대신한다(위험도-정리)
+  기압 · 지면온도는 예보가 없어 화선 관측 시각의 정시 값 하나로 0 ~ 5시간을 대신한다(위험도-정리).
+  그 정시 자료가 아직 안 올라왔으면 3시간 안의 가장 최근 관측(value_at = 그 관측 시각, 11/25)
 - 연료 수분함량: 예측(ELMFIRE)이 쓴 1시간 연료 수분 m1(발화점 칸, hours[].fuel_moisture_1h).
   저장되지 않은 예측은 저장된 기온 · 습도 · 강수로 계산(risk.weather.dead_fuel_moisture)
 못 구한 변수는 등급 null + 이유로 보이고, 그 묶음 안 남은 변수의 가중치로 다시 나눈다
@@ -326,6 +327,7 @@ def to_grades(
     base_at: datetime | None,
     weather_source: str | None,
     grid_reason: str | None,
+    surface_at: datetime | None = None,
 ) -> list[FactorGrade]:
     """risk 결과(변수 키) → FACTORS 순서의 FactorGrade 22개."""
     by_key = {f.key: f for f in res.factors}
@@ -345,7 +347,7 @@ def to_grades(
                 round(float(f.grade), 2),
                 reason,
                 f.source or None,
-                base_at if timed or key in SURFACE_KEYS else None,
+                (surface_at or base_at) if key in SURFACE_KEYS else (base_at if timed else None),
             )
         )
     return out
@@ -355,11 +357,13 @@ def grade_factors(session: Session, prediction: Prediction) -> list[FactorGrade]
     """변수 22개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
     inputs, grid_reason = build_inputs(session, prediction)
     res = calc.compute_risk(inputs)
+    seen_at = ((prediction.weather or {}).get(SURFACE) or {}).get("at")
     return to_grades(
         res,
         base_at=prediction.base_at,
         weather_source=(prediction.weather or {}).get("source"),
         grid_reason=grid_reason,
+        surface_at=datetime.fromisoformat(seen_at) if seen_at else None,  # 0시가 늦으면 앞 시각
     )
 
 

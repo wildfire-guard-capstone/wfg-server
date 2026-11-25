@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import FirePerimeter, Incident, Prediction, Proposal, ProposalItem
 from app.db.models.enums import ItemAxis, ItemCategory, ProposalTrigger, ResponseStage
-from app.propose.base import LlmInput, WrittenItem
+from app.propose.base import LlmInput, PrevItems, WrittenItem
 from app.repositories import event_logs, incidents
 from app.services.proposal_compare import changed_count, paragraphs
 from rules.core.stage import LABEL
@@ -37,6 +37,37 @@ def items_of(session: Session, proposal_id: int) -> list[ProposalItem]:
     return list(
         session.scalars(select(ProposalItem).where(ProposalItem.proposal_id == proposal_id))
     )
+
+
+def reusable_items(session: Session, prediction_id: int) -> PrevItems:
+    """같은 예측의 직전 제안서 항목(작성기 prev). 없으면 빈 묶음 — 모두 새로 쓴다."""
+    p = session.scalar(
+        select(Proposal)
+        .where(Proposal.prediction_id == prediction_id)
+        .order_by(Proposal.id.desc())
+        .limit(1)
+    )
+    if p is None:
+        return {}
+    return {
+        i.item_code: {
+            "input_key": i.input_key,
+            "state": i.state,
+            "version": f"v{p.perimeter_version}.{p.seq}",
+            "proposals": [],  # 저장은 sections로 하므로 쓰지 않음(작성기도 돌려줄 때 뺀다)
+            "item": {
+                "id": i.item_code,
+                "name": i.detail.get("name"),
+                "state": i.state,
+                "finding": i.detail.get("finding"),
+                "withheld": i.detail.get("withheld") or [],
+                "sections": i.sections,
+                "evidence": i.evidence,
+            },
+        }
+        for i in items_of(session, p.id)
+        if i.input_key
+    }
 
 
 def previous_proposal(session: Session, p: Proposal) -> Proposal | None:

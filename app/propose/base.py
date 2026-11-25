@@ -13,9 +13,12 @@ LlmInput = dict[str, Any]
 # sections([{title, blocks: paragraph · list · table · note · failed}]) ·
 # evidence([{chunk_id, label, doc_name, section, page, origin, text}]) · input_key
 WrittenItem = dict[str, Any]
+# 같은 예측의 직전 제안서 항목: {항목 id: {input_key, state, version, proposals, item}}
+# (repositories.proposals.reusable_items). 입력이 그대로인 항목은 다시 쓰지 않는다(상황 정정 뒤)
+PrevItems = dict[str, dict[str, Any]]
 
 
 class ProposalWriter(Protocol):
     name: str
 
-    def write(self, llm_input: LlmInput) -> list[WrittenItem]: ...
+    def write(self, llm_input: LlmInput, prev: PrevItems | None = None) -> list[WrittenItem]: ...

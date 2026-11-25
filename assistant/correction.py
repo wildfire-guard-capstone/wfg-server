@@ -621,6 +621,7 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     - 마을: LLM이 고른 이름(「리」 뺀 줄기)이 입력에 있어야 받는다
     - 투입 수: LLM이 고른 기관 말이 입력에 없으면 규칙이 같은 종류 · 수에서 찾은 기관으로(없으면 기관 없음)
     - LLM이 빠뜨린 변화(규칙만 찾은 것)는 더한다
+    - 「투입 수를 읽지 못했습니다」: 그 구절의 수를 규칙이 다 읽었으면 빼고 보인다
     - 처리 불가: LLM이 「그 밖」이라 했어도 규칙이 구체 이유(대응단계 · 기상 …)를 찾았으면 그 이유로
     """
     out = Parsed(source="llm+rules")
@@ -639,6 +640,17 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     moved = {(r.kind, r.count) for r in moves}
     for d in llm.drafts:
         if d.kind in GROUPS and (d.kind, d.count) in moved:
+            continue
+        # 「산림청 헬기 3대와 지자체 헬기 2대」를 5대 하나로 합쳐 낸 것: 규칙이 읽은 3대 · 2대를 쓴다
+        # (합이 문장의 다른 수 「진화차 5대」와 같으면 입력에 있는 수로 통과해 산림청이 8대가 됐다)
+        counts = [r.count or 0 for r in rules.drafts if r.kind == d.kind]
+        if (
+            d.kind in GROUPS
+            and len(counts) > 1
+            and d.count == sum(counts)
+            and d.count not in counts
+        ):
+            dropped.append(f"sum:{d.kind}")
             continue
         # 같은 변화를 되풀이해 내면(11-11 실험: 「헬기 1대 추가」가 두세 번) 한 번만 받는다.
         # 입력에 그 구절이 정말 여러 번 있으면(규칙이 센 만큼) 그만큼은 받는다
@@ -687,6 +699,12 @@ def merge(llm: Parsed, rules: Parsed, text: str, trace: dict | None = None) -> P
     for n in llm.not_allowed:
         kind = n.get("kind")
         if kind in kinds or (kind == "other" and specific):
+            continue
+        # LLM이 합계(3대 + 2대 = 5)를 내 버린 구절인데 규칙이 그 수를 다 읽었으면 못 읽은 것이 아니다
+        read = {d.count for d in out.drafts if d.kind in GROUPS}
+        counts = counts_in(n.get("text", ""))
+        if kind == "no_count" and counts and counts <= read:
+            dropped.append("no_count")
             continue
         if kind == "no_village":  # 입력에 대피 얘기가 없는데 LLM이 마을 없는 대피 변화를 낸 것
             dropped.append("no_village")

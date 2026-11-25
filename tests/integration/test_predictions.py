@@ -273,7 +273,7 @@ def test_predict_also_saves_proposal_and_stage(client, login, reported, db):
 class BrokenWriter:
     name = "broken"
 
-    def write(self, llm_input):
+    def write(self, llm_input, prev=None):
         raise RuntimeError("GPU 서버에 연결할 수 없음")
 
 
@@ -381,7 +381,7 @@ def test_prediction_is_visible_while_proposal_runs(client, login, reported, db, 
     class Watching:
         name = "fake"
 
-        def write(self, llm_input):
+        def write(self, llm_input, prev=None):
             detail = client.get(f"{URL}/{reported['id']}", headers=cmd).json()["data"]
             running = ops.running(int(reported["id"]))
             seen.update(detail=detail, kind=running.kind, stage=running.stage)

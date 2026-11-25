@@ -12,10 +12,24 @@ from rules.items.names import when
 ANCHOR_IDS = {"p.75": "SM-p075", "p.76": "SM-p076", "p.79": "SM-p079"}
 
 
+def _done(r: dict[str, Any]) -> str:
+    """현장 입력 표시: 대피 완료 > 대피명령 내림 · 사전대피 완료."""
+    if r["evacuated"]:
+        return " (대피 완료)"
+    done = [
+        label
+        for key, label in (("evac_order", "대피명령 내림"), ("pre_evac_done", "사전대피 완료"))
+        if r[key]
+    ]
+    return f" ({' · '.join(done)})" if done else ""
+
+
 def _rows(villages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """같은 시각 구간끼리 묶어 한 줄씩(같은 값끼리 묶기). 현장 입력은 표시만 붙인다.
 
-    - 대피 완료 → 「(대피 완료)」 · 시각이 이미 지남 → 「(예상 시각 경과 — 새 화선 보고 필요)」
+    - 대피 완료 → 「(대피 완료)」, 아니면 「(대피명령 내림)」 「(사전대피 완료)」
+      (11/25: LLM이 JSON의 evac_order만 보고 「발령되지 않았다」고 거꾸로 쓴 일이 있었다)
+    - 시각이 이미 지남 → 「(예상 시각 경과 — 새 화선 보고 필요)」
     - 문자가 나갔는데 대피 완료가 아님 → 「○○리는 12:40 대피 문자가 나갔지만 대피 완료 보고가
       없습니다」(11/7 넣는 규칙)
     """
@@ -27,7 +41,7 @@ def _rows(villages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         names = []
         notes = []
         for r in rs:
-            mark = " (대피 완료)" if r["evacuated"] else ""
+            mark = _done(r)
             mark += " (예상 시각 경과 — 새 화선 보고 필요)" if r["passed"] else ""
             names.append(f"**{r['name']}** {r['people']:,}명{mark}")
             if r["alert_sent_at"] and not r["evacuated"]:

@@ -5,12 +5,14 @@
   CHANGED 변경 : 판정 한 줄 · 구분 · 다룬 주제 · 목록/표/※ 줄 · 문단 상황 문장 중 하나라도 다름
   NEW · REMOVED 신규 · 빠짐 : 앞 버전에 없음 / 이번에 없음(해당 없음)
   WORDING_ONLY 표현만 : 위가 모두 같고 LLM 할 일 문장 · 상황 · 상태 · 판단(fact 블록)만 다름
-                      → 「변경」 아님
+                      → 「변경」 아님. 단 규칙 엔진 값(facts)이 다르면 변경(11/25: 「대피명령」처럼
+                      판정 한 줄에는 안 나오는 정정)
   SAME 같음 : 다 같음
 DB 없이 proposal_items 행(또는 같은 칸을 가진 객체)만 받는다.
 11/17 네 단계: 상황 · 상태 · 판단은 LLM이 쓰는 fact 블록이 되어 문단 상황 문장(코드)은 비어 있다.
 """
 
+import json
 import re
 from collections import Counter
 from collections.abc import Sequence
@@ -124,6 +126,21 @@ def _engine_side(item: Item) -> tuple[Any, ...]:
     )
 
 
+# 「직전 대비」와 보고 시각: 값이 아니라 견주는 기준 · 때
+RELATIVE_KEYS = {"prev", "change", "reported_at"}
+
+
+def _facts(item: Item) -> str:
+    """규칙 엔진 값(저장 전 · 뒤의 꼴이 같게 JSON 글로)."""
+
+    def strip(o: Any) -> Any:
+        if isinstance(o, dict):
+            return {k: strip(v) for k, v in o.items() if k not in RELATIVE_KEYS}
+        return [strip(v) for v in o] if isinstance(o, (list, tuple)) else o
+
+    return json.dumps(strip(item.detail.get("facts")), sort_keys=True, default=str)
+
+
 def change_of(before: Item | None, after: Item | None) -> str | None:
     """CHANGED · NEW · REMOVED · WORDING_ONLY · SAME. 둘 다 없으면(해당 없음) None."""
     if before is None and after is None:
@@ -140,7 +157,9 @@ def change_of(before: Item | None, after: Item | None) -> str | None:
         + llm_texts(i.sections)  # 11/24 핵심 판단 근거 · 판단 근거도 LLM 글(표현만 바뀐 것)
         for i in (before, after)
     ]
-    return "WORDING_ONLY" if bodies[0] != bodies[1] else "SAME"
+    if bodies[0] == bodies[1]:
+        return "SAME"
+    return "CHANGED" if _facts(before) != _facts(after) else "WORDING_ONLY"
 
 
 def changes(before: Sequence[Item], after: Sequence[Item]) -> dict[str, str]:

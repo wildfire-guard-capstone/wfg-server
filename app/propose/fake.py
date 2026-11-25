@@ -17,7 +17,7 @@ from agent import cite
 from agent.generate import assemble
 from agent.judgment import topics_of
 from agent.prompt import CATEGORIES
-from app.propose.base import LlmInput, WrittenItem
+from app.propose.base import LlmInput, PrevItems, WrittenItem
 
 QUOTE = "테스트 원문입니다."
 _CHUNK = {
@@ -35,7 +35,7 @@ TEST_CHUNK = _CHUNK | {"label": cite.label(_CHUNK)}  # 진짜 근거처럼 표�
 class FakeWriter:
     name: str = "fake"
 
-    def write(self, llm_input: LlmInput) -> list[WrittenItem]:
+    def write(self, llm_input: LlmInput, prev: PrevItems | None = None) -> list[WrittenItem]:
         categories = cycle(CATEGORIES)
         return [_item(item, categories) for item in llm_input["items"]]
 

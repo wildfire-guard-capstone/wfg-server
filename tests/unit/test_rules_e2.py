@@ -73,3 +73,32 @@ def test_window_starting_at_night_counts_as_night_near_sunrise():
     bundles = build_bundles(build_context(inputs(base_at=base, generated_at=base, villages=[dawn])))
     (row,) = bundles["villages"]["p8"]
     assert (row["from"], row["until"], row["night"]) == ("06:00", "07:00", True)
+
+
+def test_rows_show_what_was_already_done():
+    """11/25: 대피명령 · 사전대피 정정이 목록에 글로 나와야 LLM이 거꾸로 쓰지 않는다."""
+    from rules.sections.e2 import _rows
+
+    row = {
+        "name": "구계리(구계2리)",
+        "people": 116,
+        "from": "18:30",
+        "until": "19:30",
+        "zone": "p5",
+        "night": False,
+        "passed": False,
+        "touched": True,
+        "evac_order": False,
+        "evacuated": False,
+        "pre_evac_done": False,
+        "alert_sent_at": None,
+    }
+
+    def text(**done):
+        return _rows([row | done])[0]["text"]
+
+    assert text().endswith("116명")
+    assert text(evac_order=True).endswith("116명 (대피명령 내림)")
+    assert text(pre_evac_done=True).endswith("116명 (사전대피 완료)")
+    assert text(evac_order=True, pre_evac_done=True).endswith("(대피명령 내림 · 사전대피 완료)")
+    assert text(evac_order=True, evacuated=True).endswith("116명 (대피 완료)")

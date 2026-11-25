@@ -42,6 +42,8 @@ def test_places_and_facilities_are_left_alone():
 def test_marks():
     assert fix_marks("배치 ( )를 요청(S6)과 함께") == "배치를 요청과 함께"
     assert fix_marks("S6(유관기관 동원)과 함께") == "유관기관 동원과 함께"
+    assert fix_marks("국가유산청에 (S6)와 함께 요청") == "국가유산청에 요청"
+    assert fix_marks("진화 지원을(S6)과 함께 요청") == "진화 지원을 요청"
     assert fix_marks("S6 유관기관 동원·협조 요청과 함께") == "유관기관 동원·협조 요청과 함께"
     assert fix_marks("S6 및 E6 요청") == "S6 및 E6 요청"
     assert fix_marks("대피명령이 없음므로") == "대피명령이 없으므로"

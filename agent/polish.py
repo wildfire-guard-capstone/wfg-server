@@ -17,6 +17,8 @@ _IN_FACILITY = re.compile(r"\([^()]*(?:요양원|병원|센터|보물|문화유�
 _IN_ADDRESS = re.compile(r"\([가-힣]+[읍면] $")  # 「고운사(단촌면 구계리)」의 앞부분
 _EMPTY = re.compile(r"\s*\(\s*\)")
 _CODE = re.compile(r"\s*\([SE][1-6](?:[,·\s]*[SE][1-6])*[^)]*\)")
+# 「국가유산청에 (S6)와 함께 요청하십시오」: 번호만 지우면 「국가유산청에와 함께」가 된다 → 「…와 함께」도 지운다
+_CODE_WITH = re.compile(r"(에게|에|을|를)\s*\([SE][1-6][^)]*\)\s*(?:과|와) 함께")
 _CODE_HEAD = re.compile(r"(?<![A-Za-z0-9])[SE][1-6]\(([^)]*)\)")  # 「S6(유관기관 동원)과 함께」
 _CODE_WORD = re.compile(
     r"(?<![A-Za-z0-9(·])[SE][1-6]\s(?=유관기관|재난문자|위험구역|취약시설|대피|진화)"
@@ -95,7 +97,8 @@ def fix_names(text: str, labels: dict[str, list[str]]) -> str:
 
 def fix_marks(text: str) -> str:
     """빈 괄호 · 항목 번호 괄호 · 깨진 「므로」를 고친다."""
-    text = _CODE_HEAD.sub(r"\1", _CODE.sub("", _EMPTY.sub("", text)))
+    text = _CODE_WITH.sub(r"\1", _EMPTY.sub("", text))
+    text = _CODE_HEAD.sub(r"\1", _CODE.sub("", text))
     text = re.sub(r"\.{2,}", ".", _CODE_WORD.sub("", text))
     return _BROKEN.sub(lambda m: _MEURO[m.group(1)] + "므로", text)
 

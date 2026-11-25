@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""1b단계 위험도: 확산 예측 P5 + 현재 화선 → 23개 변수 → R(1.00 ~ 5.00). 계산은 `risk/`, 여기는 의성 자료 어댑터.
+"""1b단계 위험도: 확산 예측 P5 + 현재 화선 → 변수 22개 → R(1.00 ~ 5.00). 계산은 `risk/`, 여기는 의성 자료 어댑터.
 
     data = RiskData.load(input_dir)                 # 지역 격자가 없으면 만들어 <input>/risk/grid에 둔다(약 1분)
     out = run_risk(data, md, rd, spread)            # round_k/01b_risk/risk.json 내용
@@ -450,7 +450,7 @@ def main() -> None:
     ap.add_argument(
         "--exposure",
         default=",".join(f"{k}={w:g}" for k, w in DEFAULT_EXPOSURE.items()),
-        help="팀 추가 변수 가중치(예: area=0.15,houses_1km=0.05). 'none' = AI Hub 23개만(11/10 이전)",
+        help="팀 추가 변수 가중치(예: area=0.15,houses_1km=0.05). 'none' = AI Hub 변수만(11/10 이전)",
     )
     ap.add_argument(
         "--combine",

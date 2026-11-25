@@ -2,7 +2,7 @@
 
     res = compute_risk(RiskInputs(p5, perimeter, static, weather, rain_7d, zones, stations))
     res.score                 # R(1.00 ~ 5.00), 소수 둘째 자리로 보인다(표시 안 A, 10/5)
-    res.factors               # 23개 변수: 값 · 등급 · 가중치(CSV · 다시 나눈 값) · 기여
+    res.factors               # 변수 22개: 값 · 등급 · 가중치(CSV · 다시 나눈 값) · 기여
     res.missing               # 값이 없어 뺀 변수
 
 변수 종류별 처리(「산불 발생 후 위험도 정의」 사안 3):
@@ -64,7 +64,7 @@ class RiskInputs:
     mode: str = "mean_0_5"
     # 결합식: "sqrt_hx" = √(위해 H × 노출 X)(기본, 11/10) · "mean" = 한 번에 가중평균(예전)
     combine: str = "sqrt_hx"
-    # 팀 추가 노출 변수 가중치(criteria.EXPOSURE_VARIABLES). {} 이면 AI Hub 23개만(11/10 이전 R)
+    # 팀 추가 노출 변수 가중치(criteria.EXPOSURE_VARIABLES). {} 이면 AI Hub 변수만
     exposure: dict = field(default_factory=lambda: dict(DEFAULT_EXPOSURE))
     # 주택 좌표 (k, 2) — 「1 km 안 주택 수」, 없으면 그 변수 값 없음
     houses_xy: np.ndarray | None = None
@@ -293,7 +293,7 @@ def compute_risk(inp: RiskInputs) -> RiskResult:
        둘 다 1 ~ 5라 R도 1 ~ 5.
        노출이 낮으면(사람 · 집이 없고 작은 불) 조건이 나빠도 R이 낮다.
        combine="mean": 값이 있는 모든 변수를 가중치 합으로 나눈 가중평균(11/10 이전).
-    가중치 = AI Hub CSV 23개 + 팀 추가 노출 변수(inp.exposure, 11/10).
+    가중치 = AI Hub CSV 20개(criteria.VARIABLES) + 팀 추가 노출 변수(inp.exposure, 11/10).
     """
     static, notes = _static_factors(inp)
     by_key = {f.key: f for f in static + _timed_factors(inp) + _infra_factors(inp)}  # 1

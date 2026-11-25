@@ -436,8 +436,8 @@ def test_risk(client, login, reported):
     cmd = login("t_cmd4", "COMMANDER")
     pid = run(client, reported, cmd)["result"]["prediction_id"]
     risk = client.get(f"{URL}/{reported['id']}/predictions/{pid}/risk", headers=cmd).json()["data"]
-    assert risk["prediction_id"] == pid and risk["method_version"] == "risk-2"
-    assert risk["status"] == "PARTIAL" and len(risk["factors"]) == 25
+    assert risk["prediction_id"] == pid and risk["method_version"] == "risk-3"
+    assert risk["status"] == "PARTIAL" and len(risk["factors"]) == 22
     assert 1 <= risk["score"] <= 5 and risk["unavailable_reasons"]
     by = {f["code"]: f for f in risk["factors"]}
     assert all(by[c]["included"] for c in ("wind_speed", "humidity", "temperature"))

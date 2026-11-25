@@ -1,10 +1,12 @@
 """위험도 R(1.00~5.00): 예측 1회마다 R = √(위해 H × 노출 X)(11/10 팀 결정, risk/README.md).
 
-- H(위해) = 기상 7 · 지형 7 · 연료 7(AI Hub 21개) + 산불 규모(P5 면적)의 가중평균
+- H(위해) = 기상 7 · 지형 4 · 연료 7(AI Hub 18개) + 산불 규모(P5 면적)의 가중평균
 - X(노출) = 취약계층 수 · 소방서와의 거리(AI Hub 2개) + 주변 주택 수의 가중평균
 - 둘 다 1 ~ 5라 R도 1 ~ 5. 노출 변수가 모두 없으면 R = H
 명세 7.6(23개 한 번에 가중평균)에서 바뀐 점: 변수 2개 추가(규모 · 주택 수), 노출을 P5 + 1 km로,
 취약계층을 리 안 주택 비율로 나눔, 묶음별 평균 뒤 기하평균.
+risk-3(11/25): 지형위치지수 · 곡률 · 지형복잡도를 뺌(P5 평균이 늘 3 근처 · 경사도와 같은 정보,
+risk.criteria.DROPPED_KEYS) — 지형복잡도 가중치 0.03은 경사도_up에 합침(0.08 → 0.11). 변수 22개.
 
 변수 등급은 `risk/` 패키지(risk.compute, 의성 데모 1b와 같은 계산)가 구하고, 여기서는 DB에서
 입력을 모아 넘긴 뒤 명세 모양(Risk · RiskFactor)으로 바꾼다.
@@ -15,7 +17,7 @@
 - 주변 주택 수: P5 + 1 km 안 주택 점(map_features kind=house)
 - 산불 규모: P5 면적
 - 소방서와의 거리: 예측 기준 화선에서 가장 가까운 소방 시설(facilities 소방, 인접 시군 포함)
-- 지형 7 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
+- 지형 4 · 연료 6: 지역 격자(설정 RISK_GRID_DIR, risk.grid 형식)가 있을 때만. 요청마다 P5 근처 칸만
   읽는다(격자 전체를 메모리에 두지 않음). 만들기: demo/uiseong/build_risk_grid.py
 - 기압 · 지면온도 · 7일 누적 강수량: 예측할 때 받아 둔 지상관측(predictions.weather.surface, ASOS).
   기압 · 지면온도는 예보가 없어 화선 관측 시각의 정시 값 하나로 0 ~ 5시간을 대신한다(위험도-정리)
@@ -59,17 +61,17 @@ from risk.weather import HOURS, RAIN_HOURS, dead_fuel_moisture
 
 log = logging.getLogger(__name__)
 
-METHOD_VERSION = "risk-2"  # 11/10 R = √(H × X) · 변수 25개(risk-1 = 명세 7.6 23개 가중평균)
+# risk-3 = 11/25 변수 22개(지형 3개 뺌) · risk-2 = 11/10 √(H × X) 25개
+# risk-1 = 명세 7.6 23개 가중평균
+METHOD_VERSION = "risk-3"
 P5 = 5
 
-# (코드, 원문 변수, 축, CSV 원가중치) — 명세 7.6 23개(합 0.94) + 팀 추가 2개(규모 0.15 · 주택 0.05)
+# (코드, 원문 변수, 축, 가중치) — AI Hub CSV 20개(합 0.88, 경사도_up은 지형복잡도를 합친 0.11)
+# + 팀 추가 2개(규모 0.15 · 주택 0.05)
 FACTORS: list[tuple[str, str, str, float]] = [
-    ("slope_up", "경사도_up", "terrain", 0.08),
+    ("slope_up", "경사도_up", "terrain", 0.11),
     ("aspect", "사면방향", "terrain", 0.06),
-    ("curvature", "곡률", "terrain", 0.04),
-    ("terrain_complexity", "지형복잡도", "terrain", 0.03),
     ("elevation", "고도", "terrain", 0.02),
-    ("topographic_position", "지형위치지수", "terrain", 0.02),
     ("water_distance", "수계와의 거리", "terrain", 0.02),
     ("fuel_load", "산림밀도/연료량", "fuel", 0.05),
     ("forest_type", "수종종류", "fuel", 0.04),
@@ -98,10 +100,7 @@ EXPOSURE_AXES = ("infrastructure", "exposure")  # X(노출)
 KEY_OF = {
     "slope_up": "slope",
     "aspect": "aspect",
-    "curvature": "curvature",
-    "terrain_complexity": "complexity",
     "elevation": "elevation",
-    "topographic_position": "tpi",
     "water_distance": "water_dist",
     "fuel_load": "fuel_load",
     "forest_type": "fuel_type",
@@ -328,7 +327,7 @@ def to_grades(
     weather_source: str | None,
     grid_reason: str | None,
 ) -> list[FactorGrade]:
-    """risk 결과(변수 키) → FACTORS 순서의 FactorGrade 25개."""
+    """risk 결과(변수 키) → FACTORS 순서의 FactorGrade 22개."""
     by_key = {f.key: f for f in res.factors}
     out = []
     for code, *_ in FACTORS:
@@ -353,7 +352,7 @@ def to_grades(
 
 
 def grade_factors(session: Session, prediction: Prediction) -> list[FactorGrade]:
-    """변수 25개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
+    """변수 22개의 원값 · 등급. 못 구한 변수는 grade=None + reason."""
     inputs, grid_reason = build_inputs(session, prediction)
     res = calc.compute_risk(inputs)
     return to_grades(

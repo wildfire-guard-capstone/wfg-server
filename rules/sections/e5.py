@@ -21,7 +21,7 @@ def e5_sections(e5: dict[str, Any]) -> dict[str, Any]:
     rows = [
         {"stage": stage, "text": f"**{label} 단계**: {listed}"}
         for stage, label in (("go", "Go"), ("set", "Set"))
-        if (listed := by_stage(areas, stage).replace(" · ", ", "))
+        if (listed := by_stage(areas, stage))
     ]
     blocks: list[dict[str, Any]] = [
         {

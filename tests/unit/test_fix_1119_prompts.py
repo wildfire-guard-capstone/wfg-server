@@ -208,7 +208,7 @@ def test_haengjeongri_question_finds_beopjeongri():
 
 
 def test_village_tools_show_admin_and_edge_villages():
-    # RE-R3(main #58): 묶음 줄에 닿는 행정리 · 경계만 걸친 리(edge)
+    # 묶음 줄에 대피 대상 행정리 · 경계만 걸친 리(edge)
     ctx = make_context()
     vb = ctx.bundles["villages"]
     first = (vb.get("burning") or vb.get("p5"))[0]
@@ -223,7 +223,7 @@ def test_village_tools_show_admin_and_edge_villages():
     facts = {f.label: f.value for f in box.run("village", "용기리").facts}
     assert any("대피 대상 아님" in v for v in facts.values())
     facts = {f.label: f.value for f in box.run("village", admin).facts}
-    assert any(admin in v and "법정리 전체" in v for v in facts.values())
+    assert any(admin in v and "이 행정리를 합한 값" in v for v in facts.values())
 
 
 def test_road_question_goes_to_e4_not_alerts():

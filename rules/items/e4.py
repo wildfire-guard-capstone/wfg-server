@@ -8,18 +8,20 @@
 
 from typing import Any
 
+from rules.items.names import approach, village_label
+
 ID, NAME = "E4", "대피소 지정 및 관련 통제"
 
 
 def _village(r: dict[str, Any]) -> dict[str, Any]:
     return {
-        "village": r["village"],
-        "admin_villages": r["admin_villages"],
+        "village": village_label(r["village"], r["admin_villages"]),
         "emd": r["emd"],
         "zone": r["zone"],
         "from": r["from"],
         "until": r["until"],
         "night": r["night"],
+        **approach(r),
         "people": r["population"],
         "elderly": r["pop65_est"],
         "origin": r["origin"],

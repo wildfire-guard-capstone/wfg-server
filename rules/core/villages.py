@@ -6,13 +6,20 @@
   리 안 주택이 처음 닿는 P(`houses_by_p`)는 참고로만 남긴다
 - 행정리(이장 단위)는 법정리 아래에 붙인다. 마을 구역이 있으면 **구역에 불이 처음 닿는 P**를 센다 —
   그 행정리 주민 전원이 대피 대상. 구역은 회관을 다 찾은 법정리에만 있다
+  (11/25에 아래로 좁힘)
 - `EdgeOnly`(11/19 밤판: 경계만 걸치고 8시간 안 주택이 없는 리를 대상에서 뺌)는 이제 만들지 않는다
   (빈 목록 — 묶음 · 항목의 「경계만 걸침」 칸은 비어 있게 된다)
+
+11/25 사용자 결정: 불이 멀리 있는데 리가 같다고 리 전체를 대피시키지 않는다.
+- 대상 리는 리 경계로 뽑고(11/20), 그 안에서 **불에 가까운 행정리**(`near_p`)만 남긴다.
+  남는 행정리가 없으면 그 리는 대상이 아니다. 구역을 모르는 행정리가 있는 리는 리 전체를 그대로 둔다
+- 판정 P = 남은 행정리 가운데 가장 이른 P. 불이 닿지 않으면(`touched` 거짓) 「○○까지 접근」이다
+- 인원 = 리 인구 × 남은 행정리의 집 수 비율(추정, 행정리 인구 자료 없음)
 - 구간(이미 닿음 · 위험구역 · 잠재 위험구역)은 변환 층의 `zone_of`가 P 번호로 정한다(J1, p.75)
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import shapely
@@ -20,6 +27,10 @@ from shapely.geometry.base import BaseGeometry
 
 from rules.core.facility import Points
 from rules.core.reach import MAX_P, first_p
+
+NEAR_M = 1000.0  # 8시간 뒤 불(P8)에서 이 거리 안 = 잠재 위험구역(11/25 사용자 결정, 근거 등급 D)
+CLOSE_M = 500.0  # 5시간 뒤 불(P5)에서 이 거리 안 = 위험구역(11/25, 근거 등급 D)
+P5 = 5
 
 
 @dataclass(frozen=True)
@@ -57,23 +68,45 @@ class VillageField:
     reported_at: str | None = None  # 이 값들을 마지막으로 보고한 시각
 
 
+def near_p(target: BaseGeometry, ranges: Sequence[BaseGeometry]) -> tuple[int | None, bool]:
+    """불에 가까운 정도를 P로(행정리 구역 · 취약시설 자리)와 실제로 닿는지.
+
+    1. 5시간 안에 닿으면 처음 닿는 P
+    2. P5에서 `CLOSE_M` 안이면 P5(위험구역), 닿지 않음 — 5 ~ 8시간에 닿는 곳도 같은 자로 잰다
+    3. 5 ~ 8시간에 닿으면 처음 닿는 P, P8에서 `NEAR_M` 안이면 P8(잠재 위험구역), 닿지 않음
+    4. 더 멀면 None(대상 아님)
+    """
+    p = first_p(target, ranges)
+    if p is not None and p <= P5:  # 1
+        return p, True
+    if target.distance(ranges[P5]) <= CLOSE_M:  # 2
+        return P5, False
+    if p is not None:  # 3
+        return p, True
+    if target.distance(ranges[MAX_P]) <= NEAR_M:
+        return MAX_P, False
+    return None, False  # 4
+
+
 @dataclass(frozen=True)
 class AdminReached:
-    """행정리 하나: 구역에 불이 처음 닿는 P(11/20 D1). 구역이 없으면 p = None · houses = 0."""
+    """행정리 하나: 불에 가까운 정도(`near_p`, 11/25). 구역이 없으면 p = None · houses = 0."""
 
     admin: AdminVillage
-    p: int | None  # 구역에 불이 처음 닿는 P. 8시간 안에 안 닿거나 구역이 없으면 None
+    p: int | None  # 불에서 멀거나(1 km 밖) 구역이 없으면 None
     houses: int  # 구역 안 주택 수
+    touched: bool = True  # 구역에 실제로 불이 닿나(거짓 = 가까워지기만)
 
 
 @dataclass(frozen=True)
 class Reached:
     village: Village
-    p: int  # 판정에 쓰는 P: 리 경계가 처음 닿는 P(11/20 D1 — 경계 걸침도 대피 대상)
-    boundary_p: int  # 리 경계가 처음 닿는 P(= p, 옛 칸 이름 그대로)
+    p: int  # 판정에 쓰는 P: 불에 가까운 행정리의 P(11/25). 행정리 구역을 모르면 리 경계 P
+    boundary_p: int  # 리 경계가 처음 닿는 P
     houses: int  # 리 안 주택 수(0이면 `p` = 경계 P)
     houses_by_p: tuple[int, ...] = ()  # i번째 = Pi 안에 든 리 주택 수(누적)
     admin: tuple[AdminReached, ...] = ()  # 이 리의 행정리(별표 순서). 없으면 빈 묶음
+    touched: bool = True  # `p`에 실제로 닿나(거짓 = 가까워지기만)
 
     @property
     def by_houses(self) -> bool:
@@ -81,30 +114,52 @@ class Reached:
         return self.houses > 0
 
     @property
+    def by_admin(self) -> bool:
+        """행정리 구역으로 판정했나(거짓 = 행정리 · 구역을 몰라 리 경계로 판정)."""
+        return bool(self.admin) and all(a.admin.geom is not None for a in self.admin)
+
+    @property
     def zoned(self) -> bool:
         """행정리가 둘 이상이고 모두 구역이 있다 → 행정리 단위로 나눠 볼 수 있다."""
-        return len(self.admin) >= 2 and all(a.admin.geom is not None for a in self.admin)
+        return len(self.admin) >= 2 and self.by_admin
 
     @property
     def reached_admin(self) -> list[AdminReached]:
-        """8시간 안에 주택이 닿는 행정리(닿는 순, 같으면 별표 순). 나눠 볼 수 없으면 빈 목록."""
-        if not self.zoned:
-            return []
-        hit = [a for a in self.admin if a.p is not None]
-        return sorted(hit, key=lambda a: (a.p, a.admin.seq))
+        """대피 대상 행정리(별표 순). 나눠 볼 수 없으면 빈 목록."""
+        return [a for a in self.admin if a.p is not None] if self.zoned else []
+
+    @property
+    def share(self) -> float:
+        """대피 대상 행정리의 집 수 비율(리 인구를 나누는 데 씀). 나눠 볼 수 없으면 1."""
+        total = sum(a.houses for a in self.admin)
+        if not self.zoned or not total:
+            return 1.0
+        return sum(a.houses for a in self.reached_admin) / total
+
+    @property
+    def population(self) -> int:
+        return round(self.village.population * self.share)
+
+    @property
+    def pop65_est(self) -> int | None:
+        n = self.village.pop65_est
+        return None if n is None else round(n * self.share)
 
     def unit_p(self, point: BaseGeometry) -> tuple[int | None, AdminReached | None]:
-        """점(시설 · 대피소)이 든 대피 단위의 P.
+        """점(대피소)이 든 대피 단위의 P. None = 대피 대상 마을이 아님.
 
-        1. 행정리 구역으로 나눠 볼 수 있으면 점이 든 구역의 P(구역 밖이면 None — 주택 무리 밖)
+        1. 행정리로 나눠 볼 수 있으면 가장 가까운 행정리(구역 안이면 그 구역, 11/25)의 P
         2. 아니면 리의 P
         """
         if self.zoned:  # 1
-            for a in self.admin:
-                if a.admin.geom is not None and a.admin.geom.intersects(point):
-                    return a.p, a
-            return None, None
+            near = min(self.admin, key=lambda a: a.admin.geom.distance(point))
+            return near.p, near
         return self.p, None  # 2
+
+    def admin_at(self, point: BaseGeometry) -> AdminReached | None:
+        """점이 구역 안에 든 행정리. 구역 밖이면 None(가까운 곳으로 짐작하지 않음)."""
+        zones = (a for a in self.admin if a.admin.geom is not None)
+        return next((a for a in zones if a.admin.geom.intersects(point)), None)
 
 
 @dataclass(frozen=True)
@@ -143,13 +198,14 @@ def reached_villages(
     houses: Points = ((), ()),
     admin: Sequence[AdminVillage] = (),
 ) -> tuple[list[Reached], list[EdgeOnly]]:
-    """P8 안 마을(리 경계 기준, 11/20 D1)과 경계만 걸친 마을(이제 늘 빈 목록).
+    """P8 안 마을(리 경계 기준, 불에 가까운 행정리가 있는 곳)과 경계만 걸친 마을(늘 빈 목록).
 
-    1. 리 경계가 처음 닿는 P를 찾는다(R-04). P8과도 안 겹치면 뺀다.
-       이 P로 판정한다(경계 걸침도 대상)
+    1. 리 경계가 처음 닿는 P를 찾는다(R-04). P8과도 안 겹치면 뺀다
     2. 리 안 주택이 Pi마다 몇 동 드는지 센다(참고 — 시설피해 · 보고용)
-    3. 행정리를 붙인다: 구역이 있으면 구역에 불이 처음 닿는 P · 구역 주택 수
-    4. 닿는 순, 같으면 이름 순으로 놓는다
+    3. 행정리를 붙인다: 구역이 있으면 `near_p` · 구역 주택 수
+    4. 행정리 구역을 모두 알면 가장 이른 행정리의 P로 판정하고, 가까운 행정리가 없으면 뺀다(11/25).
+       구역을 모르면 리 경계 P로 판정한다
+    5. 닿는 순(같은 P면 실제로 닿는 곳 먼저), 같으면 이름 순으로 놓는다
     """
     xs, ys = _xy(houses)
     by_village: dict[int, list[AdminVillage]] = {}
@@ -171,8 +227,16 @@ def reached_villages(
                 units.append(AdminReached(a, None, 0))
                 continue
             zin = _inside(a.geom, hx, hy)
-            units.append(AdminReached(a, first_p(a.geom, ranges), int(zin.sum())))
-        hits.append(Reached(v, bp, bp, n, counts, tuple(units)))
-    hits.sort(key=lambda r: (r.p, r.village.name))  # 4
+            p, touched = near_p(a.geom, ranges)
+            units.append(AdminReached(a, p, int(zin.sum()), touched))
+        hit = Reached(v, bp, bp, n, counts, tuple(units))
+        if hit.by_admin:  # 4
+            near = [u for u in units if u.p is not None]
+            if not near:
+                continue
+            first = min(near, key=lambda u: (u.p, not u.touched))
+            hit = replace(hit, p=first.p, touched=first.touched)
+        hits.append(hit)
+    hits.sort(key=lambda r: (r.p, not r.touched, r.village.name))  # 5
     edges.sort(key=lambda e: (e.boundary_p, e.village.name))
     return hits, edges

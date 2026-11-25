@@ -102,8 +102,8 @@ class Context:
     commander_now: Commander  # 지금 지휘권자(현재 화선 기준)
     commander_next: Commander  # 곧 지휘권자(P5 기준)
     commander_steps: list[tuple[int, Commander]]  # 지휘권자가 올라가는 구간(P1 ~ P5)과 그 지휘권자
-    villages: list[Reached]  # P8 안 마을(주택이 닿는 리)과 처음 닿는 P
-    edge_villages: list[EdgeOnly]  # 경계만 걸친 리(8시간 안 주택 없음)
+    villages: list[Reached]  # 대피 대상 마을(불에 가까운 행정리가 있는 리)과 판정 P
+    edge_villages: list[EdgeOnly]  # 경계만 걸친 리(이제 늘 빈 목록)
     site: tuple[float, float]
     field: Mapping[int, VillageField]
     sunset: datetime  # 0시 뒤 처음 오는 일몰
@@ -135,8 +135,8 @@ def build_context(inputs: Inputs) -> Context:
     6. 걸친 지역(R-02): 현재 화선 · P5
     7. 지휘권자(L-01): P0 ~ P5 범위마다 면적 · 걸친 지역으로 정한다. 지금 = P0, 곧 = P5,
        올라가는 구간 = 앞보다 높은 지휘권자가 처음 나오는 Pn(넘어가는 시각, 11/19 평가 R1)
-    8. P8 안 마을과 처음 닿는 P(R-02 · R-04). 리 안 주택이 처음 닿는 P로 정하고, 경계만 걸친 리는
-       따로 둔다(11/19 평가 R3). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류(자료는 나중에
+    8. 대피 대상 마을과 판정 P(R-02 · R-04). 리 경계로 뽑고 불에 가까운 행정리로 좁힌다
+       (11/25). P8이 걸친 시 · 군 · 구에 리 자료가 없으면 오류(자료는 나중에
        채운다 — 빠진 채로 판정하지 않음, 11/7). 행정리 자료가 없으면 법정리로만 판정(오류 아님)
     9. 0시 뒤 처음 오는 일몰 · 일출, 0시가 밤인가(C-05 · J2)
     """

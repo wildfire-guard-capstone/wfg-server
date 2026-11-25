@@ -30,7 +30,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agent import calc, check, cite, judgment, parts, prompt, retrieve, situate, situation
+from agent import calc, check, cite, judgment, parts, polish, prompt, retrieve, situate, situation
 from agent.clients import LLM, Evidence
 from agent.prompt import FACT_STEPS
 
@@ -767,6 +767,8 @@ class Agent:
         # 쓸 수 있는 다른 항목 번호 = [관련 항목의 일]의 번호 + 판정 한 줄 · 규칙 엔진 see가 가리키는 번호
         # (11/24 bluf-r4: E2 · E4가 E6 대신 「(S6)」을 씀 — 모든 번호를 받으면 못 잡는다)
         codes_ok = parts.codes_of(item, part["related"])
+        approaching, all_near = check.approach_table(by_items)
+        all_near = all_near and item["id"] in check.EVAC_ITEMS
         history: dict[str, set[str]] = {}
         best: dict[str, Any] | None = None
         schema = prompt.parts_schema(plist, ids)
@@ -856,6 +858,8 @@ class Agent:
                     bad.setdefault(i, []).extend(x)
                 if x := check.scope_errors(p.get("text") or "", item["id"]):
                     bad.setdefault(i, []).extend(x)
+                if x := check.touch_errors(p.get("text") or "", approaching, all_near):
+                    bad.setdefault(i, []).extend(x)
                 # 「대상만 바꿔 나눔」은 다시 쓰게만 한다(11/24 bluf-r4 E4: 대피소가 다른 두 제안 가운데 하나가 빠짐)
                 if i in bad:
                     bad[i] = [
@@ -905,6 +909,7 @@ class Agent:
                 reason = check.tidy_reason(po["reason"])
                 rerrs = (
                     check.reason_errors(reason, allowed, judged_text, self.known_names, pairs)
+                    + check.touch_errors(reason, approaching, all_near)
                     if reason
                     else []
                 )
@@ -1006,6 +1011,7 @@ class Agent:
         if best and not facts.get("situation") and item.get("finding"):
             facts["situation"] = check.tidy_fact(item["finding"])
             log["facts_fallback"] = "finding"
+        polish.polish(item["id"], final, facts, polish.village_labels(by_items))
         log["dropped"] = best["dropped"] if best else []
         log["facts"] = facts
         log["facts_removed"] = best["removed"] if best else []

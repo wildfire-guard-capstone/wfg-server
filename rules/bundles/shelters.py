@@ -4,9 +4,10 @@
 넣지 않는다(근거 없는 D 값 — 마을 시설 2곳을 거리와 함께 그대로 보여 준다, 11/7 점검).
 
 11/19 평가 R3(사용자 결정 D3):
-- 대피소를 빼는 기준에 「대피 대상 안」을 더한다. 대피소가 든 대피 단위(행정리 구역 · 리)에 주택이
-  5시간 안에 닿으면 뺀다. 5 ~ 8시간이면 예외로 둔다. 대피하는 마을 안으로 대피시키지 않는다
-  (p.79 「산불로부터 안전한 경로 … 대피장소로 선정」). 경계만 걸친 리 안 대피소는 그대로 쓴다
+- 대피소를 빼는 기준에 「대피 대상 안」을 더한다. 대피소가 든 대피 단위(행정리 · 리)가 위험구역이면
+  빼고 잠재 위험구역이면 예외로 둔다. 대피하는 마을 안으로 대피시키지 않는다
+  (p.79 「산불로부터 안전한 경로 … 대피장소로 선정」). 구역 밖 대피소는 같은 리의 가장 가까운
+  행정리를 따르고, 대피 대상이 아닌 행정리 안 대피소는 그대로 쓴다(11/25)
 - 거리는 행정리 회관에서 잰다(p.84 · 90 · 96 「행정리별 대피장소 및 비상 집결지」).
   회관을 모르면 주택 밀집 지점
 """
@@ -17,7 +18,7 @@ import numpy as np
 import shapely
 from shapely.geometry import Point
 
-from rules.bundles.common import km, timing
+from rules.bundles.common import km, village_timing
 from rules.context import Context
 from rules.core.places import Place
 from rules.core.reach import first_p
@@ -57,11 +58,12 @@ def _dense_point(ctx: Context, area) -> Point | None:
 def origin(ctx: Context, reached: Reached) -> tuple[Point, dict[str, Any]]:
     """거리를 재는 점과 그 설명.
 
-    1. 행정리로 나눠 볼 수 있으면 가장 먼저 닿는 행정리의 회관
+    1. 행정리로 나눠 볼 수 있으면 불에 가장 먼저 가까워지는 행정리의 회관
     2. 나뉘지 않은 리(행정리 하나)면 그 회관
     3. 회관을 모르면 리 안 주택 밀집 지점, 주택도 없으면 리 대표점(리 영역 안의 한 점)
     """
-    first = reached.reached_admin[:1]  # 1
+    near = sorted(reached.reached_admin, key=lambda a: (a.p, not a.touched))
+    first = near[:1]  # 1
     single = reached.admin if len(reached.admin) == 1 else ()  # 2
     for a in [*first, *single]:
         if a.admin.hall is not None:
@@ -83,8 +85,8 @@ def safety(p: int | None) -> str:
 ORDER = {"safe": 0, "exception": 1, "excluded": 2}
 OWN_REASON = {"excluded": "5시간 안에 불이 닿음", "exception": "8시간 안에 불이 닿음"}
 UNIT_REASON = {
-    "excluded": "대피 대상 마을 안({}, 5시간 안에 불이 닿음)",
-    "exception": "사전대피 마을 안({}, 5~8시간 안에 불이 닿음)",
+    "excluded": "대피 대상 마을 안({}, 위험구역)",
+    "exception": "사전대피 마을 안({}, 잠재 위험구역)",
 }
 
 
@@ -92,7 +94,7 @@ def judge(ctx: Context, s: Place) -> dict[str, Any]:
     """대피소 하나의 안전 판정: 건물 자리 P와 든 대피 단위 P 중 나쁜 쪽.
 
     1. 건물 자리가 처음 닿는 P → J8
-    2. 대피소가 든 리가 주택 기준으로 닿으면 대피 단위(행정리 구역 · 리)의 P → J8
+    2. 대피소가 든 리가 대피 대상이면 든 대피 단위(가장 가까운 행정리 · 리)의 P → J8
     3. 더 나쁜 판정과 그 이유를 남긴다. 같으면 건물 자리 이유
     """
     own = safety(first_p(s.geom, ctx.inputs.ranges))  # 1
@@ -136,7 +138,7 @@ def _pick(ctx: Context, at: Point, tier: str, judged: dict[int, dict]) -> tuple[
 
 
 def shelters_bundle(ctx: Context) -> dict[str, Any]:
-    """`shelters`: P8 안 마을(이미 닿음 · 위험구역 · 잠재 위험구역, 주택 기준)마다 대피소 후보.
+    """`shelters`: P8 안 마을(이미 닿음 · 위험구역 · 잠재 위험구역)마다 대피소 후보.
 
     1. 대피소마다 안전 판정: 건물 자리 P와 든 대피 단위 P 중 나쁜 쪽(J8 + R3 D3)
     2. 마을마다 거리 재는 점을 정한다(먼저 닿는 행정리 회관 → 주택 밀집 지점)
@@ -157,9 +159,9 @@ def shelters_bundle(ctx: Context) -> dict[str, Any]:
                 "village": r.village.name,
                 "admin_villages": admin,
                 "emd": r.village.emd,
-                **timing(ctx, r.p),
-                "population": r.village.population,
-                "pop65_est": r.village.pop65_est,
+                **village_timing(ctx, r),
+                "population": r.population,
+                "pop65_est": r.pop65_est,
                 "origin": how,
                 "village_sites": village_sites,
                 "hub_sites": hub_sites,

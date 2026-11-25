@@ -6,15 +6,9 @@
 
 from typing import Any
 
-from rules.items.names import village_label
+from rules.items.names import when
 
 ANCHOR_IDS = {"p.75": "SM-p075", "p.79": "SM-p079", "p.95": "SM-p095"}
-
-
-def _when(r: dict[str, Any]) -> str:
-    if r["zone"] == "burning":
-        return "지금(이미 닿음)"
-    return f"{r['from']} ~ {r['until']} 닿을 수 있음" + ("(밤)" if r["night"] else "")
 
 
 def _sites(sites: list[dict[str, Any]]) -> str:
@@ -27,14 +21,14 @@ def _sites(sites: list[dict[str, Any]]) -> str:
 
 
 def _row(r: dict[str, Any]) -> dict[str, Any]:
-    """「**괴산리**(지금(이미 닿음), 147명): 먼저 모일 곳 … · 머물 곳 …」."""
+    """「**괴산리(괴산1리)** 40명 · 19:00에 불이 0.2 km까지 접근: 먼저 모일 곳 … · 머물 곳 …」."""
     people = f"{r['people']:,}명"
     if r["zone"] == "p8" and r["elderly"] is not None:
         people += f" · 65세 이상 {r['elderly']:,}명"
     o = r["origin"]
     if o["kind"] == "회관" and o["name"]:
-        people += f", 거리는 {o['name']}에서"
-    head = f"**{village_label(r['village'], r['admin_villages'])}**({_when(r)}, {people})"
+        people += f" · 거리는 {o['name']}에서"
+    head = f"**{r['village']}** {people} · {when(r)}"
     if r["no_options"]:
         return {"village": r["village"], "text": f"{head}: 쓸 수 있는 대피소 후보 없음"}
     parts = []

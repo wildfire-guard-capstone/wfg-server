@@ -1,13 +1,13 @@
 """`villages` 묶음: P8 안 마을을 구간별로(J1 · J2), 현장 입력 · 합계, 경계만 걸친 마을.
 
-마을 = 법정리 한 줄(11/19 사용자 결정 D2). 구간은 리 안 주택이 처음 닿는 P로 정하고(D1),
-닿는 행정리 이름을 붙인다. 행정리 인구는 공식 자료가 없어 넘기지 않는다(인구는 법정리 값).
+마을 = 법정리 한 줄(11/19 사용자 결정 D2) + 대피 대상 행정리 이름(11/25 — 불에 가까운 행정리만).
+행정리 인구는 공식 자료가 없어 리 인구를 집 수 비율로 나눈 추정값을 쓴다(11/25).
 """
 
 from dataclasses import asdict
 from typing import Any
 
-from rules.bundles.common import timing
+from rules.bundles.common import village_timing
 from rules.context import Context
 from rules.core.convert import Zone, zone_of
 from rules.core.villages import EdgeOnly, Reached, VillageField
@@ -16,7 +16,7 @@ P5, P8 = 5, 8
 
 
 def admin_rows(ctx: Context, reached: Reached) -> list[dict[str, Any]]:
-    """닿는 행정리: 이름 · 구간 · 구역 주택 수 · 회관. 행정리로 나눠 볼 수 없으면 빈 목록."""
+    """대피 대상 행정리: 이름 · 구간 · 구역 주택 수 · 회관. 나눠 볼 수 없으면 빈 목록."""
     return [
         {
             "id": a.admin.id,
@@ -37,7 +37,7 @@ def _houses(reached: Reached) -> dict[str, Any]:
         "total": reached.houses,
         "p5": c[P5] if c else None,
         "p8": c[P8] if c else None,
-        # 판정은 리 경계(11/20 D1 — 경계 걸침도 대피 대상). 주택 수는 참고
+        # 판정은 리 경계 → 불에 가까운 행정리(11/25). 주택 수는 참고
         "by": "리 경계",
     }
 
@@ -51,10 +51,10 @@ def _village(ctx: Context, reached: Reached) -> dict[str, Any]:
         "name": v.name,
         "emd": v.emd,
         "sigungu": v.sigungu,
-        **timing(ctx, reached.p),
+        **village_timing(ctx, reached),
         "boundary_p": reached.boundary_p,
-        "population": v.population,
-        "pop65_est": v.pop65_est,
+        "population": reached.population,
+        "pop65_est": reached.pop65_est,
         "houses": _houses(reached),
         "admin_villages": admin_rows(ctx, reached),
         "field": asdict(ctx.field.get(v.id, VillageField())),
@@ -93,8 +93,8 @@ def _unknown(ctx: Context) -> list[dict[str, str]]:
 def villages_bundle(ctx: Context) -> dict[str, Any]:
     """`villages`: P8 안 마을을 구간별로(J1). 닿는 순, 같으면 이름 순.
 
-    1. 마을마다 처음 닿는 P(주택 기준) · 구간 시작 · 끝 시각 · 경과 · 밤 · 인구 · 주택 ·
-       닿는 행정리 · 현장 입력을 붙인다
+    1. 마을마다 판정 P · 시각 칸(닿지 않으면 다가오는 거리) · 인구 · 주택 · 대피 대상 행정리 ·
+       현장 입력을 붙인다
     2. 구간으로 나눈다: burning(P0) · p5(P1 ~ P5) · p8(P6 ~ P8)
     3. 구간별 · 5시간 안(burning + p5) 마을 수 · 인구 합계
     4. 경계만 걸친 마을(8시간 안 주택 없음)은 `edge`에 따로 — 대피 대상이 아니다

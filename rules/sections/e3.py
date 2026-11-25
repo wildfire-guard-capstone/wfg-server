@@ -7,26 +7,20 @@
 from typing import Any
 
 from rules.items.e3 import place
+from rules.items.names import when
 
 ANCHOR_IDS = {"p.75": "SM-p075", "p.79": "SM-p079", "p.84": "SM-p084", "p.95": "SM-p095"}
-
-
-def _when(r: dict[str, Any]) -> str:
-    if r["zone"] == "burning":
-        return "지금(이미 닿음)"
-    night = "(밤)" if r["night"] else ""
-    return f"{r['from']} ~ {r['until']} 닿을 수 있음{night}"
 
 
 def _rows(facilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """마을마다 한 줄(같은 값끼리 묶기): 「15:50 ~ 16:50 닿을 수 있음, **원당리**: 해안1병원 …」."""
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in facilities:
-        groups.setdefault((_when(r), place(r)), []).append(r)
+        groups.setdefault((when(r), place(r)), []).append(r)
     rows = []
-    for (when, village), rs in groups.items():
+    for (at, village), rs in groups.items():
         names = ", ".join(f"{r['name']}({r['kind'] or '종류 모름'})" for r in rs)
-        rows.append({"village": village, "text": f"{when}, **{village}**: {names}"})
+        rows.append({"village": village, "text": f"{at}, **{village}**: {names}"})
     return rows
 
 

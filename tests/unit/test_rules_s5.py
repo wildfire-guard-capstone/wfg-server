@@ -28,7 +28,7 @@ def test_direction_east_and_next_villages():
     assert (sp["dir"], sp["from"]) == ("동", "현재 화선 중심")
     assert [r["name"] for r in sp["next_villages"]] == ["신안리"]
     assert s5["facts"]["front"]["villages"] == ["신안리"]
-    assert s5["finding"].startswith("투입 인력 138명 · 주 확산 방향 동(신안리)")
+    assert s5["finding"].startswith("투입 인력 138명 · 주 확산 방향 동, 다음 마을 신안리")
     assert len(sec["sections"][1]["blocks"]) == 3  # 위험 요소 · 철수 조건 · 통신 상태
 
 

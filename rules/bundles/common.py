@@ -11,6 +11,7 @@ from rules.context import Context
 from rules.core.convert import p_from, p_time, p_until, round1, zone_of
 from rules.core.places import Place
 from rules.core.sun import is_night
+from rules.core.villages import Reached
 
 MAX_P = 8
 
@@ -33,6 +34,32 @@ def timing(ctx: Context, p: int) -> dict[str, Any]:
         "passed": p > 0 and t < ctx.generated_at,  # 3
         "night": night,  # 4
     }
+
+
+def reach_timing(
+    ctx: Context, p: int, touched: bool, places: Sequence[BaseGeometry]
+) -> dict[str, Any]:
+    """대피 대상(마을 · 취약시설)의 시각 칸. 불이 닿지 않으면 닿는 구간 대신 다가오는 거리(11/25).
+
+    1. `touched` = 실제로 닿나
+    2. 닿지 않으면 `from`은 없음 · `until` = 그 범위(P5 · P8)의 시각 · 밤도 그 시각으로 본다
+    3. `approach_km` = 그 시각의 불에서 `places`까지 가장 가까운 거리(0.1 km 안이면 0.1)
+    """
+    row = timing(ctx, p) | {"touched": touched}  # 1
+    if touched:
+        return row
+    area = ctx.inputs.ranges[p]
+    return row | {
+        "from": None,  # 2
+        "night": is_night(p_time(ctx.base_at, p), *ctx.site),
+        "approach_km": max(0.1, min(km(g, area) for g in places)),  # 3
+    }
+
+
+def village_timing(ctx: Context, r: Reached) -> dict[str, Any]:
+    """마을의 시각 칸. 거리는 대피 대상 행정리 구역까지(구역을 모르면 늘 닿은 것으로 판정됨)."""
+    zones = [a.admin.geom for a in r.admin if a.p is not None and a.admin.geom is not None]
+    return reach_timing(ctx, r.p, r.touched, zones)
 
 
 def km(a: BaseGeometry, b: BaseGeometry) -> float:

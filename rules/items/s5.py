@@ -43,7 +43,7 @@ def s5_input(bundles: dict[str, Any]) -> dict[str, Any] | None:
     }
     crew_text = "상황 보고 전" if crew["total"] is None else f"{crew['total']}명"
     front = facts["front"]
-    ahead = f"({'·'.join(front['villages'])})" if front["villages"] else ""
+    ahead = f", 다음 마을 {' · '.join(front['villages'])}" if front["villages"] else ""
     finding = (
         f"투입 인력 {crew_text} · 주 확산 방향 {front['dir'] or '모름'}{ahead}"
         f" · 최대 풍속 {w['max']['ms']} m/s({w['max']['dir']}, {label})"

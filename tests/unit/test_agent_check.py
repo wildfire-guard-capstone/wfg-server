@@ -197,3 +197,31 @@ def test_pair_quote_with_admin_village_is_not_a_message_text():
     )
     assert check.strip_pairs(text) == " 안내하십시오."
     assert check.strip_pairs("「용기6리 주민은 안계고등학교로」") == ""
+
+
+def test_touch_word_for_a_village_the_fire_only_approaches():
+    e2 = {
+        "facts": {
+            "immediate": [
+                {
+                    "name": "괴산리(괴산1리)",
+                    "touched": False,
+                    "until": "19:00",
+                    "approach_km": 0.2,
+                },
+                {"name": "석탑리(석탑1리)", "touched": True, "until": "지금"},
+            ],
+            "pre_evac": [],
+        }
+    }
+    table, all_near = check.approach_table({"E2": e2})
+    assert table == {"괴산리": "19:00에 0.2 km까지"} and all_near is False
+    (err,) = check.touch_errors("괴산리(괴산1리)에 19:00 불이 닿을 수 있으므로", table)
+    assert err.startswith(check.SOFT) and "불이 19:00에 0.2 km까지 가까워진다" in err
+    assert check.touch_errors("괴산리(괴산1리)에 0.2 km까지 가까워지므로", table) == []
+    assert check.touch_errors("괴산리(괴산1리)는 5시간 안 산불 도달 가능성이 있으므로", table)
+    assert check.touch_errors("석탑리(석탑1리)에 이미 불이 닿아 있으므로", table) == []
+    # 이름 없는 문장은 대피 마을이 모두 가까워지기만 할 때만 본다
+    nameless = "18:05 무렵 산불이 닿을 수 있으므로"
+    assert check.touch_errors(nameless, table) == []
+    assert "괴산리 19:00에 0.2 km까지" in check.touch_errors(nameless, table, True)[0]

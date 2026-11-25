@@ -23,7 +23,7 @@ from app.propose import ProposalWriter, get_writer
 from app.propose.base import LlmInput
 from app.repositories import base_data, event_logs, incidents, predictions
 from app.repositories.engine_inputs import KST, site_of
-from app.repositories.proposals import STAGE_OF, save_proposal
+from app.repositories.proposals import STAGE_OF, reusable_items, save_proposal
 from app.services import operations
 from app.services.engine import run_engine
 from app.services.risk import compute_risk
@@ -373,7 +373,9 @@ def run_proposal_operation(
                     prediction_id=prediction_id,
                 )
             operations.update(op, stage="PROPOSAL_GENERATION")
-            written = writer_from_settings().write(llm_input)
+            # 상황 정정 뒤(같은 예측): 입력이 그대로인 항목은 직전 제안을 그대로 쓴다
+            prev = reusable_items(db, prediction_id) if correction_id is not None else None
+            written = writer_from_settings().write(llm_input, prev)
             operations.update(op, stage="COMMIT")
             incident = db.get(Incident, op.incident_id)
             db.refresh(incident)

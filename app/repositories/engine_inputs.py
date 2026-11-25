@@ -162,7 +162,9 @@ def build_inputs(
     features = base_data.map_features(session, area, house_area=house_area(ranges[-1], villages))
     wind_ms, wind_deg = hourly_wind(pred.weather)  # 3
     first = (pred.weather.get("hours") or [{}])[0]
-    prev = incidents.latest_proposal(session, incident_id)  # 4
+    # 4. 「직전 대비」(S1 단계 · E5 Go/Set)는 앞선 예측의 제안서와 견준다. 같은 예측의 제안서와
+    #    견주면 상황 정정 뒤 값이 그대로여도 「새로 → 같음」으로 바뀌어 S1 · E5를 다시 쓰게 된다
+    prev = incidents.latest_proposal(session, incident_id, before_prediction=pid)
     ignition = to_shape(incident.ignition_point)
     inputs = Inputs(
         base_at=kst(pred.base_at),

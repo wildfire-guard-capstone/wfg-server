@@ -156,14 +156,15 @@ def perimeter_shape(session: Session, perimeter_id: int) -> BaseGeometry:
     return to_shape(session.get(FirePerimeter, perimeter_id).geom)
 
 
-def latest_proposal(session: Session, incident_id: int) -> Proposal | None:
-    """직전 제안서 = 그 산불에서 id가 가장 큰 행(DB 설계 2.4)."""
-    return session.scalar(
-        select(Proposal)
-        .where(Proposal.incident_id == incident_id)
-        .order_by(Proposal.id.desc())
-        .limit(1)
-    )
+def latest_proposal(
+    session: Session, incident_id: int, *, before_prediction: int | None = None
+) -> Proposal | None:
+    """직전 제안서 = 그 산불에서 id가 가장 큰 행(DB 설계 2.4).
+    before_prediction을 주면 그 예측보다 앞선 예측의 제안서 중에서."""
+    q = select(Proposal).where(Proposal.incident_id == incident_id)
+    if before_prediction is not None:
+        q = q.where(Proposal.prediction_id < before_prediction)
+    return session.scalar(q.order_by(Proposal.id.desc()).limit(1))
 
 
 def incident_names(session: Session, incident: Incident) -> tuple[str, str]:

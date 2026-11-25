@@ -8,7 +8,7 @@
 from typing import Any
 
 from app.propose.agent import AgentWriter
-from app.propose.base import LlmInput, ProposalWriter, WrittenItem
+from app.propose.base import LlmInput, PrevItems, ProposalWriter, WrittenItem
 from app.propose.fake import FakeWriter
 
 WRITERS = {
@@ -29,4 +29,4 @@ def get_writer(name: str, **options: Any) -> ProposalWriter:
     return WRITERS[name](**options)
 
 
-__all__ = ["WRITERS", "LlmInput", "ProposalWriter", "WrittenItem", "get_writer"]
+__all__ = ["WRITERS", "LlmInput", "PrevItems", "ProposalWriter", "WrittenItem", "get_writer"]

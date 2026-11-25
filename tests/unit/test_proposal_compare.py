@@ -93,6 +93,24 @@ def test_engine_side_changes():
     assert change_of(a, moved) == "CHANGED"
 
 
+def test_engine_value_behind_the_same_finding_is_a_change():
+    """11/25: 「대피명령」 정정은 판정 한 줄 · 목록에는 안 나오지만 엔진 값이 다르다."""
+
+    def e2(order: bool, action: str, **more: Any) -> Item:
+        a = item(code="E2", paras=[para("대피", "", action)])
+        facts = {"immediate": [{"name": "구계리(구계2리)", "evac_order": order, **more}]}
+        return replace(a, detail=a.detail | {"facts": facts})
+
+    a = e2(False, "대피를 명령하십시오.")
+    assert change_of(a, e2(True, "대피 여부를 확인하십시오.")) == "CHANGED"
+    assert change_of(a, e2(False, "대피 여부를 확인하십시오.")) == "WORDING_ONLY"
+    assert change_of(a, e2(True, "대피를 명령하십시오.")) == "SAME"
+    # 보고 시각 · 직전 대비는 값이 아니다
+    assert (
+        change_of(a, e2(False, "확인하십시오.", reported_at="16:03", prev="go")) == "WORDING_ONLY"
+    )
+
+
 def test_relative_wording_is_ignored():
     a = item(code="S1", finding="현재 1단계(피해면적 120 ha, 직전 초기 대응) → 5시간 뒤 2단계")
     b = item(code="S1", finding="현재 1단계(피해면적 120 ha, 직전 1단계) → 5시간 뒤 2단계")

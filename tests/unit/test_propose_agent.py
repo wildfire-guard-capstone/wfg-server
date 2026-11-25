@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 """에이전트 작성기(가짜 LLM · 근거 서버): 엔진 결과 → agent.generate → 가짜 작성기와 같은 모양."""
 
+import copy
 import json
 
 import pytest
@@ -100,6 +101,43 @@ def test_writes_every_engine_item_in_the_fake_writer_shape(engine):
     assert all(set(w) == set(f) for w, f in zip(written, fake, strict=True))  # proposals는 뺀다
     assert all(w["input_key"] for w in written)  # 진짜 작성기는 입력 지문을 남긴다
     assert len(llm.calls) >= len(written)
+
+
+def _prev(written):
+    """저장된 직전 제안서 모양(repositories.proposals.reusable_items)."""
+    return {
+        w["id"]: {
+            "input_key": w["input_key"],
+            "state": w["state"],
+            "version": "v1.1",
+            "proposals": [],
+            "item": {k: v for k, v in w.items() if k != "input_key"},
+        }
+        for w in written
+    }
+
+
+def test_after_correction_only_items_with_changed_input_are_rewritten(engine):
+    """11/25: 정정 뒤 값이 그대로인 항목은 LLM을 부르지 않고 직전 제안을 그대로 쓴다."""
+    written = AgentWriter(EchoLLM(), FakeEvidence()).write(engine)
+    llm = EchoLLM()
+    again = AgentWriter(llm, FakeEvidence()).write(engine, _prev(written))
+    assert not llm.calls and {w["state"] for w in again} == {"reused"}
+    assert [w["sections"] for w in again] == [w["sections"] for w in written]
+    assert all(set(a) == set(w) for a, w in zip(again, written, strict=True))
+
+    corrected = copy.deepcopy(engine)
+    e2 = next(i for i in corrected["items"] if i["id"] == "E2")
+    e2["facts"]["immediate"][0]["evac_order"] = not e2["facts"]["immediate"][0]["evac_order"]
+    third = AgentWriter(EchoLLM(), FakeEvidence()).write(corrected, _prev(again))
+    assert [w["id"] for w in third if w["state"] != "reused"] == ["E2"]
+
+
+def test_unreachable_llm_fails_even_when_other_items_are_reused(engine):
+    written = AgentWriter(EchoLLM(), FakeEvidence()).write(engine)
+    prev = _prev(written) | {"E2": _prev(written)["E2"] | {"input_key": "0"}}
+    with pytest.raises(WriterUnavailable):
+        AgentWriter(DownLLM(), FakeEvidence()).write(engine, prev)
 
 
 def test_unreachable_llm_fails_instead_of_saving_an_empty_proposal(engine):

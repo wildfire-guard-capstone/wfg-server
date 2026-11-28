@@ -33,6 +33,7 @@ from typing import Any
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
+from app.predict.adj import DEFAULT_ADJ
 from app.predict.base import HOURS, PredictionRequest, PredictionResult
 from app.weather.base import KST
 from app.weather.elmfire_input import (
@@ -64,7 +65,7 @@ class ElmfirePredictor:
     elmfire: str = "elmfire_1.1"
     work_dir: Path | None = None  # 실행 폴더를 만들 곳(없으면 덱 옆 runs/)
     keep_runs: bool = False  # 실행 폴더를 남길지(확인용)
-    adj: float = 1.0  # 확산속도 배율(A′ 덱 = 1, 보정 없음)
+    adj: float = DEFAULT_ADJ  # 확산속도 배율(덱 adj.tif × 이 값). 기본 1.25 — app.predict.adj
     env: dict = field(default_factory=dict)  # PATH · PROJ_DATA · GDAL_DATA
     timeout_s: float | None = None  # ELMFIRE 1회 시간 제한(넘으면 TimeoutError). None = 제한 없음
     name: str = "elmfire"

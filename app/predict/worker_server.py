@@ -12,7 +12,7 @@ API(app.predict.elmfire_remote)가 같은 Docker 네트워크 안에서만 부�
 표준 라이브러리 HTTP 서버라 worker 이미지에 패키지를 더하지 않는다.
 설정(환경 변수): PREDICTOR_DECK(기본 /deck) · ELMFIRE_BIN(기본 elmfire_1.1) ·
 PREDICTOR_WORK_DIR(실행 폴더, 기본 /tmp/runs) · ELMFIRE_TIMEOUT_S(기본 300) ·
-WORKER_PORT(기본 8100).
+ELMFIRE_ADJ(확산속도 배율, 기본 1.25 — app.predict.adj) · WORKER_PORT(기본 8100).
 """
 
 import json
@@ -23,6 +23,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from app.predict.adj import ENV_KEY, parse_adj
 from app.predict.base import Predictor
 from app.predict.elmfire_wire import pack_error, pack_result, unpack_request
 
@@ -39,6 +40,7 @@ def predictor_from_env() -> Predictor:
         elmfire=os.environ.get("ELMFIRE_BIN", "elmfire_1.1"),
         work_dir=Path(os.environ.get("PREDICTOR_WORK_DIR", "/tmp/runs")),
         timeout_s=float(os.environ.get("ELMFIRE_TIMEOUT_S", "300")),
+        adj=parse_adj(os.environ.get(ENV_KEY)),
     )
 
 

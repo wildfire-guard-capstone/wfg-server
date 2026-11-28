@@ -119,7 +119,7 @@ def calibrate_round(
     """
     if method not in CAL_METHODS:
         raise ValueError(f"보정 방법 {method}: {list(CAL_METHODS)} 중 하나")
-    if method == "fixed":  # ELMFIRE를 돌리지 않는다 — 덱 adj.tif(산림 ×2)가 곧 보정
+    if method == "fixed":  # ELMFIRE를 돌리지 않는다 — 덱 adj.tif(= 1)를 그대로 쓴다
         return {"method": "fixed", "adj": 1.0, "from": CAL_METHODS["fixed"], "parts": []}
     observed = md.report(rd.at)
     by_no = {r.no: r for r in sc.rounds}

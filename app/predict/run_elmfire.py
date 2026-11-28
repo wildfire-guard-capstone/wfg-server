@@ -22,6 +22,7 @@ from pathlib import Path
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
+from app.predict.adj import DEFAULT_ADJ, parse_adj
 from app.predict.base import PredictionRequest
 from app.predict.elmfire import DECK_EPSG, ElmfirePredictor
 from app.predict.geojson import slices_geojson
@@ -77,6 +78,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--work-dir", type=Path)
     p.add_argument("--keep-run", action="store_true")
+    p.add_argument("--adj", type=float, default=DEFAULT_ADJ, help="확산속도 배율(기본 1.25)")
     a = p.parse_args(argv)
 
     base_at = datetime.fromisoformat(a.base_at)
@@ -93,7 +95,7 @@ def main(argv: list[str] | None = None) -> None:
     profile = deck_weather_profile(a.deck)
     request = ElmfireWeatherRequest(base_at, (lat, lon), profile, weather)
     inp = check_input(source.build(request), profile)
-    predictor = ElmfirePredictor(a.deck, a.elmfire, a.work_dir, a.keep_run)
+    predictor = ElmfirePredictor(a.deck, a.elmfire, a.work_dir, a.keep_run, parse_adj(a.adj))
     req = PredictionRequest(_read_start(a.start, a.start_crs), base_at, (lat, lon), None, inp)
     result = predictor.predict(req)
     fc = slices_geojson(result.slices, base_at)

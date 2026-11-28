@@ -102,7 +102,8 @@ PRED-01(app.routers.predictions)
   응답에서 뺀다). 기상청 「최대순간풍속」과는 다른 값이다. 1시간 연료 수분 `fuel_moisture_1h`(m1, %)도
   같은 방식으로 DB에만 남기고, 위험도 수분함량이 이 값을 쓴다.
 - 서버에 붙일 때: `PREDICTOR=elmfire`, `PREDICTOR_DECK=<덱 폴더>`, `ELMFIRE_BIN`,
-  `PREDICTOR_WEATHER_FIELD`(stations · deck), (선택) `PREDICTOR_WORK_DIR`. 시연(deck)은
+  `PREDICTOR_WEATHER_FIELD`(stations · deck), (선택) `PREDICTOR_WORK_DIR` ·
+  `ELMFIRE_ADJ`(확산속도 배율, 비우면 1.25 — `app/predict/adj.py`). 시연(deck)은
   `WEATHER=asos`와 같이 쓴다. ELMFIRE · rasterio · scipy가 있는 곳(worker 이미지 · GPU 서버)에서 돈다.
 
 ## 5. 출력 — GeoJSON

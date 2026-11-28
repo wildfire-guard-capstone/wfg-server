@@ -210,6 +210,7 @@ def test_predict_writes_input_grids_and_cuts_hourly_ranges(fake_deck, tmp_path):
     assert result.meta["t_start_s"] == 3000.0  # 12:50 − 12:00
     assert result.meta["weather_input"] == {"source": "test"}
     assert result.weather is inp.weather and result.source == "elmfire"
+    assert result.meta["adj"] == 1.25  # 기본 확산속도 배율(app.predict.adj)
 
     assert len(result.slices) == HOURS
     check_slices(START, result.slices)  # 누적(P0 ⊆ P1 ⊆ … ⊆ P8) — 저장 때와 같은 검사

@@ -19,6 +19,7 @@ from app.db.models import Incident, Prediction
 from app.db.models.enums import IncidentStatus, ProposalTrigger
 from app.db.session import SessionLocal
 from app.predict import PredictionRequest, Predictor, get_predictor
+from app.predict.adj import parse_adj
 from app.propose import ProposalWriter, get_writer
 from app.propose.base import LlmInput
 from app.repositories import base_data, event_logs, incidents, predictions
@@ -164,7 +165,7 @@ def elmfire_predictor_from_settings() -> Predictor:
         return ElmfireWorker(s.elmfire_worker_url, s.elmfire_worker_timeout_s)
     if not s.predictor_deck:
         raise ValueError("ELMFIRE 예측에는 PREDICTOR_DECK(덱 폴더)이 필요합니다")
-    options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin}
+    options = {"deck": s.predictor_deck, "elmfire": s.elmfire_bin, "adj": parse_adj(s.elmfire_adj)}
     if s.predictor_work_dir:
         options["work_dir"] = s.predictor_work_dir
     return get_predictor("elmfire", **options)

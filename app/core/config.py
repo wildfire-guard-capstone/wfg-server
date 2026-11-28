@@ -43,9 +43,12 @@ class Settings(BaseSettings):
     predictor_path: str | None = None
     predictor_crs: int = 4326
     predictor_weather: str | None = None
-    # elmfire면 PREDICTOR_DECK(덱 폴더, demo/uiseong/deck 모양) · ELMFIRE_BIN · PREDICTOR_WORK_DIR
+    # elmfire면 PREDICTOR_DECK(덱 폴더, demo/uiseong/deck 모양) · ELMFIRE_BIN · PREDICTOR_WORK_DIR ·
+    # ELMFIRE_ADJ
     predictor_deck: str | None = None
     predictor_work_dir: str | None = None
+    # 확산속도 배율(ELMFIRE_ADJ). 비우면 기본 1.25(app.predict.adj — 미국 26건 검증 근거)
+    elmfire_adj: float | None = None
     # elmfire 기상 출처(app.weather.elmfire_input):
     #   stations = 실시간(기본) — 관측소 매분자료 + 단기예보, KMA_API_KEY · DATA_GO_KR_API_KEY 필요
     #   deck = 시연 — 덱에 든 의성 관측 기상, WEATHER=asos(기온 · 습도)와 같이 쓴다

@@ -55,6 +55,7 @@ services:
       PREDICTOR_DECK: /deck
       PREDICTOR_WORK_DIR: /tmp/runs
       ELMFIRE_TIMEOUT_S: "300"
+      ELMFIRE_ADJ: "1.25" # spread-rate multiplier (US GOFER 26-fire validation, app/predict/adj.py)
     volumes:
       - ./deck/elmfire_deck:/deck:ro
     mem_limit: 1300m

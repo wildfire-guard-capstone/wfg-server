@@ -186,3 +186,17 @@ def test_mode_picks_elmfire_even_when_default_is_synthetic(monkeypatch):
     for mode in ("LIVE", "DEMO_ELMFIRE"):
         assert isinstance(prediction.predictor_from_settings(mode), ElmfireWorker)
     assert prediction.MODE_SOURCES == {"LIVE": "stations", "DEMO_ELMFIRE": "deck"}
+
+
+def test_worker_reads_spread_multiplier_from_env(monkeypatch, tmp_path):
+    from app.predict.adj import DEFAULT_ADJ
+    from app.predict.worker_server import predictor_from_env
+
+    monkeypatch.setenv("PREDICTOR_DECK", str(tmp_path))
+    monkeypatch.delenv("ELMFIRE_ADJ", raising=False)
+    assert predictor_from_env().adj == DEFAULT_ADJ == 1.25
+    monkeypatch.setenv("ELMFIRE_ADJ", "1.0")
+    assert predictor_from_env().adj == 1.0
+    monkeypatch.setenv("ELMFIRE_ADJ", "0")
+    with pytest.raises(ValueError, match="ELMFIRE_ADJ"):
+        predictor_from_env()
